@@ -2,27 +2,27 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: 04-03
-status: executing
-stopped_at: Completed 04-input-output/04-02-PLAN.md
-last_updated: "2026-03-08T21:56:00.000Z"
+current_plan: 04-04
+status: ready
+stopped_at: Completed 04-input-output/04-03-PLAN.md
+last_updated: "2026-03-08T22:05:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 7
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 04-input-output (executing)
-**Current Plan:** 04-02 (transcription-notifications) — COMPLETE
-**Next action:** Begin Phase 04-03 — hold-to-talk pipeline integration
+**Phase:** 04-input-output (ready)
+**Current Plan:** 04-03 (hold-to-talk-integration) — COMPLETE
+**Next action:** Begin Phase 04-04 or Phase 5
 **Milestone:** v0.1
-**Last session:** 2026-03-08T21:56:00.000Z
-**Stopped at:** Completed 04-input-output/04-02-PLAN.md
+**Last session:** 2026-03-08T22:05:00.000Z
+**Stopped at:** Completed 04-input-output/04-03-PLAN.md
 
 ## Initialization Summary
 
@@ -38,7 +38,7 @@ progress:
 | Phase 1 — Foundation | complete | All 3/3 plans complete |
 | Phase 2 — Audio Pipeline | complete | All 3/3 plans complete |
 | Phase 3 — IPC + Daemon | complete | All 2/2 plans complete |
-| Phase 4 — Input + Output | ready | 3/3 plans created and validated |
+| Phase 4 — Input + Output | complete | All 3/3 plans complete |
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
 
 ## Key Decisions
@@ -107,6 +107,21 @@ progress:
 - **Notifications are best-effort** — notification backend errors logged but not propagated to caller
 - **"yap: " title prefix** — all notification titles prefixed for easy identification in desktop environment
 
+### Phase 4-03: Hold-to-Talk Integration
+
+- **Display server detection** — WAYLAND_DISPLAY first (Wayland), then DISPLAY (X11), else error (OUTPUT-01)
+- **Wayland paste priority** — wtype FIRST, ydotool second, clipboard-only fallback (CONTEXT.md locked decision)
+- **X11 paste with 150ms delay** — time.Sleep(150ms) before xdotool for focus acquisition (OUTPUT-03)
+- **X11 --clearmodifiers flag** — ensures layout safety regardless of modifier key state
+- **ydotool socket check** — verify $YDOTOOL_SOCKET or /tmp/.ydotool_socket exists before invocation (OUTPUT-04)
+- **Clipboard save/restore safety** — ReadAll() before paste, WriteAll(saved) 100ms after confirmed success only (OUTPUT-06, OUTPUT-07)
+- **Recording context derived from daemon** — context.WithTimeout(ctx, 60s) ensures SIGTERM cancels active recording (NFR-04)
+- **50s warning chime** — non-blocking time.AfterFunc(50s) with assets.WarningChime() (770Hz)
+- **60s absolute timeout** — context.WithTimeout auto-stops recording at exactly 60s
+- **Package-level dependency injection** — execCommand, clipboardRead/Write, lookPath, osStat, sleep for testability
+- **IPC callback injection** — SetToggleFn/SetStatusFn allow daemon to provide state callbacks
+- **Hold-to-talk state machine** — mutex-protected recordState with active bool and cancel context.CancelFunc
+
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
@@ -121,6 +136,7 @@ progress:
 | 03-ipc-daemon | 02 | 25min | 4 | 9 |
 | 04-input-output | 01 | 25min | 2 | 7 |
 | 04-input-output | 02 | 10min | 2 | 4 |
+| 04-input-output | 03 | 35min | 3 | 5 |
 
 ## Config
 
