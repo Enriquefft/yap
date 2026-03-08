@@ -36,11 +36,12 @@ func runStart(cfg *config.Config) error {
 		}
 
 		// Reload config after wizard completion to pick up new file
-		var err error
-		cfg, err = config.Load()
+		loadedCfg, err := config.Load()
 		if err != nil {
 			return fmt.Errorf("reload config after wizard: %w", err)
 		}
+		// Update the pointer to point to the loaded config
+		*cfg = loadedCfg
 	}
 
 	pidPath, err := xdg.DataFile("yap/yap.pid")
@@ -120,7 +121,7 @@ func needsWizard() bool {
 
 // runWizard launches the interactive first-run wizard.
 func runWizard() error {
-	cfg, err := config.RunWizard(os.Stdin, os.Stdout)
+	_, err := config.RunWizard(os.Stdin, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("wizard failed: %w", err)
 	}
