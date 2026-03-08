@@ -2,7 +2,7 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: 03-02-complete
+current_plan: 04-01
 status: executing
 stopped_at: Completed 03-ipc-daemon/03-02-PLAN.md
 last_updated: "2026-03-08T04:50:00.000Z"
@@ -17,7 +17,7 @@ progress:
 
 ## Current Status
 
-**Phase:** 03-ipc-daemon (in progress)
+**Phase:** 04-input-output (ready)
 **Current Plan:** 03-01 (daemon-core) — COMPLETE
 **Next action:** Begin Phase 3-02 — IPC server + CLI integration
 **Milestone:** v0.1
@@ -37,8 +37,8 @@ progress:
 |-------|--------|-------|
 | Phase 1 — Foundation | complete | All 3/3 plans complete |
 | Phase 2 — Audio Pipeline | complete | All 3/3 plans complete |
-| Phase 3 — IPC + Daemon | pending | Unix socket + daemon lifecycle |
-| Phase 4 — Input + Output | pending | evdev + Groq + paste fallback |
+| Phase 3 — IPC + Daemon | complete | All 2/2 plans complete |
+| Phase 4 — Input + Output | ready | 3/3 plans created and validated |
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
 
 ## Key Decisions
