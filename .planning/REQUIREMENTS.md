@@ -201,7 +201,7 @@ These replace any conflicting suggestions from the original PRD.
 | AUDIO-05 | Phase 2 | Complete |
 | AUDIO-06 | Phase 2 | Complete |
 | AUDIO-07 | Phase 3 | Pending |
-| AUDIO-08 | Phase 5 | Pending |
+| AUDIO-08 | Phase 5 | Complete |
 | TRANS-01 | Phase 4 | Complete |
 | TRANS-02 | Phase 4 | Complete |
 | TRANS-03 | Phase 4 | Complete |
@@ -228,9 +228,9 @@ These replace any conflicting suggestions from the original PRD.
 | CONFIG-03 | Phase 1 | Complete |
 | CONFIG-04 | Phase 1 | Complete |
 | CONFIG-05 | Phase 1 | Complete |
-| CONFIG-06 | Phase 5 | Pending |
-| CONFIG-07 | Phase 5 | Pending |
-| CONFIG-08 | Phase 5 | Pending |
+| CONFIG-06 | Phase 5 | Complete |
+| CONFIG-07 | Phase 5 | Complete |
+| CONFIG-08 | Phase 5 | Complete |
 | FIRSTRUN-01 | Phase 5 | Complete |
 | FIRSTRUN-02 | Phase 5 | Complete |
 | FIRSTRUN-03 | Phase 5 | Complete |

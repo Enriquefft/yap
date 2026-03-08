@@ -4,25 +4,25 @@ milestone: v0.1
 milestone_name: milestone
 current_plan: Not started
 status: unknown
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-08T22:41:55.302Z"
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-08T22:50:37.506Z"
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 04-input-output (ready)
+**Phase:** 05-polish-distribution (in-progress)
 **Current Plan:** Not started
-**Next action:** Begin Phase 04-04 or Phase 5
+**Next action:** Begin Phase 05-03
 **Milestone:** v0.1
-**Last session:** 2026-03-08T22:41:55.297Z
-**Stopped at:** Completed 05-01-PLAN.md
+**Last session:** 2026-03-08T22:50:37.500Z
+**Stopped at:** Completed 05-02-PLAN.md
 
 ## Initialization Summary
 
@@ -39,7 +39,7 @@ progress:
 | Phase 2 — Audio Pipeline | complete | All 3/3 plans complete |
 | Phase 3 — IPC + Daemon | complete | All 2/2 plans complete |
 | Phase 4 — Input + Output | complete | All 3/3 plans complete |
-| Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
+| Phase 5 — Polish + Distribution | in-progress | 2/3 plans complete (CLI config done, wizard pending) |
 
 ## Key Decisions
 
@@ -95,6 +95,14 @@ progress:
 - **Warning chime frequency** — 770Hz between start 880Hz and stop 660Hz for clear audio distinction
 - **CGO_ENABLED=0 for tests** — avoid musl/glibc mixing issues in test binaries (documented in Phase 2)
 
+### Phase 5-02: Config Management
+
+- **Atomic save pattern: temp file → sync → rename** — prevents config corruption during writes even on crashes (CONFIG-06)
+- **Timeout validation: 1-300s range** — balances usability (minimum 1s) with safety (maximum 5 minutes) (AUDIO-08)
+- **Warning chime timing: 10s before timeout with 1s minimum** — prevents negative timing for short timeouts (AUDIO-08)
+- **Explicit key validation** — whitelist of valid keys prevents typos and provides clear error messages (CONFIG-07)
+- **Closure injection for config subcommands** — following existing pattern for passing *config.Config to subcommands (CONFIG-06)
+
 ### Phase 4-02: Transcription + Notifications
 
 - **Explicit context cancellation is NOT retryable** — context.Canceled returns immediately to prevent retry storms on user abort
@@ -137,7 +145,8 @@ progress:
 | 04-input-output | 01 | 25min | 2 | 7 |
 | 04-input-output | 02 | 10min | 2 | 4 |
 | 04-input-output | 03 | 35min | 3 | 5 |
-| Phase 05 P01 | 130 | 2 tasks | 3 files |
+| 05-polish-distribution | 01 | 130 | 2 | 3 |
+| 05-polish-distribution | 02 | 4min | 4 | 6 |
 
 ## Config
 
