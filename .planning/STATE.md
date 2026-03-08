@@ -2,27 +2,27 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: Not started
-status: unknown
-stopped_at: Completed 01-foundation/01-03-PLAN.md
-last_updated: "2026-03-08T02:16:40.775Z"
+current_plan: "02-01"
+status: in_progress
+stopped_at: Completed 02-audio-pipeline/02-01-PLAN.md
+last_updated: "2026-03-08T03:58:00Z"
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 01-foundation
-**Current Plan:** Not started
-**Next action:** Begin Phase 02 — Audio Pipeline
+**Phase:** 02-audio-pipeline
+**Current Plan:** 02-01 (complete)
+**Next action:** Begin Plan 02-02 — Audio Recorder Implementation
 **Milestone:** v0.1
-**Last session:** 2026-03-07T00:08:00Z
-**Stopped at:** Completed 01-foundation/01-03-PLAN.md
+**Last session:** 2026-03-08T03:54:31Z
+**Stopped at:** Completed 02-audio-pipeline/02-01-PLAN.md
 
 ## Initialization Summary
 
@@ -36,7 +36,7 @@ progress:
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 — Foundation | complete | All 3/3 plans complete |
-| Phase 2 — Audio Pipeline | pending | PortAudio + WAV + chimes |
+| Phase 2 — Audio Pipeline | in_progress | 1/3 plans complete |
 | Phase 3 — IPC + Daemon | pending | Unix socket + daemon lifecycle |
 | Phase 4 — Input + Output | pending | evdev + Groq + paste fallback |
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
@@ -60,6 +60,8 @@ progress:
 - **env.CGO_ENABLED not top-level CGO_ENABLED** — newer nixpkgs raises "overlapping attributes" error; must use env attrset in buildGoModule (01-03)
 - **pkgsStatic for musl variant** — compiles portaudio against musl automatically; no manual per-dep linker flags needed (01-03)
 - **Static binary gate passed** — 2.64MB, ldd=not-a-dynamic-executable, make build-check PASS (01-03)
+- **go-audio/wav v1.1.0 pinned explicitly** — go-audio/riff v1.0.0 pulled as transitive alongside go-audio/audio v1.0.0 (02-01)
+- **Wave 0 stubs use t.Skip labeling** — "Wave 0 stub — implement in Plan 0N" pattern enables grep to identify pending vs implemented tests (02-01)
 
 ## Performance Metrics
 
@@ -68,6 +70,7 @@ progress:
 | 01-foundation | 01 | 5min | 2 | 12 |
 | 01-foundation | 02 | 3min | 2 | 14 |
 | 01-foundation | 03 | 8min | 2 | 3 |
+| 02-audio-pipeline | 01 | 4min | 1 | 5 |
 
 ## Config
 
