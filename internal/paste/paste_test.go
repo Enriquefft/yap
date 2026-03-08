@@ -1,53 +1,15 @@
 package paste
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/atotto/clipboard"
 )
-
-// Test double types for testing
-type fakeCmd struct {
-	path   string
-	args   []string
-	output []byte
-	err    error
-}
-
-func (f *fakeCmd) CombinedOutput() ([]byte, error) {
-	return f.output, f.err
-}
-
-func (f *fakeCmd) Run() error {
-	return f.err
-}
-
-var (
-	mockExecCommand    func(string, ...string) *exec.Cmd
-	mockClipboardRead  func() (string, error)
-	mockClipboardWrite func(string) error
-	mockLookPath     func(string) (string, error)
-	mockOsStat       func(string) (os.FileInfo, error)
-	mockSleep         func(time.Duration)
-)
-
-func setupMocks() {
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
-		return &exec.Cmd{Path: name, Args: args}
-	}
-	mockClipboardRead = clipboard.ReadAll
-	mockClipboardWrite = clipboard.WriteAll
-	mockLookPath = exec.LookPath
-	mockOsStat = os.Stat
-	mockSleep = time.Sleep
-}
 
 func restoreMocks() {
 	execCommand = exec.Command
@@ -59,7 +21,6 @@ func restoreMocks() {
 }
 
 func TestDisplayDetection_Wayland(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	// Mock env vars
@@ -71,18 +32,16 @@ func TestDisplayDetection_Wayland(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "/usr/bin/wtype", nil
 		}
 		return "", errors.New("not found")
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
-		return &exec.Cmd{
-			Path: name,
-			Args: args,
-		}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// Return a command that will succeed (echo command)
+		return exec.Command("echo", "test")
 	}
 
 	err := Paste("test text")
@@ -92,7 +51,6 @@ func TestDisplayDetection_Wayland(t *testing.T) {
 }
 
 func TestDisplayDetection_X11(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	// Mock env vars
@@ -104,12 +62,12 @@ func TestDisplayDetection_X11(t *testing.T) {
 	os.Setenv("DISPLAY", ":0")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
 	err := Paste("test text")
 	if err != nil {
@@ -118,7 +76,6 @@ func TestDisplayDetection_X11(t *testing.T) {
 }
 
 func TestDisplayDetection_None(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -136,7 +93,6 @@ func TestDisplayDetection_None(t *testing.T) {
 }
 
 func TestWaylandChain_wtype(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -148,7 +104,7 @@ func TestWaylandChain_wtype(t *testing.T) {
 	defer os.Setenv("DISPLAY", oldDisplay)
 
 	wtypeCalled := false
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			wtypeCalled = true
 			return "/usr/bin/wtype", nil
@@ -156,7 +112,7 @@ func TestWaylandChain_wtype(t *testing.T) {
 		return "", errors.New("not found")
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -169,7 +125,6 @@ func TestWaylandChain_wtype(t *testing.T) {
 }
 
 func TestWaylandChain_wtypeFallsBackToClipboard(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -180,26 +135,17 @@ func TestWaylandChain_wtypeFallsBackToClipboard(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	wtypeCalled := false
-	mockLookPath = func(name string) (string, error) {
-		if name == "wtype" {
-			wtypeCalled = true
-			return "", errors.New("not found")
-		}
+	lookPath = func(name string) (string, error) {
 		return "", errors.New("not found")
 	}
 
 	clipboardWriteCalled := false
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		clipboardWriteCalled = true
 		return nil
 	}
 
 	Paste("test text")
-
-	if wtypeCalled {
-		t.Error("wtype was called, expected fallback")
-	}
 
 	if !clipboardWriteCalled {
 		t.Error("clipboard write was not called, expected it to be called")
@@ -207,7 +153,6 @@ func TestWaylandChain_wtypeFallsBackToClipboard(t *testing.T) {
 }
 
 func TestWaylandChain_ydotool(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -220,7 +165,7 @@ func TestWaylandChain_ydotool(t *testing.T) {
 
 	wtypeCalled := false
 	ydotoolCalled := false
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			wtypeCalled = true
 			return "", errors.New("not found")
@@ -232,11 +177,11 @@ func TestWaylandChain_ydotool(t *testing.T) {
 		return "", errors.New("not found")
 	}
 
-	mockOsStat = func(name string) (os.FileInfo, error) {
+	osStat = func(name string) (os.FileInfo, error) {
 		return nil, nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -253,7 +198,6 @@ func TestWaylandChain_ydotool(t *testing.T) {
 }
 
 func TestYdotoolSocketCheck_SocketExists(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -264,7 +208,7 @@ func TestYdotoolSocketCheck_SocketExists(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "", errors.New("not found")
 		}
@@ -274,12 +218,12 @@ func TestYdotoolSocketCheck_SocketExists(t *testing.T) {
 		return "", errors.New("not found")
 	}
 
-	mockOsStat = func(name string) (os.FileInfo, error) {
+	osStat = func(name string) (os.FileInfo, error) {
 		return nil, nil
 	}
 
 	ydotoolCalled := false
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "ydotool" {
 			ydotoolCalled = true
 		}
@@ -295,7 +239,6 @@ func TestYdotoolSocketCheck_SocketExists(t *testing.T) {
 }
 
 func TestYdotoolSocketCheck_SocketMissing(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -306,7 +249,7 @@ func TestYdotoolSocketCheck_SocketMissing(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "", errors.New("not found")
 		}
@@ -316,12 +259,12 @@ func TestYdotoolSocketCheck_SocketMissing(t *testing.T) {
 		return "", errors.New("not found")
 	}
 
-	mockOsStat = func(name string) (os.FileInfo, error) {
+	osStat = func(name string) (os.FileInfo, error) {
 		return nil, os.ErrNotExist
 	}
 
 	clipboardWriteCalled := false
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		clipboardWriteCalled = true
 		return nil
 	}
@@ -334,7 +277,6 @@ func TestYdotoolSocketCheck_SocketMissing(t *testing.T) {
 }
 
 func TestYdotoolSocketEnvOverride(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -349,7 +291,7 @@ func TestYdotoolSocketEnvOverride(t *testing.T) {
 	os.Setenv("YDOTOOL_SOCKET", "/custom/socket")
 	defer os.Setenv("YDOTOOL_SOCKET", oldSocket)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "", errors.New("not found")
 		}
@@ -360,12 +302,12 @@ func TestYdotoolSocketEnvOverride(t *testing.T) {
 	}
 
 	statCalledPath := ""
-	mockOsStat = func(name string) (os.FileInfo, error) {
+	osStat = func(name string) (os.FileInfo, error) {
 		statCalledPath = name
 		return nil, nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -378,7 +320,6 @@ func TestYdotoolSocketEnvOverride(t *testing.T) {
 }
 
 func TestX11Paste(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -390,14 +331,14 @@ func TestX11Paste(t *testing.T) {
 	defer os.Setenv("DISPLAY", oldDisplay)
 
 	sleepCalled := false
-	mockSleep = func(d time.Duration) {
+	sleep = func(d time.Duration) {
 		if d == 150*time.Millisecond {
 			sleepCalled = true
 		}
 	}
 
 	calledArgs := ""
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "xdotool" {
 			calledArgs = args[0]
 			cmd := exec.Command("echo", "test")
@@ -418,7 +359,6 @@ func TestX11Paste(t *testing.T) {
 }
 
 func TestX11Paste_WithClearmodifiers(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -429,10 +369,10 @@ func TestX11Paste_WithClearmodifiers(t *testing.T) {
 	os.Setenv("DISPLAY", ":0")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
 	hasClearmodifiers := false
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		for _, arg := range args {
 			if arg == "--clearmodifiers" {
 				hasClearmodifiers = true
@@ -450,7 +390,6 @@ func TestX11Paste_WithClearmodifiers(t *testing.T) {
 }
 
 func TestX11ExitCodeChecked(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -461,9 +400,9 @@ func TestX11ExitCodeChecked(t *testing.T) {
 	os.Setenv("DISPLAY", ":0")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.CommandContext(context.Background(), "false")
 		return cmd
 	}
@@ -475,7 +414,6 @@ func TestX11ExitCodeChecked(t *testing.T) {
 }
 
 func TestClipboardSave(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -487,16 +425,16 @@ func TestClipboardSave(t *testing.T) {
 	defer os.Setenv("DISPLAY", oldDisplay)
 
 	readCalled := false
-	mockClipboardRead = func() (string, error) {
+	clipboardRead = func() (string, error) {
 		readCalled = true
 		return "", nil
 	}
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -509,7 +447,6 @@ func TestClipboardSave(t *testing.T) {
 }
 
 func TestClipboardRestoreOnSuccess(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -524,27 +461,27 @@ func TestClipboardRestoreOnSuccess(t *testing.T) {
 	writeCalled := false
 	writtenContent := ""
 
-	mockClipboardRead = func() (string, error) {
+	clipboardRead = func() (string, error) {
 		readCalled = true
 		return "saved content", nil
 	}
 
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		writeCalled = true
 		writtenContent = text
 		return nil
 	}
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
 	sleeps := []time.Duration{}
-	mockSleep = func(d time.Duration) {
+	sleep = func(d time.Duration) {
 		sleeps = append(sleeps, d)
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -576,7 +513,6 @@ func TestClipboardRestoreOnSuccess(t *testing.T) {
 }
 
 func TestClipboardNotRestoredOnFailure(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -590,19 +526,19 @@ func TestClipboardNotRestoredOnFailure(t *testing.T) {
 	readCalled := false
 	writeCalled := false
 
-	mockClipboardRead = func() (string, error) {
+	clipboardRead = func() (string, error) {
 		readCalled = true
 		return "saved content", nil
 	}
 
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		writeCalled = true
 		return nil
 	}
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.CommandContext(context.Background(), "false")
 		return cmd
 	}
@@ -619,7 +555,6 @@ func TestClipboardNotRestoredOnFailure(t *testing.T) {
 }
 
 func TestClipboardSaveError_AllowsPaste(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -630,24 +565,24 @@ func TestClipboardSaveError_AllowsPaste(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockClipboardRead = func() (string, error) {
+	clipboardRead = func() (string, error) {
 		return "", errors.New("clipboard read error")
 	}
 
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		return nil
 	}
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
 	err := Paste("test text")
 	if err != nil {
@@ -656,7 +591,6 @@ func TestClipboardSaveError_AllowsPaste(t *testing.T) {
 }
 
 func TestClipboardNotRestoredWhenSaveFails(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -667,26 +601,26 @@ func TestClipboardNotRestoredWhenSaveFails(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockClipboardRead = func() (string, error) {
+	clipboardRead = func() (string, error) {
 		return "", errors.New("clipboard read error")
 	}
 
 	writeCalled := false
-	mockClipboardWrite = func(text string) error {
+	clipboardWrite = func(text string) error {
 		writeCalled = true
 		return nil
 	}
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
 
-	mockSleep = func(d time.Duration) {}
+	sleep = func(d time.Duration) {}
 
 	Paste("test text")
 
@@ -696,7 +630,6 @@ func TestClipboardNotRestoredWhenSaveFails(t *testing.T) {
 }
 
 func TestX11WithInterruptedSyscall(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -707,11 +640,11 @@ func TestX11WithInterruptedSyscall(t *testing.T) {
 	os.Setenv("DISPLAY", ":0")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockSleep = func(d time.Duration) {
+	sleep = func(d time.Duration) {
 		time.Sleep(d)
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		// Simulate interrupted syscall
 		cmd := exec.Command("sh", "-c", "kill -INT $$")
 		return cmd
@@ -724,7 +657,6 @@ func TestX11WithInterruptedSyscall(t *testing.T) {
 }
 
 func TestWtypeInterrupted(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -735,11 +667,11 @@ func TestWtypeInterrupted(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("sh", "-c", "kill -INT $$")
 		return cmd
 	}
@@ -751,7 +683,6 @@ func TestWtypeInterrupted(t *testing.T) {
 }
 
 func TestYdotoolInterrupted(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -762,7 +693,7 @@ func TestYdotoolInterrupted(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "", errors.New("not found")
 		}
@@ -772,11 +703,11 @@ func TestYdotoolInterrupted(t *testing.T) {
 		return "", errors.New("not found")
 	}
 
-	mockOsStat = func(name string) (os.FileInfo, error) {
+	osStat = func(name string) (os.FileInfo, error) {
 		return nil, nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "ydotool" {
 			cmd := exec.Command("sh", "-c", "kill -INT $$")
 			return cmd
@@ -792,7 +723,8 @@ func TestYdotoolInterrupted(t *testing.T) {
 
 func TestExecCommandSignalExit(t *testing.T) {
 	cmd := exec.CommandContext(context.Background(), "false")
-	if err := cmd.Run(); err == nil {
+	err := cmd.Run()
+	if err == nil {
 		t.Error("expected non-nil error from false command")
 	}
 	var exitErr *exec.ExitError
@@ -805,7 +737,6 @@ func TestExecCommandSignalExit(t *testing.T) {
 }
 
 func TestPasteEmptyString(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -816,11 +747,11 @@ func TestPasteEmptyString(t *testing.T) {
 	os.Setenv("DISPLAY", "")
 	defer os.Setenv("DISPLAY", oldDisplay)
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", "test")
 		return cmd
 	}
@@ -832,7 +763,6 @@ func TestPasteEmptyString(t *testing.T) {
 }
 
 func TestPasteWithSpecialCharacters(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -845,11 +775,11 @@ func TestPasteWithSpecialCharacters(t *testing.T) {
 
 	testText := `Hello "world"! This has 'quotes' and $symbols.`
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", testText)
 		return cmd
 	}
@@ -861,7 +791,6 @@ func TestPasteWithSpecialCharacters(t *testing.T) {
 }
 
 func TestPasteMultilineText(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	oldWayland := os.Getenv("WAYLAND_DISPLAY")
@@ -874,11 +803,11 @@ func TestPasteMultilineText(t *testing.T) {
 
 	testText := "Line 1\nLine 2\nLine 3"
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		return "/usr/bin/wtype", nil
 	}
 
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		cmd := exec.Command("echo", testText)
 		return cmd
 	}
@@ -890,7 +819,6 @@ func TestPasteMultilineText(t *testing.T) {
 }
 
 func TestWaylandWithBothDisplays(t *testing.T) {
-	setupMocks()
 	defer restoreMocks()
 
 	// When both WAYLAND_DISPLAY and DISPLAY are set, Wayland should be used
@@ -903,7 +831,7 @@ func TestWaylandWithBothDisplays(t *testing.T) {
 	defer os.Setenv("DISPLAY", oldDisplay)
 
 	xdotoolCalled := false
-	mockExecCommand = func(name string, args ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "xdotool" {
 			xdotoolCalled = true
 		}
@@ -911,7 +839,7 @@ func TestWaylandWithBothDisplays(t *testing.T) {
 		return cmd
 	}
 
-	mockLookPath = func(name string) (string, error) {
+	lookPath = func(name string) (string, error) {
 		if name == "wtype" {
 			return "/usr/bin/wtype", nil
 		}
