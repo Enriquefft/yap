@@ -19,6 +19,8 @@ func newConfigCmd(cfg *config.Config) *cobra.Command {
 
 	// Add subcommands
 	configCmd.AddCommand(newConfigSetCmd(cfg))
+	configCmd.AddCommand(newConfigGetCmd(cfg))
+	configCmd.AddCommand(newConfigPathCmd(cfg))
 
 	return configCmd
 }
