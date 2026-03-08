@@ -239,9 +239,9 @@ These replace any conflicting suggestions from the original PRD.
 | ASSETS-03 | Phase 2 | Complete |
 | DIST-01 | Phase 1 | Complete |
 | DIST-02 | Phase 1 | Complete |
-| DIST-03 | Phase 5 | Pending |
-| DIST-04 | Phase 5 | Pending |
-| DIST-05 | Phase 5 | Pending |
+| DIST-03 | Phase 5 | Complete |
+| DIST-04 | Phase 5 | Complete |
+| DIST-05 | Phase 5 | Complete |
 | NFR-01 | Phase 1 | Complete |
 | NFR-02 | Phase 1 | Complete |
 | NFR-03 | Phase 2 | Complete |
