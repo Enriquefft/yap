@@ -14,7 +14,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Not started | - |
+| 1. Foundation | 1/3 | In progress | - |
 | 2. Audio Pipeline | 0/3 | Not started | - |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
@@ -42,7 +42,7 @@
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Go module scaffold, Cobra CLI subcommand stubs, Wave 0 test stubs, Makefile
+- [x] 01-01-PLAN.md — Go module scaffold, Cobra CLI subcommand stubs, Wave 0 test stubs, Makefile
 - [ ] 01-02-PLAN.md — Config package (XDG + TOML + env overrides) and assets package (embedded WAV chimes)
 - [ ] 01-03-PLAN.md — Nix flake (static + dynamic packages) and static binary verification gate
 
