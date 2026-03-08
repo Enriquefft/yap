@@ -14,7 +14,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/3 | Complete | 2026-03-07 |
+| 1. Foundation | 3/3 | Complete    | 2026-03-08 |
 | 2. Audio Pipeline | 0/3 | Not started | - |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
@@ -39,7 +39,7 @@
 4. Config file is read from `$XDG_CONFIG_HOME/yap/config.toml`; missing file does not crash, it triggers defaults
 5. Embedded chime WAV assets are present in the binary (verifiable via a `--list-assets` debug flag or unit test)
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 01-01-PLAN.md — Go module scaffold, Cobra CLI subcommand stubs, Wave 0 test stubs, Makefile
