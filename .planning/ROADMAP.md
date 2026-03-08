@@ -16,7 +16,7 @@
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete    | 2026-03-08 |
 | 2. Audio Pipeline | 3/3 | Complete    | 2026-03-08 |
-| 3. IPC + Daemon | 0/2 | Not started | - |
+| 3. IPC + Daemon | 0/2 | Planning    | - |
 | 4. Input + Output | 0/3 | Not started | - |
 | 5. Polish + Distribution | 0/3 | Not started | - |
 
@@ -68,8 +68,8 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md — Wave 0 test stubs for all audio requirements + add go-audio/wav to go.mod
-- [ ] 02-02-PLAN.md — ReadWriteSeeker + WAV encoder + Recorder struct with blocking stream and PipeWire guard
-- [ ] 02-03-PLAN.md — Async chime playback (PlayChime goroutine) + NFR-03 benchmark
+- [x] 02-02-PLAN.md — ReadWriteSeeker + WAV encoder + Recorder struct with blocking stream and PipeWire guard
+- [x] 02-03-PLAN.md — Async chime playback (PlayChime goroutine) + NFR-03 benchmark
 
 **Pitfalls addressed:** #2 PipeWire compat, #7 Temp files, #12 WAV headers
 
@@ -90,7 +90,11 @@ Plans:
 4. Sending SIGTERM to the daemon process causes clean shutdown (PortAudio terminated, socket removed) within 2 seconds
 5. Running `yap start` twice prints an error and exits non-zero without starting a second daemon
 
-**Plans:** TBD
+**Plans:** 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Daemon lifecycle (daemonization, PID file management, SIGTERM handling, PortAudio cleanup)
+- [ ] 03-02-PLAN.md — IPC server (Unix socket, NDJSON protocol, client library) and CLI command integration
 
 **Pitfalls addressed:** #6 Stream cleanup on exit
 
