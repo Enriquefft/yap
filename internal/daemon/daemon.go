@@ -190,12 +190,18 @@ func Run(cfg *config.Config) error {
 			audioPlayChime(chime)
 		}
 
+		// Get timeout from config (default 60s if not set)
+		timeoutSec := d.cfg.TimeoutSeconds
+		if timeoutSec == 0 {
+			timeoutSec = 60
+		}
+
 		// Start recording in goroutine
-		recCtx, recCancel := context.WithTimeout(ctx, 60*time.Second)
+		recCtx, recCancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		d.state.setCancel(recCancel)
 		d.state.setIsActive(true)
 
-		go d.recordAndTranscribe(recCtx, recCancel)
+		go d.recordAndTranscribe(recCtx, recCancel, timeoutSec)
 	}
 
 	onRelease := func() {
@@ -225,13 +231,19 @@ func Run(cfg *config.Config) error {
 }
 
 // recordAndTranscribe runs the recording and transcription pipeline.
-func (d *Daemon) recordAndTranscribe(ctx context.Context, cancel context.CancelFunc) {
+func (d *Daemon) recordAndTranscribe(ctx context.Context, cancel context.CancelFunc, timeoutSec int) {
 	defer func() {
 		d.state.setIsActive(false)
 	}()
 
-	// Start 50s warning timer
-	warningTimer := time.AfterFunc(50*time.Second, func() {
+	// Calculate warning time (10s before timeout, minimum 1s)
+	warningSec := timeoutSec - 10
+	if warningSec < 1 {
+		warningSec = 1
+	}
+
+	// Start warning timer
+	warningTimer := time.AfterFunc(time.Duration(warningSec)*time.Second, func() {
 		chime, err := assets.WarningChime()
 		if err == nil {
 			audioPlayChime(chime)
@@ -282,8 +294,14 @@ func (d *Daemon) toggleRecording() string {
 		return "idle"
 	}
 
+	// Get timeout from config (default 60s if not set)
+	timeoutSec := d.cfg.TimeoutSeconds
+	if timeoutSec == 0 {
+		timeoutSec = 60
+	}
+
 	// Start recording
-	recCtx, recCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	recCtx, recCancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
 	d.state.setCancel(recCancel)
 	d.state.setIsActive(true)
 
@@ -294,7 +312,7 @@ func (d *Daemon) toggleRecording() string {
 	}
 
 	// Start recording in goroutine
-	go d.recordAndTranscribe(recCtx, recCancel)
+	go d.recordAndTranscribe(recCtx, recCancel, timeoutSec)
 
 	return "recording"
 }
