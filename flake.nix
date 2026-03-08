@@ -66,7 +66,9 @@
             go
             pkg-config
             portaudio
-            musl
+            # musl intentionally omitted: only used by pkgsStatic for static builds.
+            # Including musl here adds -L/musl/lib to NIX_LDFLAGS, causing musl+glibc
+            # mixing in test binaries which crashes at startup (segfault on go test).
             ffmpeg
           ];
 
