@@ -142,7 +142,12 @@ Plans:
 4. `curl -fsSL https://raw.githubusercontent.com/.../install.sh | bash` installs `yap` to `~/.local/bin/yap` on a fresh Debian/Ubuntu system with no prior yap installation
 5. `nix build .#nixosModules.default` succeeds; the generated NixOS module adds the user to `input` group and enables `services.pipewire.alsa`
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — First-run wizard with interactive prompts for API key, hotkey, and language
+- [ ] 05-02-PLAN.md — Config CLI subcommands (set/get/path) and configurable recording timeout
+- [ ] 05-03-PLAN.md — NixOS module with auto-input-group, GitHub Releases CI, and curl install script
 
 **Pitfalls addressed:** #3 NixOS module auto-adds input group
 
