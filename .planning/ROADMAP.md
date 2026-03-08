@@ -39,7 +39,12 @@
 4. Config file is read from `$XDG_CONFIG_HOME/yap/config.toml`; missing file does not crash, it triggers defaults
 5. Embedded chime WAV assets are present in the binary (verifiable via a `--list-assets` debug flag or unit test)
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Go module scaffold, Cobra CLI subcommand stubs, Wave 0 test stubs, Makefile
+- [ ] 01-02-PLAN.md — Config package (XDG + TOML + env overrides) and assets package (embedded WAV chimes)
+- [ ] 01-03-PLAN.md — Nix flake (static + dynamic packages) and static binary verification gate
 
 **Pitfalls addressed:** #1 CGo static linking, #10 Nix CGo headers, #14 PortAudio CGo pointer, #15 Chime size
 
