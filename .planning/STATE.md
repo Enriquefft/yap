@@ -4,25 +4,25 @@ milestone: v0.1
 milestone_name: milestone
 current_plan: 04-01
 status: executing
-stopped_at: Completed 03-ipc-daemon/03-02-PLAN.md
-last_updated: "2026-03-08T04:50:00.000Z"
+stopped_at: Completed 04-input-output/04-01-PLAN.md
+last_updated: "2026-03-08T21:45:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 7
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 04-input-output (ready)
-**Current Plan:** 03-01 (daemon-core) — COMPLETE
-**Next action:** Begin Phase 3-02 — IPC server + CLI integration
+**Phase:** 04-input-output (executing)
+**Current Plan:** 04-01 (hotkey-listener) — COMPLETE
+**Next action:** Begin Phase 04-02 — daemon timeout integration
 **Milestone:** v0.1
-**Last session:** 2026-03-08T04:35:00.000Z
-**Stopped at:** Completed 03-ipc-daemon/03-01-PLAN.md
+**Last session:** 2026-03-08T21:45:00.000Z
+**Stopped at:** Completed 04-input-output/04-01-PLAN.md
 
 ## Initialization Summary
 
@@ -85,6 +85,16 @@ progress:
 - **CLI timeouts**: 5s for stop/toggle, 1s for status (from CONTEXT.md)
 - **stop/status are idempotent** — exit 0 if daemon not running (safe for scripts)
 
+### Phase 4-01: Hotkey Listener
+
+- **NonBlock() then ReadOne() pattern** — never call Fd() after NonBlock() to satisfy INPUT-04 research finding
+- **No exclusive grab** — never call Grab() to satisfy INPUT-03 and allow input sharing with other applications
+- **Alpha key range detection** — KEY_A-KEY_Z range identifies full keyboards vs numeric keypads/special devices
+- **Permission error format** — exact "usermod -aG input $USER" command in error message to satisfy INPUT-06
+- **Repeat event handling** — ignore value=2 (repeat) events in hold-to-talk loop to satisfy INPUT-02
+- **Warning chime frequency** — 770Hz between start 880Hz and stop 660Hz for clear audio distinction
+- **CGO_ENABLED=0 for tests** — avoid musl/glibc mixing issues in test binaries (documented in Phase 2)
+
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
@@ -97,6 +107,7 @@ progress:
 | 02-audio-pipeline | 03 | 6min | 1 | 3 |
 | 03-ipc-daemon | 01 | 15min | 3 | 7 |
 | 03-ipc-daemon | 02 | 25min | 4 | 9 |
+| 04-input-output | 01 | 25min | 2 | 7 |
 
 ## Config
 
