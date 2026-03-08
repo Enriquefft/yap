@@ -10,6 +10,7 @@ import (
 // over it — this is the injection point. There is no exported global; callers
 // outside this package cannot mutate it.
 var rootCfg config.Config
+var daemonRun bool
 
 var rootCmd = &cobra.Command{
 	Use:   "yap",
@@ -39,4 +40,9 @@ func init() {
 	rootCmd.AddCommand(newStatusCmd(&rootCfg))
 	rootCmd.AddCommand(newToggleCmd(&rootCfg))
 	rootCmd.AddCommand(newConfigCmd(&rootCfg))
+
+	// Hidden flag for internal daemon spawning (Phase 3-02).
+	// Used by "yap start" to spawn a detached child that runs "yap --daemon-run".
+	rootCmd.PersistentFlags().BoolVar(&daemonRun, "daemon-run", false, "")
+	rootCmd.PersistentFlags().MarkHidden("daemon-run")
 }
