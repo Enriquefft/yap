@@ -2,27 +2,27 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: Not started
-status: unknown
-stopped_at: Completed 02-audio-pipeline/02-03-PLAN.md
-last_updated: "2026-03-08T04:20:14.302Z"
+current_plan: 03-01-complete
+status: executing
+stopped_at: Completed 03-ipc-daemon/03-01-PLAN.md
+last_updated: "2026-03-08T04:35:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 7
+  completed_plans: 7
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 02-audio-pipeline (complete)
-**Current Plan:** Not started
-**Next action:** Begin Phase 3 — IPC + Daemon
+**Phase:** 03-ipc-daemon (in progress)
+**Current Plan:** 03-01 (daemon-core) — COMPLETE
+**Next action:** Begin Phase 3-02 — IPC server + CLI integration
 **Milestone:** v0.1
-**Last session:** 2026-03-08T04:15:56.664Z
-**Stopped at:** Completed 02-audio-pipeline/02-03-PLAN.md
+**Last session:** 2026-03-08T04:35:00.000Z
+**Stopped at:** Completed 03-ipc-daemon/03-01-PLAN.md
 
 ## Initialization Summary
 
@@ -42,6 +42,15 @@ progress:
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
 
 ## Key Decisions
+
+### Phase 3-01: Daemon Core
+
+- **Daemon.Run() uses signal.NotifyContext** for clean SIGTERM handling (no os.Exit calls)
+- **PID file uses O_EXCL flag** for atomic creation (prevents DAEMON-05 race condition)
+- **IsLive uses Signal(0)** for correct Unix liveness test instead of FindProcess
+- **daemonRun flag added to root command** for Phase 3-02 daemon spawning logic
+
+### Previous Phases
 
 - **Stack diverges from PRD** in 4 places (research-confirmed):
   - `holoplot/go-evdev` (pure Go) over `gvalkov/golang-evdev`
@@ -79,6 +88,7 @@ progress:
 | 02-audio-pipeline | 01 | 4min | 1 | 5 |
 | 02-audio-pipeline | 02 | 12min | 2 | 4 |
 | 02-audio-pipeline | 03 | 6min | 1 | 3 |
+| 03-ipc-daemon | 01 | 15min | 3 | 7 |
 
 ## Config
 

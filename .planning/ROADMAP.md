@@ -4,7 +4,7 @@
 
 - [x] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets
 - [x] **Phase 2: Audio Pipeline** — PortAudio capture, ring buffer, WAV encoding, chime playback (completed 2026-03-08)
-- [ ] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management
+- [ ] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management (03-01 daemon-core completed 2026-03-08)
 - [ ] **Phase 4: Input + Output** — evdev hotkeys, hold-to-talk loop, Groq transcription, paste fallback chain
 - [ ] **Phase 5: Polish + Distribution** — First-run wizard, config CLI, recording timeout, curl install, NixOS module
 
@@ -16,7 +16,7 @@
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete    | 2026-03-08 |
 | 2. Audio Pipeline | 3/3 | Complete    | 2026-03-08 |
-| 3. IPC + Daemon | 0/2 | Planning    | - |
+| 3. IPC + Daemon | 1/2 | In Progress | 2026-03-08 (03-01) |
 | 4. Input + Output | 0/3 | Not started | - |
 | 5. Polish + Distribution | 0/3 | Not started | - |
 

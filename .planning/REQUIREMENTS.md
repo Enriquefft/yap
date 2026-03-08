@@ -12,11 +12,11 @@ v0.1 delivers a working Linux hold-to-talk dictation daemon: hold a hotkey, spea
 
 | ID | Requirement |
 |----|-------------|
-| DAEMON-01 | Daemon starts in background via `yap start` and writes a PID file to `$XDG_DATA_HOME/yap/yap.pid` |
+| DAEMON-01 | ✓ Daemon starts in background via `yap start` and writes a PID file to `$XDG_DATA_HOME/yap/yap.pid` |
 | DAEMON-02 | Daemon stops gracefully via `yap stop` (sends IPC command, waits for clean shutdown) |
 | DAEMON-03 | `yap status` reports whether daemon is running and current state (idle/recording) |
-| DAEMON-04 | Daemon handles SIGTERM with graceful shutdown: stops audio stream, closes PortAudio, removes PID file and socket |
-| DAEMON-05 | Only one daemon instance runs at a time; second `yap start` detects live PID file and exits with error |
+| DAEMON-04 | ✓ Daemon handles SIGTERM with graceful shutdown: stops audio stream, closes PortAudio, removes PID file and socket |
+| DAEMON-05 | ✓ Only one daemon instance runs at a time; second `yap start` detects live PID file and exits with error |
 | DAEMON-06 | `yap toggle` sends a toggle command over IPC; starts recording if idle, stops if recording |
 
 ### IPC — Inter-Process Communication
@@ -38,7 +38,7 @@ v0.1 delivers a working Linux hold-to-talk dictation daemon: hold a hotkey, spea
 | AUDIO-04 | Ring buffer drained by goroutine; PCM data never passed via Go channel inside PortAudio callback |
 | AUDIO-05 | WAV encoding to 16kHz 16-bit mono PCM via `github.com/go-audio/wav`; full RIFF/fmt/data headers |
 | AUDIO-06 | WAV encoding performed in-memory (to `bytes.Buffer`); no disk I/O in the recording path |
-| AUDIO-07 | PortAudio stream and `Pa_Terminate()` always called via deferred cleanup; `os.Exit()` never called directly |
+| AUDIO-07 | ✓ PortAudio stream and `Pa_Terminate()` always called via deferred cleanup; `os.Exit()` never called directly |
 | AUDIO-08 | Recording timeout enforced at configurable max duration (default: 60 seconds); recording auto-stops at limit |
 
 ### TRANSCRIPTION — Groq Whisper API
