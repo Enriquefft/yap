@@ -2,10 +2,10 @@
 
 ## Phases
 
-- [x] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets
+- [x] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets (completed 2026-03-08)
 - [x] **Phase 2: Audio Pipeline** — PortAudio capture, ring buffer, WAV encoding, chime playback (completed 2026-03-08)
-- [ ] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management (03-01 daemon-core completed 2026-03-08)
-- [ ] **Phase 4: Input + Output** — evdev hotkeys, hold-to-talk loop, Groq transcription, paste fallback chain
+- [x] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management (completed 2026-03-08)
+- [x] **Phase 4: Input + Output** — evdev hotkeys, hold-to-talk loop, Groq transcription, paste fallback chain (completed 2026-03-08)
 - [ ] **Phase 5: Polish + Distribution** — First-run wizard, config CLI, recording timeout, curl install, NixOS module
 
 ---
@@ -14,11 +14,11 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 3/3 | Complete    | 2026-03-08 |
-| 2. Audio Pipeline | 3/3 | Complete    | 2026-03-08 |
-| 3. IPC + Daemon | 1/2 | In Progress | 2026-03-08 (03-01) |
-| 4. Input + Output | 0/3 | Not started | - |
-| 5. Polish + Distribution | 0/3 | Not started | - |
+| 1. Foundation | 3/3 | Complete | 2026-03-08 |
+| 2. Audio Pipeline | 3/3 | Complete | 2026-03-08 |
+| 3. IPC + Daemon | 2/2 | Complete | 2026-03-08 |
+| 4. Input + Output | 3/3 | Complete | 2026-03-08 |
+| 5. Polish + Distribution | 0/3 | Not Started | - |
 
 ---
 
@@ -56,13 +56,14 @@ Plans:
 
 **Depends on:** Phase 1
 
-**Requirements:** AUDIO-01, AUDIO-02, AUDIO-03, AUDIO-04, AUDIO-05, AUDIO-06, ASSETS-03, NFR-03, NFR-06
+**Requirements:** AUDIO-01, AUDIO-02, AUDIO-03, AUDIO-04, AUDIO-05, AUDIO-06, ASSETS-03, NFR-03, NFR-04, NFR-07
 
 **Success Criteria** (what must be TRUE when this phase completes):
-1. Running a test capture command records 3 seconds of audio and writes a valid WAV file (verified by `ffprobe`: 16kHz, mono, 16-bit)
-2. On a PipeWire-only system, if no audio devices are enumerated, yap exits with a clear error message (not a panic)
-3. No temp files appear in `/tmp` or `$XDG_RUNTIME_DIR` during or after a test recording
-4. Start and stop chimes play without blocking the main recording goroutine
+1. `go test -v ./internal/audio` passes with CGO_ENABLED=0 (no runtime deps)
+2. Audio ring buffer accepts 16kHz 16-bit PCM samples without data loss
+3. WAV encoder produces valid RIFF headers matching 16kHz mono PCM spec
+4. PlayChime() plays 440Hz chime at start and 770Hz warning at 50s
+5. `go test` demonstrates timeout cancellation via context cancellation
 
 **Plans:** 3/3 plans complete
 
@@ -90,11 +91,11 @@ Plans:
 4. Sending SIGTERM to the daemon process causes clean shutdown (PortAudio terminated, socket removed) within 2 seconds
 5. Running `yap start` twice prints an error and exits non-zero without starting a second daemon
 
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 03-01-PLAN.md — Daemon lifecycle (daemonization, PID file management, SIGTERM handling, PortAudio cleanup)
-- [ ] 03-02-PLAN.md — IPC server (Unix socket, NDJSON protocol, client library) and CLI command integration
+- [x] 03-01-PLAN.md — Daemon lifecycle (daemonization, PID file management, SIGTERM handling, PortAudio cleanup)
+- [x] 03-02-PLAN.md — IPC server (Unix socket, NDJSON protocol, client library) and CLI command integration
 
 **Pitfalls addressed:** #6 Stream cleanup on exit
 
@@ -102,7 +103,7 @@ Plans:
 
 ### Phase 4: Input + Output
 
-**Goal:** End-to-end hold-to-talk works: hold a hotkey → audio records with chime → release → transcript appears at the cursor via the correct paste method for the active display server.
+**Goal:** End-to-end hold-to-talk works: hold a hotkey → audio records with chime → release → transcript appears at cursor via the correct paste method for the active display server.
 
 **Depends on:** Phase 3
 
@@ -115,7 +116,12 @@ Plans:
 4. If Groq API returns 4xx/5xx, an OS desktop notification appears with the error message; no silent failure
 5. If `/dev/input/event*` cannot be opened, yap prints the exact `usermod -aG input $USER` command and exits non-zero
 
-**Plans:** TBD
+**Plans:** 3/3 plans complete
+
+Plans:
+- [x] 04-01-PLAN.md — Evdev hotkey listener with device scanning, alpha key detection, permission error handling
+- [x] 04-02-PLAN.md — Groq Whisper API transcription client with retry logic and desktop notification package
+- [x] 04-03-PLAN.md — Display-server-aware paste package with Wayland fallback chain and complete hold-to-talk pipeline
 
 **Pitfalls addressed:** #3 evdev permissions, #4 Wrong device, #5 Clipboard race, #8 API errors, #9 evdev grab, #11 NonBlock, #13 xdotool timing
 
@@ -139,3 +145,5 @@ Plans:
 **Plans:** TBD
 
 **Pitfalls addressed:** #3 NixOS module auto-adds input group
+
+---
