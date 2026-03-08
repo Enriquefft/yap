@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
@@ -74,4 +75,54 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("YAP_HOTKEY"); v != "" {
 		cfg.Hotkey = v
 	}
+}
+
+// Save atomically writes the config to the config file.
+// Pattern: Write to temp file → sync → rename (atomic, prevents corruption).
+func Save(cfg Config) error {
+	configPath, err := ConfigPath()
+	if err != nil {
+		return fmt.Errorf("xdg config path: %w", err)
+	}
+
+	// Create parent directories if they don't exist
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	// Create temp file in same directory (same filesystem for atomic rename)
+	tempFile, err := os.CreateTemp(configDir, "yap-config-*.toml")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Encode config to temp file
+	if err := toml.NewEncoder(tempFile).Encode(cfg); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+		return fmt.Errorf("encode config: %w", err)
+	}
+
+	// Sync temp file to disk
+	if err := tempFile.Sync(); err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	// Close temp file
+	if err := tempFile.Close(); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	// Atomic rename temp file to config file
+	if err := os.Rename(tempPath, configPath); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+
+	return nil
 }
