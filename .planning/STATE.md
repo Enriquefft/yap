@@ -2,27 +2,27 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: "02-02"
-status: in_progress
-stopped_at: Completed 02-audio-pipeline/02-02-PLAN.md
-last_updated: "2026-03-08T04:12:00Z"
+current_plan: "02-03"
+status: complete
+stopped_at: Completed 02-audio-pipeline/02-03-PLAN.md
+last_updated: "2026-03-08T04:15:56.668Z"
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 6
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State — yap
 
 ## Current Status
 
-**Phase:** 02-audio-pipeline
-**Current Plan:** 02-02 (complete)
-**Next action:** Begin Plan 02-03 — Chime playback
+**Phase:** 02-audio-pipeline (complete)
+**Current Plan:** 02-03 (complete)
+**Next action:** Begin Phase 3 — IPC + Daemon
 **Milestone:** v0.1
-**Last session:** 2026-03-08T04:12:00Z
-**Stopped at:** Completed 02-audio-pipeline/02-02-PLAN.md
+**Last session:** 2026-03-08T04:15:56.664Z
+**Stopped at:** Completed 02-audio-pipeline/02-03-PLAN.md
 
 ## Initialization Summary
 
@@ -36,7 +36,7 @@ progress:
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 — Foundation | complete | All 3/3 plans complete |
-| Phase 2 — Audio Pipeline | in_progress | 2/3 plans complete |
+| Phase 2 — Audio Pipeline | complete | All 3/3 plans complete |
 | Phase 3 — IPC + Daemon | pending | Unix socket + daemon lifecycle |
 | Phase 4 — Input + Output | pending | evdev + Groq + paste fallback |
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
@@ -66,6 +66,8 @@ progress:
 - **fakeRecorder test double** — implements AudioRecorder inline in test with encodeWAV delegation; no mock framework needed (02-02)
 - **Recorder.Stop() is no-op** — context cancellation is the primary stop mechanism for blocking PortAudio streams (02-02)
 - **CGo requires gcc-wrapper (not bare gcc) from Nix store** — includes proper C runtime library paths (crt1.o/crti.o) needed by the linker (02-02)
+- **defer recover() in PlayChime goroutine** — portaudio C lib panics on headless ALSA systems (index out of range in hostsAndDevices); recover() intercepts Go-visible panics and logs them (02-03)
+- **Remove musl from devShell buildInputs** — musl in NIX_LDFLAGS caused musl+glibc mixing in test binaries resulting in SIGSEGV at startup; musl only needed by pkgsStatic (02-03)
 
 ## Performance Metrics
 
@@ -76,6 +78,7 @@ progress:
 | 01-foundation | 03 | 8min | 2 | 3 |
 | 02-audio-pipeline | 01 | 4min | 1 | 5 |
 | 02-audio-pipeline | 02 | 12min | 2 | 4 |
+| 02-audio-pipeline | 03 | 6min | 1 | 3 |
 
 ## Config
 

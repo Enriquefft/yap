@@ -3,7 +3,7 @@
 ## Phases
 
 - [x] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets
-- [ ] **Phase 2: Audio Pipeline** — PortAudio capture, ring buffer, WAV encoding, chime playback
+- [x] **Phase 2: Audio Pipeline** — PortAudio capture, ring buffer, WAV encoding, chime playback (completed 2026-03-08)
 - [ ] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management
 - [ ] **Phase 4: Input + Output** — evdev hotkeys, hold-to-talk loop, Groq transcription, paste fallback chain
 - [ ] **Phase 5: Polish + Distribution** — First-run wizard, config CLI, recording timeout, curl install, NixOS module
@@ -15,7 +15,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete    | 2026-03-08 |
-| 2. Audio Pipeline | 2/3 | In Progress|  |
+| 2. Audio Pipeline | 3/3 | Complete   | 2026-03-08 |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
 | 5. Polish + Distribution | 0/3 | Not started | - |
@@ -64,7 +64,7 @@ Plans:
 3. No temp files appear in `/tmp` or `$XDG_RUNTIME_DIR` during or after a test recording
 4. Start and stop chimes play without blocking the main recording goroutine
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 02-01-PLAN.md — Wave 0 test stubs for all audio requirements + add go-audio/wav to go.mod

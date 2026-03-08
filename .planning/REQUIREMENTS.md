@@ -236,7 +236,7 @@ These replace any conflicting suggestions from the original PRD.
 | FIRSTRUN-03 | Phase 5 | Pending |
 | ASSETS-01 | Phase 1 | Complete |
 | ASSETS-02 | Phase 1 | Complete |
-| ASSETS-03 | Phase 2 | Pending |
+| ASSETS-03 | Phase 2 | Complete |
 | DIST-01 | Phase 1 | Complete |
 | DIST-02 | Phase 1 | Complete |
 | DIST-03 | Phase 5 | Pending |
@@ -244,7 +244,7 @@ These replace any conflicting suggestions from the original PRD.
 | DIST-05 | Phase 5 | Pending |
 | NFR-01 | Phase 1 | Complete |
 | NFR-02 | Phase 1 | Complete |
-| NFR-03 | Phase 2 | Pending |
+| NFR-03 | Phase 2 | Complete |
 | NFR-04 | Phase 4 | Pending |
 | NFR-05 | Phase 1 | Complete |
 | NFR-06 | Phase 2 | Complete |
