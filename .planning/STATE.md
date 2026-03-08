@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: 04-01
+current_plan: 04-03
 status: executing
-stopped_at: Completed 04-input-output/04-01-PLAN.md
-last_updated: "2026-03-08T21:45:00.000Z"
+stopped_at: Completed 04-input-output/04-02-PLAN.md
+last_updated: "2026-03-08T21:56:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 7
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State — yap
@@ -18,11 +18,11 @@ progress:
 ## Current Status
 
 **Phase:** 04-input-output (executing)
-**Current Plan:** 04-01 (hotkey-listener) — COMPLETE
-**Next action:** Begin Phase 04-02 — daemon timeout integration
+**Current Plan:** 04-02 (transcription-notifications) — COMPLETE
+**Next action:** Begin Phase 04-03 — hold-to-talk pipeline integration
 **Milestone:** v0.1
-**Last session:** 2026-03-08T21:45:00.000Z
-**Stopped at:** Completed 04-input-output/04-01-PLAN.md
+**Last session:** 2026-03-08T21:56:00.000Z
+**Stopped at:** Completed 04-input-output/04-02-PLAN.md
 
 ## Initialization Summary
 
@@ -95,6 +95,18 @@ progress:
 - **Warning chime frequency** — 770Hz between start 880Hz and stop 660Hz for clear audio distinction
 - **CGO_ENABLED=0 for tests** — avoid musl/glibc mixing issues in test binaries (documented in Phase 2)
 
+### Phase 4-02: Transcription + Notifications
+
+- **Explicit context cancellation is NOT retryable** — context.Canceled returns immediately to prevent retry storms on user abort
+- **HTTP client timeout errors ARE retryable** — transient network issues should retry (vs explicit user cancellation)
+- **Status code classification** — 4xx (client errors) fail immediately, 5xx (server errors) retry with exponential backoff
+- **Exponential backoff retry** — 500ms/1s/2s delays with 3 retry limit (4 total attempts: initial + 3 retries)
+- **30-second HTTP client timeout** — TRANS-03 requirement enforced via clientTimeout package variable
+- **beeep.Notify signature uses `any` for icon** — test capture functions must match exact signature (not `string`)
+- **Package-level variables for testability** — apiURL, clientTimeout, notifyFn enable test doubles without mocking frameworks
+- **Notifications are best-effort** — notification backend errors logged but not propagated to caller
+- **"yap: " title prefix** — all notification titles prefixed for easy identification in desktop environment
+
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
@@ -108,6 +120,7 @@ progress:
 | 03-ipc-daemon | 01 | 15min | 3 | 7 |
 | 03-ipc-daemon | 02 | 25min | 4 | 9 |
 | 04-input-output | 01 | 25min | 2 | 7 |
+| 04-input-output | 02 | 10min | 2 | 4 |
 
 ## Config
 
