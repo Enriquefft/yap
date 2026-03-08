@@ -104,3 +104,96 @@ func TestDispatchUnknownCommand(t *testing.T) {
 	require.False(t, resp.Ok)
 	require.NotEmpty(t, resp.Error)
 }
+
+// TestSetToggleFn sets the toggle function.
+func TestSetToggleFn(t *testing.T) {
+	srv, err := NewServer("/tmp/test-ipc-toggle.sock")
+	require.NoError(t, err)
+	defer srv.Close()
+	defer os.Remove("/tmp/test-ipc-toggle.sock")
+
+	called := false
+	srv.SetToggleFn(func() string {
+		called = true
+		return "recording"
+	})
+
+	require.NotNil(t, srv.toggleFn)
+
+	result := srv.toggleFn()
+	require.Equal(t, "recording", result)
+	require.True(t, called)
+}
+
+// TestSetStatusFn sets the status function.
+func TestSetStatusFn(t *testing.T) {
+	srv, err := NewServer("/tmp/test-ipc-status.sock")
+	require.NoError(t, err)
+	defer srv.Close()
+	defer os.Remove("/tmp/test-ipc-status.sock")
+
+	called := false
+	srv.SetStatusFn(func() string {
+		called = true
+		return "idle"
+	})
+
+	require.NotNil(t, srv.statusFn)
+
+	result := srv.statusFn()
+	require.Equal(t, "idle", result)
+	require.True(t, called)
+}
+
+// TestDispatchToggleWithFn calls toggle function.
+func TestDispatchToggleWithFn(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+	srv, err := NewServer(sockPath)
+	require.NoError(t, err)
+	defer srv.Close()
+
+	toggleCalled := false
+	srv.SetToggleFn(func() string {
+		toggleCalled = true
+		return "recording"
+	})
+
+	resp := srv.dispatch(context.Background(), Request{Cmd: CmdToggle})
+	require.True(t, resp.Ok)
+	require.Equal(t, "recording", resp.State)
+	require.True(t, toggleCalled)
+}
+
+// TestDispatchToggleWithoutFn returns error.
+func TestDispatchToggleWithoutFn(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+	srv, err := NewServer(sockPath)
+	require.NoError(t, err)
+	defer srv.Close()
+
+	resp := srv.dispatch(context.Background(), Request{Cmd: CmdToggle})
+	require.False(t, resp.Ok)
+	require.Equal(t, "toggle function not set", resp.Error)
+}
+
+// TestDispatchStatusWithFn calls status function.
+func TestDispatchStatusWithFn(t *testing.T) {
+	tmpDir := t.TempDir()
+	sockPath := filepath.Join(tmpDir, "test.sock")
+	srv, err := NewServer(sockPath)
+	require.NoError(t, err)
+	defer srv.Close()
+
+	statusCalled := false
+	srv.SetStatusFn(func() string {
+		statusCalled = true
+		return "recording"
+	})
+
+	resp := srv.dispatch(context.Background(), Request{Cmd: CmdStatus})
+	require.True(t, resp.Ok)
+	require.Equal(t, "recording", resp.State)
+	require.True(t, statusCalled)
+}

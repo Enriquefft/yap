@@ -26,3 +26,56 @@ func TestDaemonCleanupOnExit(t *testing.T) {
 
 // TestDaemonAlreadyRunning verifies DAEMON-05 (duplicate detection).
 // This is tested via pidfile_test.go (IsLive check).
+
+// TestRecordState verifies recording state machine operations.
+func TestRecordState(t *testing.T) {
+	var rs recordState
+
+	// Initially not active
+	if rs.isActive() {
+		t.Error("Record state should be initially inactive")
+	}
+
+	// Set active
+	rs.setIsActive(true)
+	if !rs.isActive() {
+		t.Error("Record state should be active after setIsActive(true)")
+	}
+
+	// Set cancel function
+	cancelCalled := false
+	rs.setCancel(func() {
+		cancelCalled = true
+	})
+
+	// Cancel recording
+	rs.cancelRecording()
+	if cancelCalled {
+		t.Error("Cancel function should not be called by cancelRecording (just stored)")
+	}
+
+	if rs.isActive() {
+		t.Error("Record state should be inactive after cancelRecording")
+	}
+
+	// Calling cancelRecording again should be safe
+	rs.cancelRecording()
+}
+
+// TestNew creates a Daemon instance.
+func TestNew(t *testing.T) {
+	cfg := &config.Config{
+		Hotkey:   "KEY_RIGHTCTRL",
+		Language: "en",
+		APIKey:   "test-key",
+	}
+
+	d := New(cfg)
+	if d == nil {
+		t.Error("New() returned nil")
+	}
+
+	if d.cfg != cfg {
+		t.Error("Daemon config not set correctly")
+	}
+}

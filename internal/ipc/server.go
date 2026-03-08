@@ -12,6 +12,8 @@ import (
 type Server struct {
 	ln       net.Listener
 	sockPath string
+	toggleFn func() string
+	statusFn func() string
 }
 
 // NewServer creates a listener at sockPath with IPC-01 security (mode 0600).
@@ -35,7 +37,19 @@ func NewServer(sockPath string) (*Server, error) {
 	return &Server{ln: ln, sockPath: sockPath}, nil
 }
 
-// Close shuts down the listener and removes the socket file.
+// SetToggleFn sets the toggle function for recording state.
+// Called by daemon to provide callback for toggle command.
+func (s *Server) SetToggleFn(fn func() string) {
+	s.toggleFn = fn
+}
+
+// SetStatusFn sets the status function for querying recording state.
+// Called by daemon to provide callback for status command.
+func (s *Server) SetStatusFn(fn func() string) {
+	s.statusFn = fn
+}
+
+// Close shuts down listener and removes of socket file.
 func (s *Server) Close() error {
 	err := s.ln.Close()
 	os.Remove(s.sockPath)
@@ -83,24 +97,26 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 }
 
 // dispatch routes command to handler and returns response.
-// TODO(Phase 4): Implement actual recording state machine.
-// For Phase 3-02, status always returns "idle".
 func (s *Server) dispatch(ctx context.Context, req Request) Response {
 	switch req.Cmd {
 	case CmdStop:
 		// Stop daemon (trigger ctx cancellation from daemon.Run).
-		// For Phase 3-02, just return success; actual shutdown is handled by daemon.Run context.
+		// Just return success; actual shutdown is handled by daemon.Run context.
 		return Response{Ok: true, State: "stopped"}
 
 	case CmdStatus:
 		// Report daemon status.
-		// TODO(Phase 4): Query actual recording state.
+		if s.statusFn != nil {
+			return Response{Ok: true, State: s.statusFn()}
+		}
 		return Response{Ok: true, State: "idle"}
 
 	case CmdToggle:
 		// Toggle recording state.
-		// TODO(Phase 4): Implement state toggle logic.
-		return Response{Ok: true, State: "idle"}
+		if s.toggleFn != nil {
+			return Response{Ok: true, State: s.toggleFn()}
+		}
+		return Response{Ok: false, Error: "toggle function not set"}
 
 	default:
 		return Response{Ok: false, Error: "unknown command: " + req.Cmd}
