@@ -194,12 +194,12 @@ These replace any conflicting suggestions from the original PRD.
 | IPC-02 | Phase 3 | Pending |
 | IPC-03 | Phase 3 | Pending |
 | IPC-04 | Phase 3 | Pending |
-| AUDIO-01 | Phase 2 | Pending |
-| AUDIO-02 | Phase 2 | Pending |
-| AUDIO-03 | Phase 2 | Pending |
-| AUDIO-04 | Phase 2 | Pending |
-| AUDIO-05 | Phase 2 | Pending |
-| AUDIO-06 | Phase 2 | Pending |
+| AUDIO-01 | Phase 2 | Complete |
+| AUDIO-02 | Phase 2 | Complete |
+| AUDIO-03 | Phase 2 | Complete |
+| AUDIO-04 | Phase 2 | Complete |
+| AUDIO-05 | Phase 2 | Complete |
+| AUDIO-06 | Phase 2 | Complete |
 | AUDIO-07 | Phase 3 | Pending |
 | AUDIO-08 | Phase 5 | Pending |
 | TRANS-01 | Phase 4 | Pending |
@@ -247,5 +247,5 @@ These replace any conflicting suggestions from the original PRD.
 | NFR-03 | Phase 2 | Pending |
 | NFR-04 | Phase 4 | Pending |
 | NFR-05 | Phase 1 | Complete |
-| NFR-06 | Phase 2 | Pending |
+| NFR-06 | Phase 2 | Complete |
 | NFR-07 | Phase 1 | Complete (01-01) |

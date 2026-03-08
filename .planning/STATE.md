@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: "02-01"
+current_plan: "02-02"
 status: in_progress
-stopped_at: Completed 02-audio-pipeline/02-01-PLAN.md
-last_updated: "2026-03-08T03:58:00Z"
+stopped_at: Completed 02-audio-pipeline/02-02-PLAN.md
+last_updated: "2026-03-08T04:12:00Z"
 progress:
   total_phases: 5
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
 ---
 
 # Project State — yap
@@ -18,11 +18,11 @@ progress:
 ## Current Status
 
 **Phase:** 02-audio-pipeline
-**Current Plan:** 02-01 (complete)
-**Next action:** Begin Plan 02-02 — Audio Recorder Implementation
+**Current Plan:** 02-02 (complete)
+**Next action:** Begin Plan 02-03 — Chime playback
 **Milestone:** v0.1
-**Last session:** 2026-03-08T03:54:31Z
-**Stopped at:** Completed 02-audio-pipeline/02-01-PLAN.md
+**Last session:** 2026-03-08T04:12:00Z
+**Stopped at:** Completed 02-audio-pipeline/02-02-PLAN.md
 
 ## Initialization Summary
 
@@ -36,7 +36,7 @@ progress:
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1 — Foundation | complete | All 3/3 plans complete |
-| Phase 2 — Audio Pipeline | in_progress | 1/3 plans complete |
+| Phase 2 — Audio Pipeline | in_progress | 2/3 plans complete |
 | Phase 3 — IPC + Daemon | pending | Unix socket + daemon lifecycle |
 | Phase 4 — Input + Output | pending | evdev + Groq + paste fallback |
 | Phase 5 — Polish + Distribution | pending | Wizard + curl install + NixOS module |
@@ -62,6 +62,10 @@ progress:
 - **Static binary gate passed** — 2.64MB, ldd=not-a-dynamic-executable, make build-check PASS (01-03)
 - **go-audio/wav v1.1.0 pinned explicitly** — go-audio/riff v1.0.0 pulled as transitive alongside go-audio/audio v1.0.0 (02-01)
 - **Wave 0 stubs use t.Skip labeling** — "Wave 0 stub — implement in Plan 0N" pattern enables grep to identify pending vs implemented tests (02-01)
+- **package audio (not audio_test) for test files** — encodeWAV and ReadWriteSeeker are unexported; test package must match to access them (02-02)
+- **fakeRecorder test double** — implements AudioRecorder inline in test with encodeWAV delegation; no mock framework needed (02-02)
+- **Recorder.Stop() is no-op** — context cancellation is the primary stop mechanism for blocking PortAudio streams (02-02)
+- **CGo requires gcc-wrapper (not bare gcc) from Nix store** — includes proper C runtime library paths (crt1.o/crti.o) needed by the linker (02-02)
 
 ## Performance Metrics
 
@@ -71,6 +75,7 @@ progress:
 | 01-foundation | 02 | 3min | 2 | 14 |
 | 01-foundation | 03 | 8min | 2 | 3 |
 | 02-audio-pipeline | 01 | 4min | 1 | 5 |
+| 02-audio-pipeline | 02 | 12min | 2 | 4 |
 
 ## Config
 

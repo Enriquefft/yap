@@ -15,7 +15,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete    | 2026-03-08 |
-| 2. Audio Pipeline | 1/3 | In progress | - |
+| 2. Audio Pipeline | 2/3 | In Progress|  |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
 | 5. Polish + Distribution | 0/3 | Not started | - |
@@ -64,7 +64,7 @@ Plans:
 3. No temp files appear in `/tmp` or `$XDG_RUNTIME_DIR` during or after a test recording
 4. Start and stop chimes play without blocking the main recording goroutine
 
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [x] 02-01-PLAN.md — Wave 0 test stubs for all audio requirements + add go-audio/wav to go.mod
