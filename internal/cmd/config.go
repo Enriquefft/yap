@@ -16,6 +16,9 @@ func newConfigCmd(cfg *config.Config) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	// Subcommands added in Phase 5
+
+	// Add subcommands
+	configCmd.AddCommand(newConfigSetCmd(cfg))
+
 	return configCmd
 }
