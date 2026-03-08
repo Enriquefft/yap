@@ -15,7 +15,7 @@
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete    | 2026-03-08 |
-| 2. Audio Pipeline | 3/3 | Complete   | 2026-03-08 |
+| 2. Audio Pipeline | 3/3 | Complete    | 2026-03-08 |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
 | 5. Polish + Distribution | 0/3 | Not started | - |
