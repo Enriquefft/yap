@@ -2,7 +2,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets
+- [x] **Phase 1: Foundation** — Static binary scaffold, Nix flake, config/XDG, embedded assets
 - [ ] **Phase 2: Audio Pipeline** — PortAudio capture, ring buffer, WAV encoding, chime playback
 - [ ] **Phase 3: IPC + Daemon** — Unix socket IPC, daemon lifecycle, signal handling, PID management
 - [ ] **Phase 4: Input + Output** — evdev hotkeys, hold-to-talk loop, Groq transcription, paste fallback chain
@@ -14,7 +14,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 2/3 | In progress | - |
+| 1. Foundation | 3/3 | Complete | 2026-03-07 |
 | 2. Audio Pipeline | 0/3 | Not started | - |
 | 3. IPC + Daemon | 0/2 | Not started | - |
 | 4. Input + Output | 0/3 | Not started | - |
@@ -44,7 +44,7 @@
 Plans:
 - [x] 01-01-PLAN.md — Go module scaffold, Cobra CLI subcommand stubs, Wave 0 test stubs, Makefile
 - [x] 01-02-PLAN.md — Config package (XDG + TOML + env overrides) and assets package (embedded WAV chimes)
-- [ ] 01-03-PLAN.md — Nix flake (static + dynamic packages) and static binary verification gate
+- [x] 01-03-PLAN.md — Nix flake (static + dynamic packages) and static binary verification gate
 
 **Pitfalls addressed:** #1 CGo static linking, #10 Nix CGo headers, #14 PortAudio CGo pointer, #15 Chime size
 

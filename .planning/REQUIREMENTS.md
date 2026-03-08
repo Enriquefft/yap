@@ -237,15 +237,15 @@ These replace any conflicting suggestions from the original PRD.
 | ASSETS-01 | Phase 1 | Complete |
 | ASSETS-02 | Phase 1 | Complete |
 | ASSETS-03 | Phase 2 | Pending |
-| DIST-01 | Phase 1 | Pending |
-| DIST-02 | Phase 1 | Pending |
+| DIST-01 | Phase 1 | Complete |
+| DIST-02 | Phase 1 | Complete |
 | DIST-03 | Phase 5 | Pending |
 | DIST-04 | Phase 5 | Pending |
 | DIST-05 | Phase 5 | Pending |
-| NFR-01 | Phase 1 | Pending |
-| NFR-02 | Phase 1 | Pending |
+| NFR-01 | Phase 1 | Complete |
+| NFR-02 | Phase 1 | Complete |
 | NFR-03 | Phase 2 | Pending |
 | NFR-04 | Phase 4 | Pending |
-| NFR-05 | Phase 1 | Pending |
+| NFR-05 | Phase 1 | Complete |
 | NFR-06 | Phase 2 | Pending |
 | NFR-07 | Phase 1 | Complete (01-01) |

@@ -3,11 +3,11 @@
 ## Current Status
 
 **Phase:** 01-foundation
-**Current Plan:** 3/3 in Phase 01-foundation
-**Next action:** Execute 01-03-PLAN.md
+**Current Plan:** 3/3 in Phase 01-foundation (COMPLETE)
+**Next action:** Begin Phase 02 — Audio Pipeline
 **Milestone:** v0.1
-**Last session:** 2026-03-08T02:06:20Z
-**Stopped at:** Completed 01-foundation/01-02-PLAN.md
+**Last session:** 2026-03-07T00:08:00Z
+**Stopped at:** Completed 01-foundation/01-03-PLAN.md
 
 ## Initialization Summary
 
@@ -20,7 +20,7 @@
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| Phase 1 — Foundation | in-progress | 2/3 plans complete |
+| Phase 1 — Foundation | complete | All 3/3 plans complete |
 | Phase 2 — Audio Pipeline | pending | PortAudio + WAV + chimes |
 | Phase 3 — IPC + Daemon | pending | Unix socket + daemon lifecycle |
 | Phase 4 — Input + Output | pending | evdev + Groq + paste fallback |
@@ -42,6 +42,9 @@
 - **xdg.Reload() in ConfigPath()** — required because adrg/xdg caches dirs in init(); call Reload before ConfigFile to respect runtime env changes (01-02)
 - **rootCfg is unexported** — closure injection via PersistentPreRunE; all newXxxCmd() factories accept *config.Config (01-02)
 - **WAV chimes generated at 9.5KB each** — ffmpeg 880Hz/660Hz sine at 16kHz mono PCM; embedded via embed.FS (01-02)
+- **env.CGO_ENABLED not top-level CGO_ENABLED** — newer nixpkgs raises "overlapping attributes" error; must use env attrset in buildGoModule (01-03)
+- **pkgsStatic for musl variant** — compiles portaudio against musl automatically; no manual per-dep linker flags needed (01-03)
+- **Static binary gate passed** — 2.64MB, ldd=not-a-dynamic-executable, make build-check PASS (01-03)
 
 ## Performance Metrics
 
@@ -49,6 +52,7 @@
 |-------|------|----------|-------|-------|
 | 01-foundation | 01 | 5min | 2 | 12 |
 | 01-foundation | 02 | 3min | 2 | 14 |
+| 01-foundation | 03 | 8min | 2 | 3 |
 
 ## Config
 
