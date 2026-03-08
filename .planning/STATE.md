@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: milestone
-current_plan: 03-01-complete
+current_plan: 03-02-complete
 status: executing
-stopped_at: Completed 03-ipc-daemon/03-01-PLAN.md
-last_updated: "2026-03-08T04:35:00.000Z"
+stopped_at: Completed 03-ipc-daemon/03-02-PLAN.md
+last_updated: "2026-03-08T04:50:00.000Z"
 progress:
   total_phases: 5
   completed_phases: 2
@@ -78,6 +78,13 @@ progress:
 - **defer recover() in PlayChime goroutine** — portaudio C lib panics on headless ALSA systems (index out of range in hostsAndDevices); recover() intercepts Go-visible panics and logs them (02-03)
 - **Remove musl from devShell buildInputs** — musl in NIX_LDFLAGS caused musl+glibc mixing in test binaries resulting in SIGSEGV at startup; musl only needed by pkgsStatic (02-03)
 
+### Phase 3-02: IPC Server + CLI Integration
+
+- **NDJSON protocol via json.Encoder.Encode** — automatically appends \n, no custom framing needed (IPC-02)
+- **Stale socket auto-removed at startup** — defensive cleanup in NewServer() before net.Listen (IPC-04)
+- **CLI timeouts**: 5s for stop/toggle, 1s for status (from CONTEXT.md)
+- **stop/status are idempotent** — exit 0 if daemon not running (safe for scripts)
+
 ## Performance Metrics
 
 | Phase | Plan | Duration | Tasks | Files |
@@ -89,6 +96,7 @@ progress:
 | 02-audio-pipeline | 02 | 12min | 2 | 4 |
 | 02-audio-pipeline | 03 | 6min | 1 | 3 |
 | 03-ipc-daemon | 01 | 15min | 3 | 7 |
+| 03-ipc-daemon | 02 | 25min | 4 | 9 |
 
 ## Config
 
