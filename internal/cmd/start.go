@@ -1,13 +1,18 @@
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"github.com/hybridz/yap/internal/config"
+	"github.com/spf13/cobra"
+)
 
-func newStartCmd() *cobra.Command {
+func newStartCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Start the yap daemon in the background",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO(Phase 3): start daemon
+			// cfg is populated by PersistentPreRunE before this runs.
+			// TODO(Phase 3): start daemon using cfg
+			_ = cfg
 			return nil
 		},
 	}
