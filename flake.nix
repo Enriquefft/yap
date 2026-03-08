@@ -54,6 +54,9 @@
           # Dynamic build: for NixOS users who install via nix profile or home-manager.
           default = pkgs.callPackage yapPkg {};
 
+          # Alias for NixOS module reference
+          yap = pkgs.callPackage yapPkg {};
+
           # Static build: for curl install on any Linux distro.
           # Uses pkgsStatic which compiles portaudio against musl automatically.
           static = pkgsS.callPackage yapPkg { withStatic = true; };
@@ -79,5 +82,8 @@
             echo "  make build-check   — static build + ldd verify"
           '';
         };
-      });
+      }) // {
+        # NixOS module for easy installation and configuration
+        nixosModules.default = import "${self}/nixosModules.nix";
+      };
 }
