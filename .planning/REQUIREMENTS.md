@@ -231,9 +231,9 @@ These replace any conflicting suggestions from the original PRD.
 | CONFIG-06 | Phase 5 | Pending |
 | CONFIG-07 | Phase 5 | Pending |
 | CONFIG-08 | Phase 5 | Pending |
-| FIRSTRUN-01 | Phase 5 | Pending |
-| FIRSTRUN-02 | Phase 5 | Pending |
-| FIRSTRUN-03 | Phase 5 | Pending |
+| FIRSTRUN-01 | Phase 5 | Complete |
+| FIRSTRUN-02 | Phase 5 | Complete |
+| FIRSTRUN-03 | Phase 5 | Complete |
 | ASSETS-01 | Phase 1 | Complete |
 | ASSETS-02 | Phase 1 | Complete |
 | ASSETS-03 | Phase 2 | Complete |
