@@ -6,7 +6,7 @@ import (
 	"io"
 )
 
-//go:embed start.wav stop.wav
+//go:embed start.wav stop.wav warning.wav
 var FS embed.FS
 
 // StartChime returns an io.Reader for the embedded start chime WAV bytes.
@@ -22,6 +22,16 @@ func StartChime() (io.Reader, error) {
 // StopChime returns an io.Reader for the embedded stop chime WAV bytes.
 func StopChime() (io.Reader, error) {
 	data, err := FS.ReadFile("stop.wav")
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(data), nil
+}
+
+// WarningChime returns an io.Reader for the embedded 50-second recording warning beep (770Hz).
+// Used to alert users when they approach the recording time limit.
+func WarningChime() (io.Reader, error) {
+	data, err := FS.ReadFile("warning.wav")
 	if err != nil {
 		return nil, err
 	}
