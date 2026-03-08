@@ -64,7 +64,12 @@ Plans:
 3. No temp files appear in `/tmp` or `$XDG_RUNTIME_DIR` during or after a test recording
 4. Start and stop chimes play without blocking the main recording goroutine
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Wave 0 test stubs for all audio requirements + add go-audio/wav to go.mod
+- [ ] 02-02-PLAN.md — ReadWriteSeeker + WAV encoder + Recorder struct with blocking stream and PipeWire guard
+- [ ] 02-03-PLAN.md — Async chime playback (PlayChime goroutine) + NFR-03 benchmark
 
 **Pitfalls addressed:** #2 PipeWire compat, #7 Temp files, #12 WAV headers
 
