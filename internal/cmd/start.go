@@ -80,18 +80,37 @@ func runStart(cfg *config.Config) error {
 	// Release our reference to the child — it runs independently.
 	cmd.Process.Release()
 
-	// Wait for PID file to appear (confirms daemon started successfully).
-	deadline := time.Now().Add(2 * time.Second)
+	// Wait for PID file AND IPC socket to appear (confirms daemon is ready).
+	sockPath, err := xdg.DataFile("yap/yap.sock")
+	if err != nil {
+		return fmt.Errorf("resolve socket path: %w", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	pidReady, sockReady := false, false
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(pidPath); err == nil {
+		if !pidReady {
+			if _, err := os.Stat(pidPath); err == nil {
+				pidReady = true
+			}
+		}
+		if !sockReady {
+			if _, err := os.Stat(sockPath); err == nil {
+				sockReady = true
+			}
+		}
+		if pidReady && sockReady {
 			fmt.Printf("Daemon started successfully\n")
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// PID file didn't appear — daemon startup may have failed.
-	return fmt.Errorf("daemon did not start within 2s (PID file not created)")
+	// Daemon didn't fully initialize in time.
+	if !pidReady {
+		return fmt.Errorf("daemon did not start within 3s (PID file not created)")
+	}
+	return fmt.Errorf("daemon started but IPC socket not ready within 3s")
 }
 
 // needsWizard checks if the first-run wizard should be launched.
