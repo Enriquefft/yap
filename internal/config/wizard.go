@@ -7,9 +7,14 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/hybridz/yap/internal/hotkey"
 )
+
+// detectKeyPress is the function used to detect physical key presses.
+// Declared as a variable so tests can substitute it.
+var detectKeyPress = hotkey.DetectKeyPress
 
 // apiKeyPattern validates Groq API key format: sk- followed by 48 alphanumeric characters
 var apiKeyPattern = regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`)
@@ -105,11 +110,40 @@ func promptAPIKey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	}
 }
 
-// promptHotkey prompts for the hotkey with a default value and validates against evdev key names
+// promptHotkey detects a physical key press or falls back to manual entry.
+// On Linux, uses evdev for perfect detection (including modifiers like Right Ctrl).
+// On macOS, uses terminal raw mode (regular keys only, not standalone modifiers).
 func promptHotkey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	defaultHotkey := defaults().Hotkey
+
+	fmt.Fprintf(output, "Press the key you want to use as hotkey [default: %s]\n", defaultHotkey)
+	fmt.Fprintf(output, "  (or type 'm' then Enter to manually enter a key name)\n")
+	fmt.Fprintf(output, "  Waiting for key press... ")
+
+	detected, err := detectKeyPress(output, 10*time.Second)
+	if err == nil {
+		fmt.Fprintf(output, "\n  Detected: %s\n", detected)
+		fmt.Fprintf(output, "  Use this key? [Y/n]: ")
+
+		if scanner.Scan() {
+			answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+			if answer == "" || answer == "y" || answer == "yes" {
+				return detected, nil
+			}
+		}
+		// User declined — fall through to manual entry
+	} else {
+		fmt.Fprintf(output, "\n  Could not detect key: %v\n", err)
+	}
+
+	// Manual entry fallback
+	return promptHotkeyManual(scanner, output, defaultHotkey)
+}
+
+// promptHotkeyManual prompts the user to type an evdev key name with validation.
+func promptHotkeyManual(scanner *bufio.Scanner, output io.Writer, defaultHotkey string) (string, error) {
 	for {
-		fmt.Fprintf(output, "Choose hotkey [default: %s]: ", defaultHotkey)
+		fmt.Fprintf(output, "Enter hotkey name [default: %s]: ", defaultHotkey)
 
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {

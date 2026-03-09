@@ -1,0 +1,94 @@
+# git.sr.ht/~jackmordaunt/go-toast v1.1.2
+## explicit; go 1.20
+git.sr.ht/~jackmordaunt/go-toast
+git.sr.ht/~jackmordaunt/go-toast/internal/winrt/data/xml/dom
+git.sr.ht/~jackmordaunt/go-toast/internal/winrt/ui/notifications
+git.sr.ht/~jackmordaunt/go-toast/tmpl
+git.sr.ht/~jackmordaunt/go-toast/wintoast
+# github.com/BurntSushi/toml v1.6.0
+## explicit; go 1.18
+github.com/BurntSushi/toml
+github.com/BurntSushi/toml/internal
+# github.com/adrg/xdg v0.5.3
+## explicit; go 1.19
+github.com/adrg/xdg
+github.com/adrg/xdg/internal/pathutil
+github.com/adrg/xdg/internal/userdirs
+# github.com/atotto/clipboard v0.1.4
+## explicit
+github.com/atotto/clipboard
+# github.com/davecgh/go-spew v1.1.1
+## explicit
+github.com/davecgh/go-spew/spew
+# github.com/esiqveland/notify v0.13.3
+## explicit; go 1.13
+github.com/esiqveland/notify
+# github.com/gen2brain/beeep v0.11.2
+## explicit; go 1.21.5
+github.com/gen2brain/beeep
+# github.com/go-audio/audio v1.0.0
+## explicit
+github.com/go-audio/audio
+# github.com/go-audio/riff v1.0.0
+## explicit; go 1.12
+github.com/go-audio/riff
+# github.com/go-audio/wav v1.1.0
+## explicit; go 1.13
+github.com/go-audio/wav
+# github.com/go-ole/go-ole v1.3.0
+## explicit; go 1.12
+github.com/go-ole/go-ole
+# github.com/godbus/dbus/v5 v5.1.0
+## explicit; go 1.12
+github.com/godbus/dbus/v5
+# github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
+## explicit; go 1.18
+github.com/gordonklaus/portaudio
+# github.com/holoplot/go-evdev v0.0.0-20250804134636-ab1d56a1fe83
+## explicit; go 1.18
+github.com/holoplot/go-evdev
+# github.com/inconshreveable/mousetrap v1.1.0
+## explicit; go 1.18
+github.com/inconshreveable/mousetrap
+# github.com/jackmordaunt/icns/v3 v3.0.1
+## explicit; go 1.21.5
+github.com/jackmordaunt/icns/v3
+# github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
+## explicit
+github.com/nfnt/resize
+# github.com/pmezard/go-difflib v1.0.0
+## explicit
+github.com/pmezard/go-difflib/difflib
+# github.com/sergeymakinen/go-bmp v1.0.0
+## explicit; go 1.13
+github.com/sergeymakinen/go-bmp
+# github.com/sergeymakinen/go-ico v1.0.0-beta.0
+## explicit; go 1.17
+github.com/sergeymakinen/go-ico
+github.com/sergeymakinen/go-ico/internal/icondir
+# github.com/spf13/cobra v1.10.2
+## explicit; go 1.15
+github.com/spf13/cobra
+# github.com/spf13/pflag v1.0.9
+## explicit; go 1.12
+github.com/spf13/pflag
+# github.com/stretchr/testify v1.11.1
+## explicit; go 1.17
+github.com/stretchr/testify/assert
+github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/require
+# github.com/tadvi/systray v0.0.0-20190226123456-11a2b8fa57af
+## explicit
+github.com/tadvi/systray
+# golang.org/x/sys v0.41.0
+## explicit; go 1.24.0
+golang.org/x/sys/plan9
+golang.org/x/sys/unix
+golang.org/x/sys/windows
+golang.org/x/sys/windows/registry
+# golang.org/x/term v0.40.0
+## explicit; go 1.24.0
+golang.org/x/term
+# gopkg.in/yaml.v3 v3.0.1
+## explicit
+gopkg.in/yaml.v3

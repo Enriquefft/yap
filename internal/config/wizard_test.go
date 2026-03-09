@@ -2,15 +2,33 @@ package config
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
+
+// stubDetectKeyPress replaces detectKeyPress with a stub that always fails,
+// causing the wizard to fall through to manual hotkey entry.
+// Returns a cleanup function to restore the original.
+func stubDetectKeyPress(t *testing.T) {
+	t.Helper()
+	orig := detectKeyPress
+	detectKeyPress = func(output io.Writer, timeout time.Duration) (string, error) {
+		fmt.Fprintf(output, "\n")
+		return "", fmt.Errorf("key detection not available in tests")
+	}
+	t.Cleanup(func() { detectKeyPress = orig })
+}
 
 // TestRunWizard_NoConfigPromptsForAPIKey verifies that RunWizard prompts for API key when config file doesn't exist
 func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
+	stubDetectKeyPress(t)
+
 	// Set up test environment with temp XDG config dir
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
@@ -22,7 +40,7 @@ func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	// Mock input (sk- + 48 alphanumeric chars = 51 total)
+	// Mock input (gsk_ + 52 alphanumeric chars)
 	input := "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\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
@@ -38,9 +56,7 @@ func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
 	}()
 	defer func() { os.Stdin = origStdin }()
 
-	// Mock fmt.Printf to capture output
 	var buf bytes.Buffer
-	// Capture output - RunWizard should print welcome message and prompts
 
 	// Run wizard
 	cfg, err := RunWizard(inputReader, &buf)
@@ -87,6 +103,7 @@ func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
 
 // TestRunWizard_PromptsForHotkeyWithDefault verifies that RunWizard prompts for hotkey with default "KEY_RIGHTCTRL"
 func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
+	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -121,6 +138,7 @@ func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
 
 // TestRunWizard_PromptsForLanguageWithDefault verifies that RunWizard prompts for language with default "en"
 func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
+	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -155,6 +173,7 @@ func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
 
 // TestRunWizard_WritesValidTOMLConfigFile verifies that RunWizard writes valid TOML config file to XDG path
 func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
+	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -202,6 +221,7 @@ func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
 
 // TestRunWizard_RejectsInvalidAPIKey verifies that RunWizard returns error on invalid API key format
 func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
+	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -276,6 +296,7 @@ func TestRunWizard_SkippedWhenEnvVarSet(t *testing.T) {
 
 // TestRunWizard_ConfirmsConfigPath verifies that RunWizard confirms config file path after writing
 func TestRunWizard_ConfirmsConfigPath(t *testing.T) {
+	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
