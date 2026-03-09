@@ -1,37 +1,33 @@
+self:
 { config, lib, pkgs, ... }:
-with lib;
+
 let
   cfg = config.services.yap;
 in {
   options.services.yap = {
-    enable = mkEnableOption "yap hold-to-talk voice dictation daemon";
-    package = mkOption {
-      type = types.package;
-      default = pkgs.yap;
+    enable = lib.mkEnableOption "yap hold-to-talk voice dictation daemon";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       description = "The yap package to use.";
     };
-    user = mkOption {
-      type = types.str;
-      default = "$USER";
-      description = "User account under which yap runs.";
+
+    user = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "User account under which yap runs. When set, adds the user to the input group for evdev access.";
     };
   };
 
-  config = mkIf cfg.enable {
-    # Add user to input group for evdev access
-    users.users.${cfg.user}.extraGroups = [ "input" ];
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      environment.systemPackages = [ cfg.package ];
+      services.pipewire.alsa.enable = true;
+    }
 
-    # Enable PipeWire ALSA for modern audio
-    services.pipewire.alsa.enable = true;
-
-    # Optional: systemd user service (could be future enhancement)
-    # systemd.user.services.yap = {
-    #   Unit = { Description = "yap hold-to-talk daemon"; };
-    #   Service = {
-    #     ExecStart = "${cfg.package}/bin/yap start";
-    #     Restart = "on-failure";
-    #   };
-    #   Install = { WantedBy = [ "default.target" ]; };
-    # };
-  };
+    (lib.mkIf (cfg.user != null) {
+      users.users.${cfg.user}.extraGroups = [ "input" ];
+    })
+  ]);
 }

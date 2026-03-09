@@ -83,7 +83,8 @@
           '';
         };
       }) // {
-        # NixOS module for easy installation and configuration
-        nixosModules.default = import "${self}/nixosModules.nix";
+        # NixOS module: closes over self to reference flake packages directly.
+        # No overlay needed — the module resolves the package from self.packages.
+        nixosModules.default = import ./nixosModules.nix self;
       };
 }
