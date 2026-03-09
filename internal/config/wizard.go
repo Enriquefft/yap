@@ -7,6 +7,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/hybridz/yap/internal/hotkey"
 )
 
 // apiKeyPattern validates Groq API key format: sk- followed by 48 alphanumeric characters
@@ -103,24 +105,31 @@ func promptAPIKey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	}
 }
 
-// promptHotkey prompts for the hotkey with a default value
+// promptHotkey prompts for the hotkey with a default value and validates against evdev key names
 func promptHotkey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	defaultHotkey := defaults().Hotkey
-	fmt.Fprintf(output, "Choose hotkey [default: %s]: ", defaultHotkey)
+	for {
+		fmt.Fprintf(output, "Choose hotkey [default: %s]: ", defaultHotkey)
 
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return "", err
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return "", err
+			}
+			return defaultHotkey, nil
 		}
-		return defaultHotkey, nil
-	}
 
-	hotkey := strings.TrimSpace(scanner.Text())
-	if hotkey == "" {
-		return defaultHotkey, nil
-	}
+		hk := strings.TrimSpace(scanner.Text())
+		if hk == "" {
+			return defaultHotkey, nil
+		}
 
-	return hotkey, nil
+		if !hotkey.ValidHotkey(hk) {
+			fmt.Fprintf(output, "Invalid hotkey name %q. Use evdev names like KEY_RIGHTCTRL, KEY_SPACE, KEY_K\n", hk)
+			continue
+		}
+
+		return hk, nil
+	}
 }
 
 // promptLanguage prompts for the language with a default value

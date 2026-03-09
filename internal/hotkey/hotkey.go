@@ -161,6 +161,12 @@ func (l *Listener) Close() {
 	l.devices = nil
 }
 
+// ValidHotkey returns true if name is a valid evdev key name.
+func ValidHotkey(name string) bool {
+	_, ok := evdev.KEYFromString[name]
+	return ok
+}
+
 // HotkeyCode converts a config hotkey name like "KEY_RIGHTCTRL" to evdev.EvCode.
 func HotkeyCode(name string) (evdev.EvCode, error) {
 	// Use evdev package's KEYFromString map
