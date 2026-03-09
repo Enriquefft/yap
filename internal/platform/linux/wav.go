@@ -1,4 +1,4 @@
-package audio
+package linux
 
 import (
 	"fmt"
@@ -15,14 +15,14 @@ const (
 	audioFormatPCM = 1
 )
 
-// ReadWriteSeeker is an in-memory io.WriteSeeker backed by a growable []byte slice.
+// readWriteSeeker is an in-memory io.ReadWriteSeeker backed by a growable []byte.
 // Required by wav.NewEncoder — bytes.Buffer does NOT implement io.Seeker.
-type ReadWriteSeeker struct {
+type readWriteSeeker struct {
 	buf []byte
 	pos int
 }
 
-func (r *ReadWriteSeeker) Write(p []byte) (int, error) {
+func (r *readWriteSeeker) Write(p []byte) (int, error) {
 	minCap := r.pos + len(p)
 	if minCap > len(r.buf) {
 		r.buf = append(r.buf, make([]byte, minCap-len(r.buf))...)
@@ -32,7 +32,7 @@ func (r *ReadWriteSeeker) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (r *ReadWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+func (r *readWriteSeeker) Seek(offset int64, whence int) (int64, error) {
 	var abs int64
 	switch whence {
 	case io.SeekStart:
@@ -42,29 +42,26 @@ func (r *ReadWriteSeeker) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekEnd:
 		abs = int64(len(r.buf)) + offset
 	default:
-		return 0, fmt.Errorf("ReadWriteSeeker: invalid whence %d", whence)
+		return 0, fmt.Errorf("readWriteSeeker: invalid whence %d", whence)
 	}
 	if abs < 0 {
-		return 0, fmt.Errorf("ReadWriteSeeker: negative position %d", abs)
+		return 0, fmt.Errorf("readWriteSeeker: negative position %d", abs)
 	}
 	r.pos = int(abs)
 	return abs, nil
 }
 
-// Bytes returns the accumulated buffer contents.
-func (r *ReadWriteSeeker) Bytes() []byte {
+func (r *readWriteSeeker) bytes() []byte {
 	return r.buf
 }
 
-// encodeWAV encodes a []int16 PCM accumulator to a valid WAV []byte entirely in memory.
-// Output: valid RIFF/fmt/data headers at 16kHz mono 16-bit PCM (Whisper-compatible).
-// No temp files are created.
+// encodeWAV encodes a []int16 PCM slice to a valid WAV []byte entirely in memory.
+// Output format: RIFF/fmt/data at 16kHz mono 16-bit PCM (Whisper-compatible).
 func encodeWAV(frames []int16) ([]byte, error) {
-	ws := &ReadWriteSeeker{}
+	ws := &readWriteSeeker{}
 	enc := wav.NewEncoder(ws, sampleRate, bitDepth, numChannels, audioFormatPCM)
 
-	// audio.IntBuffer.Data is []int (not []int16) — explicit cast required.
-	// int16(-32768) must become int(-32768), not a positive overflow.
+	// audio.IntBuffer.Data is []int (not []int16) — explicit conversion required.
 	data := make([]int, len(frames))
 	for i, s := range frames {
 		data[i] = int(s)
@@ -83,5 +80,5 @@ func encodeWAV(frames []int16) ([]byte, error) {
 	if err := enc.Close(); err != nil {
 		return nil, fmt.Errorf("wav encode close: %w", err)
 	}
-	return ws.Bytes(), nil
+	return ws.bytes(), nil
 }

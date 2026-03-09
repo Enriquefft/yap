@@ -1,8 +1,9 @@
-package cmd
+package cli
 
 import (
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/daemon"
+	linux "github.com/hybridz/yap/internal/platform/linux"
 	"github.com/spf13/cobra"
 )
 
@@ -33,7 +34,8 @@ var rootCmd = &cobra.Command{
 	// Without the flag, cobra prints help (default behavior).
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if daemonRun {
-			return daemon.Run(&rootCfg)
+			p := linux.NewPlatform()
+			return daemon.Run(&rootCfg, daemon.DefaultDeps(p))
 		}
 		return cmd.Help()
 	},
@@ -47,7 +49,8 @@ func Execute() error {
 }
 
 func init() {
-	rootCmd.AddCommand(newStartCmd(&rootCfg))
+	p := linux.NewPlatform()
+	rootCmd.AddCommand(newStartCmd(&rootCfg, p))
 	rootCmd.AddCommand(newStopCmd(&rootCfg))
 	rootCmd.AddCommand(newStatusCmd(&rootCfg))
 	rootCmd.AddCommand(newToggleCmd(&rootCfg))

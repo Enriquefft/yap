@@ -2,33 +2,54 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/hybridz/yap/internal/platform"
 )
 
-// stubDetectKeyPress replaces detectKeyPress with a stub that always fails,
-// causing the wizard to fall through to manual hotkey entry.
-// Returns a cleanup function to restore the original.
-func stubDetectKeyPress(t *testing.T) {
-	t.Helper()
-	orig := detectKeyPress
-	detectKeyPress = func(output io.Writer, timeout time.Duration) (string, error) {
-		fmt.Fprintf(output, "\n")
-		return "", fmt.Errorf("key detection not available in tests")
+// stubHotkeyConfig is a test double for platform.HotkeyConfig.
+// DetectKey always fails (wizard falls through to manual entry).
+// ValidKey accepts any KEY_* name from a small allow list.
+type stubHotkeyConfig struct {
+	detectErr error
+}
+
+func (s *stubHotkeyConfig) DetectKey(ctx context.Context) (string, error) {
+	if s.detectErr != nil {
+		return "", s.detectErr
 	}
-	t.Cleanup(func() { detectKeyPress = orig })
+	return "", fmt.Errorf("key detection not available in tests")
+}
+
+func (s *stubHotkeyConfig) ValidKey(name string) bool {
+	// Accept common evdev key names used in tests.
+	switch name {
+	case "KEY_RIGHTCTRL", "KEY_SPACE", "KEY_A", "KEY_K":
+		return true
+	}
+	return false
+}
+
+func (s *stubHotkeyConfig) ParseKey(name string) (platform.KeyCode, error) {
+	if s.ValidKey(name) {
+		return platform.KeyCode(29), nil // arbitrary code
+	}
+	return 0, fmt.Errorf("unknown key %q", name)
+}
+
+// newStubHotkeyCfg returns a HotkeyConfig stub that always fails detection.
+func newStubHotkeyCfg() platform.HotkeyConfig {
+	return &stubHotkeyConfig{detectErr: fmt.Errorf("key detection not available in tests")}
 }
 
 // TestRunWizard_NoConfigPromptsForAPIKey verifies that RunWizard prompts for API key when config file doesn't exist
 func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
-	stubDetectKeyPress(t)
-
 	// Set up test environment with temp XDG config dir
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
@@ -59,7 +80,7 @@ func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
 	var buf bytes.Buffer
 
 	// Run wizard
-	cfg, err := RunWizard(inputReader, &buf)
+	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	// Verify wizard prompted for API key
 	output := buf.String()
@@ -103,7 +124,6 @@ func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
 
 // TestRunWizard_PromptsForHotkeyWithDefault verifies that RunWizard prompts for hotkey with default "KEY_RIGHTCTRL"
 func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
-	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -119,7 +139,7 @@ func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
 	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf)
+	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	if err != nil {
 		t.Fatalf("RunWizard failed: %v", err)
@@ -138,7 +158,6 @@ func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
 
 // TestRunWizard_PromptsForLanguageWithDefault verifies that RunWizard prompts for language with default "en"
 func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
-	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -154,7 +173,7 @@ func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
 	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf)
+	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	if err != nil {
 		t.Fatalf("RunWizard failed: %v", err)
@@ -173,7 +192,6 @@ func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
 
 // TestRunWizard_WritesValidTOMLConfigFile verifies that RunWizard writes valid TOML config file to XDG path
 func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
-	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -189,7 +207,7 @@ func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
 	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	_, err := RunWizard(inputReader, &buf)
+	_, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	if err != nil {
 		t.Fatalf("RunWizard failed: %v", err)
@@ -221,7 +239,6 @@ func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
 
 // TestRunWizard_RejectsInvalidAPIKey verifies that RunWizard returns error on invalid API key format
 func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
-	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -239,7 +256,7 @@ func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
 	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf)
+	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	// Should eventually succeed after retry
 	if err != nil {
@@ -276,7 +293,7 @@ func TestRunWizard_SkippedWhenEnvVarSet(t *testing.T) {
 
 	var buf bytes.Buffer
 	// RunWizard should detect env var and return early
-	cfg, err := RunWizard(nil, &buf)
+	cfg, err := RunWizard(nil, &buf, newStubHotkeyCfg())
 
 	if err != nil {
 		t.Fatalf("RunWizard failed: %v", err)
@@ -296,7 +313,6 @@ func TestRunWizard_SkippedWhenEnvVarSet(t *testing.T) {
 
 // TestRunWizard_ConfirmsConfigPath verifies that RunWizard confirms config file path after writing
 func TestRunWizard_ConfirmsConfigPath(t *testing.T) {
-	stubDetectKeyPress(t)
 	tmpDir := t.TempDir()
 	testConfigPath := filepath.Join(tmpDir, "config.toml")
 
@@ -312,7 +328,7 @@ func TestRunWizard_ConfirmsConfigPath(t *testing.T) {
 	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	_, err := RunWizard(inputReader, &buf)
+	_, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
 
 	if err != nil {
 		t.Fatalf("RunWizard failed: %v", err)

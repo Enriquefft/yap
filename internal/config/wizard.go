@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -9,21 +10,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hybridz/yap/internal/hotkey"
+	"github.com/hybridz/yap/internal/platform"
 )
 
-// detectKeyPress is the function used to detect physical key presses.
-// Declared as a variable so tests can substitute it.
-var detectKeyPress = hotkey.DetectKeyPress
-
-// apiKeyPattern validates Groq API key format: sk- followed by 48 alphanumeric characters
+// apiKeyPattern validates Groq API key format: gsk_ followed by 52 alphanumeric characters
 var apiKeyPattern = regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`)
 
 // RunWizard runs an interactive first-run setup wizard.
 // If GROQ_API_KEY environment variable is set, the wizard is skipped and
 // a config with that key is returned immediately.
 // Otherwise, it prompts for API key, hotkey, and language, then writes the config.
-func RunWizard(input io.Reader, output io.Writer) (Config, error) {
+// hotkeyCfg is used for key detection and validation during hotkey selection.
+func RunWizard(input io.Reader, output io.Writer, hotkeyCfg platform.HotkeyConfig) (Config, error) {
 	// Check if GROQ_API_KEY env var is set — skip wizard if true
 	if apiKey := os.Getenv("GROQ_API_KEY"); apiKey != "" {
 		cfg := Config{
@@ -49,7 +47,7 @@ func RunWizard(input io.Reader, output io.Writer) (Config, error) {
 	}
 
 	// Prompt for hotkey
-	hotkey, err := promptHotkey(scanner, output)
+	hotkey, err := promptHotkey(scanner, output, hotkeyCfg)
 	if err != nil {
 		return Config{}, fmt.Errorf("failed to get hotkey: %w", err)
 	}
@@ -62,9 +60,9 @@ func RunWizard(input io.Reader, output io.Writer) (Config, error) {
 
 	// Build config
 	cfg := Config{
-		APIKey:   apiKey,
-		Hotkey:   hotkey,
-		Language: language,
+		APIKey:         apiKey,
+		Hotkey:         hotkey,
+		Language:       language,
 		TimeoutSeconds: defaults().TimeoutSeconds,
 	}
 
@@ -113,14 +111,17 @@ func promptAPIKey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 // promptHotkey detects a physical key press or falls back to manual entry.
 // On Linux, uses evdev for perfect detection (including modifiers like Right Ctrl).
 // On macOS, uses terminal raw mode (regular keys only, not standalone modifiers).
-func promptHotkey(scanner *bufio.Scanner, output io.Writer) (string, error) {
+func promptHotkey(scanner *bufio.Scanner, output io.Writer, hotkeyCfg platform.HotkeyConfig) (string, error) {
 	defaultHotkey := defaults().Hotkey
 
 	fmt.Fprintf(output, "Press the key you want to use as hotkey [default: %s]\n", defaultHotkey)
 	fmt.Fprintf(output, "  (or type 'm' then Enter to manually enter a key name)\n")
 	fmt.Fprintf(output, "  Waiting for key press... ")
 
-	detected, err := detectKeyPress(output, 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	detected, err := hotkeyCfg.DetectKey(ctx)
 	if err == nil {
 		fmt.Fprintf(output, "\n  Detected: %s\n", detected)
 		fmt.Fprintf(output, "  Use this key? [Y/n]: ")
@@ -137,11 +138,11 @@ func promptHotkey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	}
 
 	// Manual entry fallback
-	return promptHotkeyManual(scanner, output, defaultHotkey)
+	return promptHotkeyManual(scanner, output, hotkeyCfg, defaultHotkey)
 }
 
 // promptHotkeyManual prompts the user to type an evdev key name with validation.
-func promptHotkeyManual(scanner *bufio.Scanner, output io.Writer, defaultHotkey string) (string, error) {
+func promptHotkeyManual(scanner *bufio.Scanner, output io.Writer, hotkeyCfg platform.HotkeyConfig, defaultHotkey string) (string, error) {
 	for {
 		fmt.Fprintf(output, "Enter hotkey name [default: %s]: ", defaultHotkey)
 
@@ -157,7 +158,7 @@ func promptHotkeyManual(scanner *bufio.Scanner, output io.Writer, defaultHotkey 
 			return defaultHotkey, nil
 		}
 
-		if !hotkey.ValidHotkey(hk) {
+		if !hotkeyCfg.ValidKey(hk) {
 			fmt.Fprintf(output, "Invalid hotkey name %q. Use evdev names like KEY_RIGHTCTRL, KEY_SPACE, KEY_K\n", hk)
 			continue
 		}
@@ -190,11 +191,6 @@ func promptLanguage(scanner *bufio.Scanner, output io.Writer) (string, error) {
 func writeConfigAtomic(cfg Config, configPath string) error {
 	// Create temp file in same directory to ensure atomic rename
 	tempPath := configPath + ".tmp"
-
-	// Encode config to TOML
-	// We can't use toml.EncodeFile directly because we need to ensure atomic write
-	// Instead, we'll use the existing Load/Save pattern from config.go
-	// But since we need to create a new file, let's write directly
 
 	// Create directory if it doesn't exist
 	configDir := configPath[:strings.LastIndex(configPath, "/")]

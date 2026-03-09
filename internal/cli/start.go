@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"fmt"
@@ -7,18 +7,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/pidfile"
-	"github.com/adrg/xdg"
+	"github.com/hybridz/yap/internal/platform"
 	"github.com/spf13/cobra"
 )
 
-func newStartCmd(cfg *config.Config) *cobra.Command {
+func newStartCmd(cfg *config.Config, p platform.Platform) *cobra.Command {
 	return &cobra.Command{
 		Use:   "start",
 		Short: "Start the yap daemon in the background",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStart(cfg)
+			return runStart(cfg, p)
 		},
 	}
 }
@@ -27,11 +28,11 @@ func newStartCmd(cfg *config.Config) *cobra.Command {
 // DAEMON-01: Daemon writes PID file to $XDG_DATA_HOME/yap/yap.pid
 // DAEMON-05: Second start detects live daemon and exits with error.
 // FIRSTRUN-01: On first run (no config file), launch interactive wizard.
-func runStart(cfg *config.Config) error {
+func runStart(cfg *config.Config, p platform.Platform) error {
 	// Check if wizard is needed (no config file and no GROQ_API_KEY env var)
 	if needsWizard() {
 		// Run first-run wizard
-		if err := runWizard(); err != nil {
+		if err := runWizard(p); err != nil {
 			return fmt.Errorf("first-run setup failed: %w", err)
 		}
 
@@ -139,8 +140,8 @@ func needsWizard() bool {
 }
 
 // runWizard launches the interactive first-run wizard.
-func runWizard() error {
-	_, err := config.RunWizard(os.Stdin, os.Stdout)
+func runWizard(p platform.Platform) error {
+	_, err := config.RunWizard(os.Stdin, os.Stdout, p.HotkeyCfg)
 	if err != nil {
 		return fmt.Errorf("wizard failed: %w", err)
 	}

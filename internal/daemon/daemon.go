@@ -9,34 +9,45 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hybridz/yap/internal/audio"
+	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/assets"
 	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/hotkey"
+	"github.com/hybridz/yap/internal/engine"
 	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/notify"
-	"github.com/hybridz/yap/internal/paste"
 	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/hybridz/yap/internal/platform"
 	"github.com/hybridz/yap/internal/transcribe"
-	"github.com/adrg/xdg"
 )
 
-// Package-level variables for testability
-var (
-	audioPlayChime     = audio.PlayChime
-	audioNewRecorder   = audio.NewRecorder
-	hotkeyFindKeyboards = hotkey.FindKeyboards
-	hotkeyHotkeyCode    = hotkey.HotkeyCode
-	transcribeTranscribe = transcribe.Transcribe
-	pastePaste          = paste.Paste
-	notifyOnTranscriptionError = notify.OnTranscriptionError
-	notifyOnPermissionError    = notify.OnPermissionError
-	notifyOnDeviceError        = notify.OnDeviceError
-	xdgDataFile              = xdg.DataFile
-	pidfileWrite             = pidfile.Write
-	pidfileRemove            = pidfile.Remove
-	ipcNewServer            = ipc.NewServer
-)
+// transcribeAdapter wraps transcribe.Transcribe to implement engine.Transcriber.
+type transcribeAdapter struct{}
+
+func (transcribeAdapter) Transcribe(ctx context.Context, apiKey string, wavData []byte, language string) (string, error) {
+	return transcribe.Transcribe(ctx, apiKey, wavData, language)
+}
+
+// Deps holds all injectable dependencies for the daemon.
+// Use DefaultDeps for production; substitute fields in tests.
+type Deps struct {
+	Platform     platform.Platform
+	Transcriber  engine.Transcriber
+	XDGDataFile  func(string) (string, error)
+	PIDWrite     func(string) error
+	PIDRemove    func(string)
+	NewIPCServer func(string) (*ipc.Server, error)
+}
+
+// DefaultDeps returns production dependencies for the given platform.
+func DefaultDeps(p platform.Platform) Deps {
+	return Deps{
+		Platform:     p,
+		Transcriber:  transcribeAdapter{},
+		XDGDataFile:  xdg.DataFile,
+		PIDWrite:     pidfile.Write,
+		PIDRemove:    pidfile.Remove,
+		NewIPCServer: ipc.NewServer,
+	}
+}
 
 // recordState holds the recording state machine.
 type recordState struct {
@@ -79,47 +90,32 @@ func (rs *recordState) cancelRecording() {
 
 // Daemon represents the background process.
 type Daemon struct {
-	cfg        *config.Config
-	ctx        context.Context
-	state      recordState
-	recorder   audio.AudioRecorder
+	cfg   *config.Config
+	ctx   context.Context
+	state recordState
+	eng   *engine.Engine
 }
 
-// New creates a new Daemon.
+// New creates a new Daemon. Kept for test compatibility.
 func New(cfg *config.Config) *Daemon {
 	return &Daemon{cfg: cfg}
 }
 
-// Run starts the daemon event loop and blocks until SIGTERM.
-// All cleanup (PortAudio, PID file removal) is deferred and guaranteed to execute.
-//
-// Sequence:
-// 1. Resolve PID path via xdg.DataFile ("yap/yap.pid")
-// 2. Write PID using O_EXCL atomic create (DAEMON-01, DAEMON-05)
-// 3. Init PortAudio and Recorder (audio.NewRecorder)
-// 4. Defer cleanup: Recorder.Close() runs before return (AUDIO-07)
-// 5. Defer cleanup: pidfile.Remove() runs before return
-// 6. Setup signal.NotifyContext for SIGTERM/SIGINT (DAEMON-04)
-// 7. Start IPC server in goroutine
-// 8. Start hotkey listener in goroutine
-// 9. Block on <-ctx.Done()
-// 10. Return with all defers executing
-//
-// Reference: github.com/adrg/xdg creates $XDG_DATA_HOME/yap automatically.
-func Run(cfg *config.Config) error {
-	pidPath, err := xdgDataFile("yap/yap.pid")
+// Run starts the daemon event loop and blocks until SIGTERM/SIGINT.
+// All cleanup (audio, PID file removal) is deferred and guaranteed to execute.
+func Run(cfg *config.Config, deps Deps) error {
+	pidPath, err := deps.XDGDataFile("yap/yap.pid")
 	if err != nil {
 		return fmt.Errorf("resolve pid path: %w", err)
 	}
 
-	// Write PID using O_EXCL for atomic creation (prevents DAEMON-05 race).
-	if err := pidfileWrite(pidPath); err != nil {
+	if err := deps.PIDWrite(pidPath); err != nil {
 		return fmt.Errorf("write pid file: %w", err)
 	}
-	defer pidfileRemove(pidPath)
+	defer deps.PIDRemove(pidPath)
 
-	// Init PortAudio and create Recorder (AUDIO-07: deferred cleanup).
-	rec, err := audioNewRecorder(cfg.MicDevice)
+	// Create recorder for this session.
+	rec, err := deps.Platform.NewRecorder(cfg.MicDevice)
 	if err != nil {
 		return fmt.Errorf("init audio: %w", err)
 	}
@@ -130,42 +126,52 @@ func Run(cfg *config.Config) error {
 		syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Initialize hotkey listener
-	listener, err := hotkeyFindKeyboards()
+	// Parse hotkey code from config.
+	hotkeyCode, err := deps.Platform.HotkeyCfg.ParseKey(cfg.Hotkey)
+	if err != nil {
+		return fmt.Errorf("invalid hotkey %q: %w", cfg.Hotkey, err)
+	}
+
+	// Initialize hotkey listener.
+	listener, err := deps.Platform.NewHotkey()
 	if err != nil {
 		if os.IsPermission(err) {
-			notifyOnPermissionError()
+			deps.Platform.Notifier.Notify("yap: permission error", err.Error())
 		}
 		return fmt.Errorf("hotkey setup: %w", err)
 	}
 	defer listener.Close()
 
-	// Parse hotkey code from config
-	hotkeyCode, err := hotkeyHotkeyCode(cfg.Hotkey)
-	if err != nil {
-		return fmt.Errorf("invalid hotkey %q: %w", cfg.Hotkey, err)
-	}
-
-	// Start IPC server
-	sockPath, err := xdgDataFile("yap/yap.sock")
+	// Start IPC server.
+	sockPath, err := deps.XDGDataFile("yap/yap.sock")
 	if err != nil {
 		return fmt.Errorf("resolve socket path: %w", err)
 	}
 
-	srv, err := ipcNewServer(sockPath)
+	srv, err := deps.NewIPCServer(sockPath)
 	if err != nil {
 		return fmt.Errorf("ipc server: %w", err)
 	}
 	defer srv.Close()
 
-	// Create daemon instance with state
+	// Build engine.
+	eng := engine.New(
+		rec,
+		deps.Platform.Chime,
+		deps.Platform.Paster,
+		deps.Platform.Notifier,
+		deps.Transcriber,
+		cfg.APIKey,
+		cfg.Language,
+	)
+
 	d := &Daemon{
-		cfg:      cfg,
-		ctx:      ctx,
-		recorder: rec,
+		cfg: cfg,
+		ctx: ctx,
+		eng: eng,
 	}
 
-	// Set IPC handlers
+	// Wire IPC handlers.
 	srv.SetShutdownFn(stop)
 	srv.SetToggleFn(d.toggleRecording)
 	srv.SetStatusFn(func() string {
@@ -175,148 +181,64 @@ func Run(cfg *config.Config) error {
 		return "idle"
 	})
 
-	// Start IPC server in goroutine
 	go srv.Serve(ctx)
 
-	// Define press and release callbacks for hotkey
+	timeoutSec := cfg.TimeoutSeconds
+	if timeoutSec == 0 {
+		timeoutSec = 60
+	}
+
 	onPress := func() {
-		// Start recording if not already recording
 		if d.state.isActive() {
 			return
 		}
 
-		// Play start chime
-		chime, err := assets.StartChime()
-		if err == nil {
-			audioPlayChime(chime)
-		}
-
-		// Get timeout from config (default 60s if not set)
-		timeoutSec := d.cfg.TimeoutSeconds
-		if timeoutSec == 0 {
-			timeoutSec = 60
-		}
-
-		// Start recording in goroutine
 		recCtx, recCancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 		d.state.setCancel(recCancel)
 		d.state.setIsActive(true)
 
-		go d.recordAndTranscribe(recCtx, recCancel, timeoutSec)
+		go func() {
+			defer d.state.setIsActive(false)
+			d.eng.RecordAndPaste(ctx, recCtx, timeoutSec,
+				assets.StartChime, assets.StopChime, assets.WarningChime)
+		}()
 	}
 
 	onRelease := func() {
-		// Stop recording if active
 		if !d.state.isActive() {
 			return
 		}
-
-		// Cancel recording context
 		d.state.cancelRecording()
-
-		// Play stop chime
-		chime, err := assets.StopChime()
-		if err == nil {
-			audioPlayChime(chime)
-		}
 	}
 
-	// Start hotkey listener in goroutine
-	go listener.Run(ctx, hotkeyCode, onPress, onRelease)
+	go listener.Listen(ctx, hotkeyCode, onPress, onRelease)
 
-	// Block until signal received.
 	<-ctx.Done()
-
-	// All defers execute as we return: rec.Close(), pidfile.Remove()
 	return nil
-}
-
-// recordAndTranscribe runs the recording and transcription pipeline.
-// recCtx is the recording context (cancelled when user stops recording).
-// Transcription and paste use the daemon's context (d.ctx) instead, since
-// the recording context is already cancelled by the time we transcribe.
-func (d *Daemon) recordAndTranscribe(recCtx context.Context, cancel context.CancelFunc, timeoutSec int) {
-	defer func() {
-		d.state.setIsActive(false)
-	}()
-
-	// Calculate warning time (10s before timeout, minimum 1s)
-	warningSec := timeoutSec - 10
-	if warningSec < 1 {
-		warningSec = 1
-	}
-
-	// Start warning timer
-	warningTimer := time.AfterFunc(time.Duration(warningSec)*time.Second, func() {
-		chime, err := assets.WarningChime()
-		if err == nil {
-			audioPlayChime(chime)
-		}
-	})
-	defer warningTimer.Stop()
-
-	// Record audio (blocks until recCtx is cancelled by user releasing key or toggle)
-	if err := d.recorder.Start(recCtx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		notifyOnDeviceError(err)
-		return
-	}
-
-	// Transcribe audio — use daemon context, not the cancelled recording context
-	wavData, err := d.recorder.Encode()
-	if err != nil {
-		notifyOnDeviceError(err)
-		return
-	}
-
-	text, err := transcribeTranscribe(d.ctx, d.cfg.APIKey, wavData, d.cfg.Language)
-	if err != nil {
-		notifyOnTranscriptionError(err)
-		return
-	}
-
-	// Paste text at cursor
-	if err := pastePaste(text); err != nil {
-		// Paste errors are logged by the paste package
-		// Text remains in clipboard for manual paste
-		return
-	}
 }
 
 // toggleRecording toggles recording state for IPC toggle command.
 // Returns new state: "recording" or "idle".
 func (d *Daemon) toggleRecording() string {
 	if d.state.isActive() {
-		// Cancel current recording
 		d.state.cancelRecording()
-
-		// Play stop chime
-		chime, err := assets.StopChime()
-		if err == nil {
-			audioPlayChime(chime)
-		}
-
 		return "idle"
 	}
 
-	// Get timeout from config (default 60s if not set)
 	timeoutSec := d.cfg.TimeoutSeconds
 	if timeoutSec == 0 {
 		timeoutSec = 60
 	}
 
-	// Start recording (derived from daemon ctx so shutdown cancels it)
 	recCtx, recCancel := context.WithTimeout(d.ctx, time.Duration(timeoutSec)*time.Second)
 	d.state.setCancel(recCancel)
 	d.state.setIsActive(true)
 
-	// Play start chime
-	chime, err := assets.StartChime()
-	if err == nil {
-		audioPlayChime(chime)
-	}
-
-	// Start recording in goroutine
-	go d.recordAndTranscribe(recCtx, recCancel, timeoutSec)
+	go func() {
+		defer d.state.setIsActive(false)
+		d.eng.RecordAndPaste(d.ctx, recCtx, timeoutSec,
+			assets.StartChime, assets.StopChime, assets.WarningChime)
+	}()
 
 	return "recording"
 }
