@@ -232,7 +232,10 @@ func Run(cfg *config.Config) error {
 }
 
 // recordAndTranscribe runs the recording and transcription pipeline.
-func (d *Daemon) recordAndTranscribe(ctx context.Context, cancel context.CancelFunc, timeoutSec int) {
+// recCtx is the recording context (cancelled when user stops recording).
+// Transcription and paste use the daemon's context (d.ctx) instead, since
+// the recording context is already cancelled by the time we transcribe.
+func (d *Daemon) recordAndTranscribe(recCtx context.Context, cancel context.CancelFunc, timeoutSec int) {
 	defer func() {
 		d.state.setIsActive(false)
 	}()
@@ -252,20 +255,20 @@ func (d *Daemon) recordAndTranscribe(ctx context.Context, cancel context.CancelF
 	})
 	defer warningTimer.Stop()
 
-	// Record audio
-	if err := d.recorder.Start(ctx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+	// Record audio (blocks until recCtx is cancelled by user releasing key or toggle)
+	if err := d.recorder.Start(recCtx); err != nil && err != context.Canceled && err != context.DeadlineExceeded {
 		notifyOnDeviceError(err)
 		return
 	}
 
-	// Transcribe audio
+	// Transcribe audio — use daemon context, not the cancelled recording context
 	wavData, err := d.recorder.Encode()
 	if err != nil {
 		notifyOnDeviceError(err)
 		return
 	}
 
-	text, err := transcribeTranscribe(ctx, d.cfg.APIKey, wavData, d.cfg.Language)
+	text, err := transcribeTranscribe(d.ctx, d.cfg.APIKey, wavData, d.cfg.Language)
 	if err != nil {
 		notifyOnTranscriptionError(err)
 		return
