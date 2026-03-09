@@ -91,6 +91,7 @@ func TestHandleConnNDJSON(t *testing.T) {
 	require.Equal(t, "idle", resp.State)
 
 	cancel()
+	srv.Close() // unblock Accept so Serve returns
 	<-done
 }
 

@@ -70,16 +70,32 @@ func (r *Recorder) Start(ctx context.Context) error {
 	// 16000 samples/sec * 60s = 960000 samples = ~1.88MB (AUDIO-03: in memory only)
 	r.frames = make([]int16, 0, sampleRate*60)
 
+	in := make([]int16, framesPerBuffer)
+
+	var stream *portaudio.Stream
 	if r.deviceName != "" {
-		if _, err := selectInputDevice(r.deviceName); err != nil {
+		dev, err := selectInputDevice(r.deviceName)
+		if err != nil {
 			return fmt.Errorf("select input device: %w", err)
 		}
-	}
-
-	in := make([]int16, framesPerBuffer)
-	stream, err := portaudio.OpenDefaultStream(1, 0, float64(sampleRate), framesPerBuffer, &in)
-	if err != nil {
-		return fmt.Errorf("open audio stream: %w", err)
+		stream, err = portaudio.OpenStream(portaudio.StreamParameters{
+			Input: portaudio.StreamDeviceParameters{
+				Device:   dev,
+				Channels: 1,
+				Latency:  dev.DefaultLowInputLatency,
+			},
+			SampleRate:      float64(sampleRate),
+			FramesPerBuffer: framesPerBuffer,
+		}, &in)
+		if err != nil {
+			return fmt.Errorf("open audio stream (device %q): %w", r.deviceName, err)
+		}
+	} else {
+		var err error
+		stream, err = portaudio.OpenDefaultStream(1, 0, float64(sampleRate), framesPerBuffer, &in)
+		if err != nil {
+			return fmt.Errorf("open audio stream: %w", err)
+		}
 	}
 	defer stream.Close() //nolint:errcheck
 

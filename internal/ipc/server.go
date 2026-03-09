@@ -10,10 +10,11 @@ import (
 
 // Server listens on a Unix domain socket for IPC commands.
 type Server struct {
-	ln       net.Listener
-	sockPath string
-	toggleFn func() string
-	statusFn func() string
+	ln         net.Listener
+	sockPath   string
+	toggleFn   func() string
+	statusFn   func() string
+	shutdownFn func()
 }
 
 // NewServer creates a listener at sockPath with IPC-01 security (mode 0600).
@@ -47,6 +48,12 @@ func (s *Server) SetToggleFn(fn func() string) {
 // Called by daemon to provide callback for status command.
 func (s *Server) SetStatusFn(fn func() string) {
 	s.statusFn = fn
+}
+
+// SetShutdownFn sets the function called when CmdStop is received.
+// The daemon passes its context cancel function here.
+func (s *Server) SetShutdownFn(fn func()) {
+	s.shutdownFn = fn
 }
 
 // Close shuts down listener and removes of socket file.
@@ -100,8 +107,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 func (s *Server) dispatch(ctx context.Context, req Request) Response {
 	switch req.Cmd {
 	case CmdStop:
-		// Stop daemon (trigger ctx cancellation from daemon.Run).
-		// Just return success; actual shutdown is handled by daemon.Run context.
+		if s.shutdownFn != nil {
+			s.shutdownFn()
+		}
 		return Response{Ok: true, State: "stopped"}
 
 	case CmdStatus:

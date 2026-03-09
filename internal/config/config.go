@@ -30,7 +30,8 @@ func defaults() Config {
 // ConfigPath returns the XDG-compliant path to the config file.
 // Uses adrg/xdg — NOT os.UserConfigDir() which has a known XDG_CONFIG_HOME bug (Go issue #76320).
 // xdg.Reload() is called to re-read the current environment (adrg/xdg caches dirs in init()).
-func ConfigPath() (string, error) {
+// Declared as a variable so tests can substitute it.
+var ConfigPath = func() (string, error) {
 	xdg.Reload()
 	return xdg.ConfigFile("yap/config.toml")
 }

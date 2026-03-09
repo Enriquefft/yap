@@ -10,7 +10,7 @@ import (
 )
 
 // apiKeyPattern validates Groq API key format: sk- followed by 48 alphanumeric characters
-var apiKeyPattern = regexp.MustCompile(`^sk-[a-zA-Z0-9]{48}$`)
+var apiKeyPattern = regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`)
 
 // RunWizard runs an interactive first-run setup wizard.
 // If GROQ_API_KEY environment variable is set, the wizard is skipped and
@@ -82,7 +82,7 @@ func RunWizard(input io.Reader, output io.Writer) (Config, error) {
 // promptAPIKey prompts for and validates the Groq API key
 func promptAPIKey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	for {
-		fmt.Fprintf(output, "Enter your Groq API key (sk-xxxxxxxxxxxxxxxx): ")
+		fmt.Fprintf(output, "Enter your Groq API key (gsk_xxxx...): ")
 
 		if !scanner.Scan() {
 			if err := scanner.Err(); err != nil {
@@ -95,7 +95,7 @@ func promptAPIKey(scanner *bufio.Scanner, output io.Writer) (string, error) {
 
 		// Validate format
 		if !apiKeyPattern.MatchString(apiKey) {
-			fmt.Fprintf(output, "Invalid API key format. Expected format: sk- followed by 48 alphanumeric characters\n")
+			fmt.Fprintf(output, "Invalid API key format. Expected format: gsk_ followed by 52 alphanumeric characters\n")
 			continue
 		}
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"github.com/hybridz/yap/internal/config"
+	"github.com/hybridz/yap/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +28,17 @@ var rootCmd = &cobra.Command{
 		rootCfg = cfg
 		return nil
 	},
+	// RunE handles --daemon-run: the detached child spawned by "yap start".
+	// When --daemon-run is set, this blocks running the daemon event loop.
+	// Without the flag, cobra prints help (default behavior).
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if daemonRun {
+			return daemon.Run(&rootCfg)
+		}
+		return cmd.Help()
+	},
+	// Silence usage on --daemon-run errors (daemon crashes shouldn't print help).
+	SilenceUsage: true,
 }
 
 // Execute runs the root command. Called from main().
@@ -41,7 +53,7 @@ func init() {
 	rootCmd.AddCommand(newToggleCmd(&rootCfg))
 	rootCmd.AddCommand(newConfigCmd(&rootCfg))
 
-	// Hidden flag for internal daemon spawning (Phase 3-02).
+	// Hidden flag for internal daemon spawning.
 	// Used by "yap start" to spawn a detached child that runs "yap --daemon-run".
 	rootCmd.PersistentFlags().BoolVar(&daemonRun, "daemon-run", false, "")
 	rootCmd.PersistentFlags().MarkHidden("daemon-run")

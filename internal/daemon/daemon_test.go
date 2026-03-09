@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"testing"
-	"time"
 
 	"github.com/hybridz/yap/internal/config"
 )
@@ -48,10 +47,10 @@ func TestRecordState(t *testing.T) {
 		cancelCalled = true
 	})
 
-	// Cancel recording
+	// Cancel recording — should invoke the stored cancel function
 	rs.cancelRecording()
-	if cancelCalled {
-		t.Error("Cancel function should not be called by cancelRecording (just stored)")
+	if !cancelCalled {
+		t.Error("Cancel function should be called by cancelRecording")
 	}
 
 	if rs.isActive() {

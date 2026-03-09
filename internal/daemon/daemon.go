@@ -19,7 +19,6 @@ import (
 	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/hybridz/yap/internal/transcribe"
 	"github.com/adrg/xdg"
-	"github.com/holoplot/go-evdev"
 )
 
 // Package-level variables for testability
@@ -81,9 +80,9 @@ func (rs *recordState) cancelRecording() {
 // Daemon represents the background process.
 type Daemon struct {
 	cfg        *config.Config
+	ctx        context.Context
 	state      recordState
 	recorder   audio.AudioRecorder
-	toggleFn   func() string
 }
 
 // New creates a new Daemon.
@@ -162,10 +161,12 @@ func Run(cfg *config.Config) error {
 	// Create daemon instance with state
 	d := &Daemon{
 		cfg:      cfg,
+		ctx:      ctx,
 		recorder: rec,
 	}
 
-	// Set toggle function for IPC
+	// Set IPC handlers
+	srv.SetShutdownFn(stop)
 	srv.SetToggleFn(d.toggleRecording)
 	srv.SetStatusFn(func() string {
 		if d.state.isActive() {
@@ -300,8 +301,8 @@ func (d *Daemon) toggleRecording() string {
 		timeoutSec = 60
 	}
 
-	// Start recording
-	recCtx, recCancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	// Start recording (derived from daemon ctx so shutdown cancels it)
+	recCtx, recCancel := context.WithTimeout(d.ctx, time.Duration(timeoutSec)*time.Second)
 	d.state.setCancel(recCancel)
 	d.state.setIsActive(true)
 

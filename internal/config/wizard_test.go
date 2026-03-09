@@ -22,10 +22,10 @@ func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	// Mock input
-	input := "sk-test1234567890123456789012345678901234567890123456\n" + // valid API key (51 chars)
-		"KEY_RIGHTCTRL\n" + // hotkey
-		"en\n" // language
+	// Mock input (sk- + 48 alphanumeric chars = 51 total)
+	input := "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\n" +
+		"KEY_RIGHTCTRL\n" +
+		"en\n"
 	inputReader := strings.NewReader(input)
 
 	// Mock os.Stdin for test
@@ -59,7 +59,7 @@ func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
 		t.Fatalf("RunWizard failed: %v", err)
 	}
 
-	if cfg.APIKey != "sk-test1234567890123456789012345678901234567890123456" {
+	if cfg.APIKey != "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" {
 		t.Errorf("Expected API key to be set, got: %s", cfg.APIKey)
 	}
 }
@@ -75,9 +75,9 @@ func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	validKey := "sk-abcdefghijklmnopqrstuvwxyz123456789012345" // valid format: sk- + 48 chars
+	validKey := "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" // valid format: sk- + 48 chars
 
-	if !regexp.MustCompile(`^sk-[a-zA-Z0-9]{48}$`).MatchString(validKey) {
+	if !regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`).MatchString(validKey) {
 		t.Errorf("Test key doesn't match expected format: %s", validKey)
 	}
 
@@ -96,7 +96,7 @@ func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	input := "sk-abcdefghijklmnopqrstuvwxyz123456789012345\n" + // valid API key
+	input := "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\n" + // valid API key
 		"KEY_RIGHTCTRL\n" + // accept default
 		"en\n" // language
 	inputReader := strings.NewReader(input)
@@ -130,7 +130,7 @@ func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	input := "sk-abcdefghijklmnopqrstuvwxyz123456789012345\n" + // valid API key
+	input := "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\n" + // valid API key
 		"KEY_RIGHTCTRL\n" + // hotkey
 		"en\n" // accept default
 	inputReader := strings.NewReader(input)
@@ -164,7 +164,7 @@ func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	input := "sk-abcdefghijklmnopqrstuvwxyz123456789012345\n" + // valid API key
+	input := "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\n" + // valid API key
 		"KEY_RIGHTCTRL\n" + // hotkey
 		"en\n" // language
 	inputReader := strings.NewReader(input)
@@ -187,7 +187,7 @@ func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
 		t.Fatalf("Failed to load created config: %v", err)
 	}
 
-	if cfg.APIKey != "sk-abcdefghijklmnopqrstuvwxyz123456789012345" {
+	if cfg.APIKey != "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" {
 		t.Errorf("Expected API key in config, got: %s", cfg.APIKey)
 	}
 
@@ -213,7 +213,7 @@ func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
 
 	// Provide invalid API key (wrong format)
 	input := "invalid-key\n" + // invalid API key
-		"sk-abcdefghijklmnopqrstuvwxyz123456789012345\n" + // valid API key on retry
+		"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\n" + // valid API key on retry
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
 	inputReader := strings.NewReader(input)
@@ -227,7 +227,7 @@ func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
 	}
 
 	// Verify valid key was accepted
-	if cfg.APIKey != "sk-abcdefghijklmnopqrstuvwxyz123456789012345" {
+	if cfg.APIKey != "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" {
 		t.Errorf("Expected valid API key after retry, got: %s", cfg.APIKey)
 	}
 
@@ -250,7 +250,7 @@ func TestRunWizard_SkippedWhenEnvVarSet(t *testing.T) {
 	defer func() { ConfigPath = origConfigPath }()
 
 	// Set env var to skip wizard
-	testAPIKey := "sk-abcdefghijklmnopqrstuvwxyz123456789012345"
+	testAPIKey := "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"
 	os.Setenv("GROQ_API_KEY", testAPIKey)
 	defer os.Unsetenv("GROQ_API_KEY")
 
@@ -285,7 +285,7 @@ func TestRunWizard_ConfirmsConfigPath(t *testing.T) {
 	}
 	defer func() { ConfigPath = origConfigPath }()
 
-	input := "sk-abcdefghijklmnopqrstuvwxyz123456789012345\n" +
+	input := "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\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
 	inputReader := strings.NewReader(input)

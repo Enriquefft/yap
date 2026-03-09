@@ -55,6 +55,10 @@ func runStop(cfg *config.Config) error {
 		return nil // Exit 0 (idempotent).
 	}
 
+	if !resp.Ok {
+		return fmt.Errorf("daemon rejected stop command: %s", resp.Error)
+	}
+
 	// IPC succeeded — poll for PID file removal to confirm shutdown.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

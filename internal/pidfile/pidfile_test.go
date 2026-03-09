@@ -1,6 +1,8 @@
 package pidfile
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,7 +34,7 @@ func TestWriteFailsIfExists(t *testing.T) {
 	// Second write should fail.
 	err = Write(pidPath)
 	require.Error(t, err)
-	require.True(t, os.IsExist(err))
+	require.True(t, errors.Is(err, fs.ErrExist))
 }
 
 // TestIsLiveForRunningProcess returns true for current process.
