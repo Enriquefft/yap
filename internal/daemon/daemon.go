@@ -93,6 +93,29 @@ func newTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 	})
 }
 
+// injectionOptionsFromConfig bridges pcfg.InjectionConfig into the
+// runtime platform.InjectionOptions struct. The two types stay
+// separate so the public TOML schema and the internal platform
+// adapter layer can evolve independently — same pattern as the
+// transcribe / transform bridges above.
+func injectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptions {
+	out := platform.InjectionOptions{
+		PreferOSC52:      ic.PreferOSC52,
+		BracketedPaste:   ic.BracketedPaste,
+		ElectronStrategy: ic.ElectronStrategy,
+	}
+	if len(ic.AppOverrides) > 0 {
+		out.AppOverrides = make([]platform.AppOverride, 0, len(ic.AppOverrides))
+		for _, ov := range ic.AppOverrides {
+			out.AppOverrides = append(out.AppOverrides, platform.AppOverride{
+				Match:    ov.Match,
+				Strategy: ov.Strategy,
+			})
+		}
+	}
+	return out
+}
+
 // recordState holds the recording state machine.
 type recordState struct {
 	mu     sync.Mutex
@@ -208,11 +231,19 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("build transformer: %w", err)
 	}
 
+	// Build the per-session injector from the bridged Phase 4
+	// InjectionOptions. The platform factory owns its strategy list
+	// and audit logger.
+	injector, err := deps.Platform.NewInjector(injectionOptionsFromConfig(cfg.Injection))
+	if err != nil {
+		return fmt.Errorf("build injector: %w", err)
+	}
+
 	// Build engine.
 	eng := engine.New(
 		rec,
 		deps.Platform.Chime,
-		deps.Platform.Paster,
+		injector,
 		deps.Platform.Notifier,
 		transcriber,
 		transformer,
@@ -252,7 +283,7 @@ func Run(cfg *config.Config, deps Deps) error {
 
 		go func() {
 			defer d.state.setIsActive(false)
-			d.eng.RecordAndPaste(ctx, recCtx, timeoutSec,
+			d.eng.RecordAndInject(ctx, recCtx, timeoutSec,
 				assets.StartChime, assets.StopChime, assets.WarningChime)
 		}()
 	}
@@ -289,7 +320,7 @@ func (d *Daemon) toggleRecording() string {
 
 	go func() {
 		defer d.state.setIsActive(false)
-		d.eng.RecordAndPaste(d.ctx, recCtx, timeoutSec,
+		d.eng.RecordAndInject(d.ctx, recCtx, timeoutSec,
 			assets.StartChime, assets.StopChime, assets.WarningChime)
 	}()
 

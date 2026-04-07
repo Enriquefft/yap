@@ -18,8 +18,8 @@ type fakeStrategy struct {
 	called  int
 }
 
-func (f *fakeStrategy) Name() string                            { return f.name }
-func (f *fakeStrategy) Supports(t inject.Target) bool           { return f.support }
+func (f *fakeStrategy) Name() string                  { return f.name }
+func (f *fakeStrategy) Supports(t inject.Target) bool { return f.support }
 func (f *fakeStrategy) Deliver(ctx context.Context, s string) error {
 	f.called++
 	return f.err
@@ -98,17 +98,21 @@ func TestTargetZeroValue(t *testing.T) {
 	if tgt.AppType != inject.AppGeneric {
 		t.Errorf("zero AppType = %d, want AppGeneric(%d)", tgt.AppType, inject.AppGeneric)
 	}
+	if tgt.Tmux {
+		t.Error("zero Target.Tmux should be false")
+	}
+	if tgt.SSHRemote {
+		t.Error("zero Target.SSHRemote should be false")
+	}
 }
 
 func TestAppTypeConstantsDistinct(t *testing.T) {
 	seen := map[inject.AppType]string{}
 	for name, at := range map[string]inject.AppType{
-		"AppGeneric":   inject.AppGeneric,
-		"AppTerminal":  inject.AppTerminal,
-		"AppElectron":  inject.AppElectron,
-		"AppBrowser":   inject.AppBrowser,
-		"AppTmux":      inject.AppTmux,
-		"AppSSHRemote": inject.AppSSHRemote,
+		"AppGeneric":  inject.AppGeneric,
+		"AppTerminal": inject.AppTerminal,
+		"AppElectron": inject.AppElectron,
+		"AppBrowser":  inject.AppBrowser,
 	} {
 		if prev, ok := seen[at]; ok {
 			t.Errorf("%s shares value with %s", name, prev)
@@ -116,3 +120,59 @@ func TestAppTypeConstantsDistinct(t *testing.T) {
 		seen[at] = name
 	}
 }
+
+func TestAppTypeStringStable(t *testing.T) {
+	cases := map[inject.AppType]string{
+		inject.AppGeneric:  "generic",
+		inject.AppTerminal: "terminal",
+		inject.AppElectron: "electron",
+		inject.AppBrowser:  "browser",
+	}
+	for at, want := range cases {
+		if got := at.String(); got != want {
+			t.Errorf("AppType(%d).String() = %q, want %q", at, got, want)
+		}
+	}
+}
+
+func TestTargetTmuxAndSSHRemoteAdditive(t *testing.T) {
+	tgt := inject.Target{
+		DisplayServer: "wayland",
+		AppClass:      "kitty",
+		AppType:       inject.AppTerminal,
+		Tmux:          true,
+		SSHRemote:     true,
+	}
+	if tgt.AppType != inject.AppTerminal {
+		t.Errorf("AppType lost when Tmux/SSHRemote set: %d", tgt.AppType)
+	}
+	if !tgt.Tmux || !tgt.SSHRemote {
+		t.Error("additive bits should remain set")
+	}
+}
+
+func TestErrStrategyUnsupportedSentinel(t *testing.T) {
+	if inject.ErrStrategyUnsupported == nil {
+		t.Fatal("ErrStrategyUnsupported must not be nil")
+	}
+	wrapped := errors.New("wrapping " + inject.ErrStrategyUnsupported.Error())
+	if errors.Is(wrapped, inject.ErrStrategyUnsupported) {
+		t.Error("plain wrapping must not satisfy errors.Is — guard against accidental aliasing")
+	}
+	// fmt.Errorf %w wrapping must satisfy errors.Is.
+	wrappedFmt := errorsWrap(inject.ErrStrategyUnsupported)
+	if !errors.Is(wrappedFmt, inject.ErrStrategyUnsupported) {
+		t.Error("fmt.Errorf %w wrapped sentinel must satisfy errors.Is")
+	}
+}
+
+// errorsWrap is a tiny helper kept local to the test so the test does
+// not pull in fmt at the top level when only one call site needs it.
+func errorsWrap(err error) error {
+	return wrappedErr{err: err}
+}
+
+type wrappedErr struct{ err error }
+
+func (w wrappedErr) Error() string { return "wrapped: " + w.err.Error() }
+func (w wrappedErr) Unwrap() error { return w.err }

@@ -10,6 +10,138 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+### Phase 4 — Text Injection Overhaul
+
+#### Added
+- `internal/platform/linux/inject/` is the deep module that owns
+  app-aware text injection on Linux. It detects the active window via
+  Sway (`swaymsg -t get_tree`), Hyprland (`hyprctl activewindow -j`),
+  or X11 (`xdotool getactivewindow` + `xprop`); classifies the focused
+  app against the terminal / Electron / browser allowlists in
+  `classify.go`; layers additive `Tmux` and `SSHRemote` bits onto the
+  Target from the live environment; and walks a fixed-priority
+  strategy list (tmux → osc52 → electron → wayland → x11) until one
+  delivers the text.
+- `osc52.go` writes `\x1b]52;c;<base64>\x07` directly to the slave
+  pseudo-terminal owned by a descendant shell of the focused
+  terminal emulator. The strategy walks `/proc/<pid>/task/*/children`
+  to find the first descendant whose stdin/stdout/stderr is a
+  `/dev/pts/N` and writes there. When `/proc` is unreadable or no
+  descendant pts is found, OSC52 returns `ErrStrategyUnsupported`
+  and the orchestrator falls through cleanly. This is what makes
+  dictation into an SSH-attached terminal work without anything
+  installed on the remote.
+- `tmux.go` pipes payload bytes into `tmux load-buffer -` over
+  stdin and then runs `tmux paste-buffer`, so multi-line shell
+  commands dictated inside tmux insert as a single block instead of
+  executing line-by-line. Bracketed paste wrapping is applied when
+  `injection.bracketed_paste = true` and the payload contains a
+  newline.
+- `electron.go` saves the clipboard, writes the text, synthesizes
+  Ctrl+V via wtype/xdotool, and restores the saved value after a
+  bounded wait. The wait is the only sleep in the inject package and
+  it routes through `Deps.Sleep` — there are no literal `time.Sleep`
+  call sites anywhere under `internal/platform/linux/inject/`.
+- `wayland.go` types text directly via `wtype -` (preferred) or
+  `ydotool type --file -` (fallback when the ydotool socket is
+  present). `x11.go` types text via `xdotool type --clearmodifiers --`
+  with focus polling: it polls `xdotool getactivewindow` every 10ms
+  until two consecutive samples report the same window, then issues
+  the type command. The polling cap is 10 iterations (100ms total)
+  and proceeds even when focus never settles, so the strategy never
+  hangs on a flaky compositor.
+- `injector.go` is the orchestrator. Every `Inject(ctx, text)` call
+  emits exactly one structured `slog` audit line on completion with
+  `target.display_server`, `target.app_class`, `target.app_type`,
+  `target.tmux`, `target.ssh_remote`, `strategy`, `outcome`, `bytes`,
+  `duration_ms`, and `attempts`; per-attempt failures emit a
+  `WARN`-level `inject attempt failed` line each, while
+  `ErrStrategyUnsupported` fall-throughs are demoted to `DEBUG`.
+- `internal/platform/linux/inject/noglobals_test.go` is the
+  package's structural guard. It allows exactly the three classifier
+  allowlists, the bracketed-paste byte constants, the
+  `electronRestoreDelay` / `focusPoll*` tuning constants, and the
+  `ErrNoDisplay` sentinel — anything else at package scope fails the
+  build. A second guard scans every production file for the literal
+  stdlib blocking-sleep token and fails when one is found.
+- `internal/platform/InjectionOptions` and
+  `internal/platform/AppOverride` are the new structural bridge
+  between the on-disk `pcfg.InjectionConfig` and the runtime injector.
+  The platform package deliberately does not import `pkg/yap/config`,
+  mirroring the transcribe / transform separation already in place.
+- `pkg/yap/inject.Target` gains `Tmux bool` and `SSHRemote bool`
+  fields. These additive modifiers were previously enum members
+  (`AppTmux`, `AppSSHRemote`) which made expressing "terminal AND
+  tmux" awkward. The bools live alongside the AppType enum and never
+  collide with the mutually-exclusive base classification.
+- `pkg/yap/inject.AppType.String()` returns the stable lowercase
+  identifier (`generic`, `terminal`, `electron`, `browser`) used in
+  the audit log fields and in `injection.app_overrides` lookups.
+- `pkg/yap/inject.ErrStrategyUnsupported` is the public sentinel a
+  Strategy returns from `Deliver` to signal "this concrete target is
+  not mine — try the next one". The orchestrator falls through
+  silently on this sentinel and surfaces it as a `DEBUG` log line
+  rather than a real failure.
+
+#### Changed
+- `internal/engine/engine.go` now depends on
+  `pkg/yap/inject.Injector` instead of the deleted
+  `internal/platform.Paster`. The old `RecordAndPaste` method is
+  renamed to `RecordAndInject` to reflect the deeper guarantees the
+  new module provides. Engine constructors and every test were
+  updated together.
+- `internal/daemon/daemon.go` now bridges `pcfg.Injection` into
+  `platform.InjectionOptions` via a new
+  `injectionOptionsFromConfig` helper, then constructs the
+  per-session injector by calling
+  `deps.Platform.NewInjector(opts)`. The bridge is structurally 1:1
+  and is guarded by `internal/daemon/daemon_test.go`.
+- `internal/platform/platform.go`'s `Platform` struct now exposes a
+  `NewInjector NewInjectorFunc` field instead of the deleted
+  `Paster` field. The Linux factory in
+  `internal/platform/linux/platform.go` registers the new
+  `inject.New` constructor against this hook.
+
+#### Removed
+- `internal/platform/linux/paster.go` and
+  `internal/platform/linux/paster_test.go` are deleted. The old
+  global `wtype → ydotool → xdotool` Ctrl+Shift+V chain (with its
+  hard-coded 150ms sleep) was the canonical example of "fallback
+  everything and hope" — it is replaced by the explicit, audited,
+  per-target strategy walk in
+  `internal/platform/linux/inject/`.
+- `internal/platform.Paster` is deleted from
+  `internal/platform/platform.go`. Any future re-introduction
+  would be detected by `noglobals_test.go` because the Linux
+  package no longer references the symbol anywhere.
+- `pkg/yap/inject.AppTmux` and `pkg/yap/inject.AppSSHRemote` are
+  removed from the `AppType` const block. Both are now bool fields
+  on `Target`.
+
+#### Findings
+- **wlroots-generic compositor support is deferred to Phase 4.5.**
+  Sway and Hyprland are wired up through their CLI tools; a generic
+  wlroots backend would need to speak `ext-foreign-toplevel-list-v1`
+  via a wayland-client library, which is out of scope for Phase 4.
+  Under a generic wlroots compositor the orchestrator falls through
+  to the wayland strategy with no `AppClass` and the wtype path
+  delivers the text without per-app targeting. Documented in
+  `internal/platform/linux/inject/detect.go`'s `Detect` doc comment
+  and tracked in `ROADMAP.md`.
+- **Zero literal `time.Sleep` calls inside the package.** The
+  electron strategy's bounded clipboard-restore wait routes through
+  `Deps.Sleep`, the X11 focus polling loop calls `Deps.Sleep` in
+  `Deps`-land, and `NewDeps()` itself binds `Sleep` to a wrapper
+  using `<-time.After(d)` so the production source files do not
+  contain the forbidden literal token even in comments. The
+  `TestNoLiteralStdlibSleep` guard in `noglobals_test.go` enforces
+  this on every build.
+- **Audit trail uses Go 1.25 `log/slog` exclusively.**
+  `slog.Logger` is constructor-injected; tests pass a JSON capture
+  handler to assert the field shape; production wires
+  `slog.New(discardHandler{})` by default and the daemon will plug
+  in a real handler in Phase 7's CLI rework.
+
 ### Phase 3 — Library Extraction (`pkg/yap/`)
 
 #### Added

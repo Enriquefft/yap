@@ -1,9 +1,9 @@
 // Package engine owns the core record → transcribe → transform →
-// paste pipeline. It is platform-agnostic: all OS-specific behavior
-// is injected via the platform interfaces, and the transcription and
-// transform stages come from pkg/yap. The engine runs for one
-// recording session at a time, invoked by either daemon mode or CLI
-// one-shot mode.
+// inject pipeline. It is platform-agnostic: all OS-specific behavior
+// is injected via the platform interfaces, and the transcription,
+// transform, and injection stages come from pkg/yap. The engine runs
+// for one recording session at a time, invoked by either daemon mode
+// or CLI one-shot mode.
 package engine
 
 import (
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/hybridz/yap/internal/platform"
+	yinject "github.com/hybridz/yap/pkg/yap/inject"
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 	"github.com/hybridz/yap/pkg/yap/transform"
 	"github.com/hybridz/yap/pkg/yap/transform/passthrough"
@@ -24,14 +25,16 @@ import (
 // lazy loading and re-use across multiple recording sessions.
 type ChimeSource func() (io.Reader, error)
 
-// Engine owns the record → transcribe → transform → paste pipeline.
+// Engine owns the record → transcribe → transform → inject pipeline.
 // All dependencies are injected at construction time. The engine
 // does not touch transcription credentials: the Transcriber is
 // constructed by the caller with its credentials already baked in.
+// Likewise the Injector is constructed by the caller with the
+// platform-bridged InjectionOptions already baked in.
 type Engine struct {
 	recorder    platform.Recorder
 	chime       platform.ChimePlayer
-	paster      platform.Paster
+	injector    yinject.Injector
 	notifier    platform.Notifier
 	transcriber transcribe.Transcriber
 	transformer transform.Transformer
@@ -39,13 +42,14 @@ type Engine struct {
 
 // New creates an Engine with all dependencies injected. recorder must
 // be created for this specific session (device name already applied).
-// transcriber owns the credentials for the chosen backend. A nil
-// transformer is replaced with the passthrough transformer so the
-// pipeline always has a non-nil stage between Transcribe and Paste.
+// transcriber owns the credentials for the chosen backend. injector
+// owns its strategy list and audit logger. A nil transformer is
+// replaced with the passthrough transformer so the pipeline always
+// has a non-nil stage between Transcribe and Inject.
 func New(
 	recorder platform.Recorder,
 	chime platform.ChimePlayer,
-	paster platform.Paster,
+	injector yinject.Injector,
 	notifier platform.Notifier,
 	transcriber transcribe.Transcriber,
 	transformer transform.Transformer,
@@ -56,22 +60,22 @@ func New(
 	return &Engine{
 		recorder:    recorder,
 		chime:       chime,
-		paster:      paster,
+		injector:    injector,
 		notifier:    notifier,
 		transcriber: transcriber,
 		transformer: transformer,
 	}
 }
 
-// RecordAndPaste runs the full pipeline for one recording session:
+// RecordAndInject runs the full pipeline for one recording session:
 // record (until recCtx cancelled) → encode → transcribe → transform
-// → paste.
+// → inject.
 //
 // daemonCtx is the long-lived daemon context used for transcription
-// and paste. recCtx is the short-lived recording context (cancelled
-// when the user releases the hotkey or when the timeout fires).
-// Since recCtx is already cancelled by the time we transcribe, we
-// must use daemonCtx for the API call.
+// and injection. recCtx is the short-lived recording context
+// (cancelled when the user releases the hotkey or when the timeout
+// fires). Since recCtx is already cancelled by the time we
+// transcribe, we must use daemonCtx for the API call.
 //
 // timeoutSec controls when the warning chime fires (10s before
 // timeout, minimum 1s).
@@ -84,7 +88,7 @@ func New(
 // It does NOT return errors — all errors are surfaced via the
 // Notifier. The caller (daemon or CLI) should run this in a
 // goroutine if it needs to remain responsive.
-func (e *Engine) RecordAndPaste(
+func (e *Engine) RecordAndInject(
 	daemonCtx context.Context,
 	recCtx context.Context,
 	timeoutSec int,
@@ -161,11 +165,14 @@ func (e *Engine) RecordAndPaste(
 		return
 	}
 
-	// Paste at cursor (clipboard save/restore is handled by the
-	// Paster).
-	if err := e.paster.Paste(sb.String()); err != nil {
-		// Paste errors are best-effort; text remains in clipboard.
-		// Paster implementations log internally when needed.
+	// Inject at the cursor (clipboard save/restore is handled by the
+	// strategies internally where applicable).
+	if err := e.injector.Inject(daemonCtx, sb.String()); err != nil {
+		// Inject errors are best-effort; per-strategy errors are
+		// audit-logged inside the injector. Surface the aggregate
+		// failure as a notification so the user knows nothing
+		// landed.
+		e.notifier.Notify("inject failed", err.Error())
 		return
 	}
 }

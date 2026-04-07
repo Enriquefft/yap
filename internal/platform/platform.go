@@ -7,6 +7,8 @@ package platform
 import (
 	"context"
 	"io"
+
+	yinject "github.com/hybridz/yap/pkg/yap/inject"
 )
 
 // KeyCode is a platform-independent key identifier.
@@ -76,13 +78,39 @@ type HotkeyConfig interface {
 	DetectKey(ctx context.Context) (string, error)
 }
 
-// Paster outputs text at the current cursor position.
-// Implementations handle clipboard save/restore internally.
-type Paster interface {
-	// Paste inserts text at the current cursor position.
-	// On failure, text is left in the clipboard for manual paste.
-	Paste(text string) error
+// InjectionOptions is the structural bridge between the on-disk
+// pkg/yap/config.InjectionConfig and the runtime injector. The
+// platform package deliberately does not import pkg/yap/config so
+// the public TOML schema and the OS adapter layer stay decoupled;
+// the daemon translates between the two at startup.
+type InjectionOptions struct {
+	// PreferOSC52 enables the OSC52 strategy for terminal targets.
+	PreferOSC52 bool
+	// BracketedPaste wraps multi-line text in
+	// \x1b[200~ ... \x1b[201~ when delivering to terminal targets.
+	BracketedPaste bool
+	// ElectronStrategy is one of "clipboard" or "keystroke" — the
+	// preferred delivery mode for Electron apps. Phase 4 implements
+	// "clipboard"; "keystroke" routes through the wayland/x11
+	// generic strategies.
+	ElectronStrategy string
+	// AppOverrides forces a specific strategy when the focused
+	// AppClass contains the override Match substring. Evaluated in
+	// declaration order; first match wins.
+	AppOverrides []AppOverride
 }
+
+// AppOverride pairs a WM_CLASS / process-name substring with the
+// strategy name to force when it matches.
+type AppOverride struct {
+	Match    string
+	Strategy string
+}
+
+// NewInjectorFunc constructs an Injector for the given options. The
+// daemon calls this once per session at startup, mirroring how
+// NewRecorderFunc receives the audio device name from config.
+type NewInjectorFunc func(opts InjectionOptions) (yinject.Injector, error)
 
 // Notifier sends OS-native desktop notifications. All calls are best-effort.
 type Notifier interface {
@@ -111,8 +139,11 @@ type Platform struct {
 	// Used by config management commands and the first-run wizard.
 	HotkeyCfg HotkeyConfig
 
-	// Paster outputs transcribed text at the cursor.
-	Paster Paster
+	// NewInjector constructs the per-session text injector. The
+	// daemon builds InjectionOptions from cfg.Injection and passes
+	// them in at startup, mirroring NewRecorder's per-session config
+	// flow. Replaces the deleted Paster interface from Phase 1.
+	NewInjector NewInjectorFunc
 
 	// Notifier sends desktop error notifications.
 	Notifier Notifier
