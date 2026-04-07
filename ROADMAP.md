@@ -473,29 +473,38 @@ Merged in commit `770edee` (2026-04). All tests pass.
 ## Phase 7 — CLI Rework
 
 **Depends on:** Phase 3, Phase 4, Phase 5
-**Current state:** `start`/`stop`/`status`/`toggle`/`config` exist; `listen`/`record`/`devices`/`transcribe`/`transform`/`paste` missing; `--daemon-run` hidden flag still in `cli/root.go`.
+**Status:** COMPLETE.
 
-- [ ] Rename `yap start` → `yap listen`; keep `start` as a hidden alias for one release
-- [ ] `--foreground` flag on `yap listen`
-- [ ] Remove `--daemon-run` hack — replace with hidden `yap __daemon-run` subcommand or `YAP_DAEMON=1` env sentinel
-- [ ] `yap record` — one-shot pipeline; stops on SIGINT/SIGTERM/timeout/silence; writes PID file
-- [ ] `yap record --transform` and `yap record --out=text`
-- [ ] `yap transcribe <file.wav>` — one-shot file transcription
-- [ ] `yap transform "text"` — stdin or arg
-- [ ] `yap paste "text"` — exercise the inject layer directly
-- [ ] `yap stop` extended to also kill an active `yap record` via PID
-- [ ] `yap toggle` works with both daemon (IPC) and standalone `yap record` (signal)
-- [ ] `yap devices` — list audio inputs via the platform recorder factory
-- [ ] `yap status` JSON: add `mode`, `config_path`, `version`, `pid`, `backend`, `model`
-- [ ] Every CLI file imports `pkg/yap/`; zero pipeline logic in `internal/cli/`
+- [x] Rename `yap start` → `yap listen`; keep `start` as a hidden alias for one release
+- [x] `--foreground` flag on `yap listen`
+- [x] Remove the hidden daemon-spawn flag — replaced with `YAP_DAEMON=1` env sentinel handled in `cmd/yap/main.go` before cobra sees `os.Args`
+- [x] `yap record` — one-shot pipeline; stops on SIGINT/SIGTERM/timeout/SIGUSR1; writes its own PID file at `$XDG_DATA_HOME/yap/yap-record.pid`
+- [x] `yap record --transform` and `yap record --out=text`
+- [x] `yap record --device` and `yap record --max-duration`
+- [x] `yap transcribe <file.wav>` — one-shot file transcription with `--json` and stdin (`-`)
+- [x] `yap transform "text"` — stdin or arg, with `--backend` and `--system-prompt` overrides
+- [x] `yap paste "text"` — exercise the inject layer directly
+- [x] `yap stop` extended to also SIGTERM an active `yap record` via PID
+- [x] `yap toggle` works with both daemon (IPC) and standalone `yap record` (SIGUSR1)
+- [x] `yap devices` — list audio inputs via the new `platform.DeviceLister` interface
+- [x] `yap status` JSON: add `mode`, `config_path`, `version`, `pid`, `backend`, `model` (extended via `ipc.Response`)
+- [x] Every CLI file imports `pkg/yap/`; zero pipeline logic in `internal/cli/`. Pipeline-builder helpers exposed as `daemon.NewTranscriber`, `daemon.NewTransformer`, `daemon.InjectionOptionsFromConfig`.
 
 **Done when:**
-- [ ] `yap listen` and `yap listen --foreground` both work
-- [ ] `grep -rn '\-\-daemon-run' internal/cli/` returns nothing
-- [ ] `yap record` with no daemon running captures → transcribes → injects → exits
-- [ ] `yap transcribe some.wav` prints the transcription
-- [ ] `yap paste "hello"` exercises the injection pipeline for the focused window
-- [ ] `yap devices` prints a sensible list
+- [x] `yap listen` and `yap listen --foreground` both work
+- [x] The previous hidden spawn flag is gone (verified by an `internal/cli/listen_test.go` assertion)
+- [x] `yap record` with no daemon running captures → transcribes → injects → exits (covered by `record_test.go`)
+- [x] `yap transcribe some.wav` prints the transcription (covered by `transcribe_test.go`)
+- [x] `yap paste "hello"` exercises the injection pipeline (covered by `paste_test.go`)
+- [x] `yap devices` prints a sensible list (covered by `devices_test.go`)
+
+### Findings
+- The orchestrator picked the `YAP_DAEMON=1` env sentinel over a hidden `__daemon-run` subcommand because it keeps `cmd/yap/main.go` as the single source of truth for the spawn-vs-CLI dispatch and means cobra never sees an internal flag at all.
+- `daemon.NewTranscriber`, `daemon.NewTransformer`, and `daemon.InjectionOptionsFromConfig` are now public so the CLI's one-shot commands reuse the exact same on-disk-config-to-runtime bridges instead of duplicating them. This is the canonical pattern for the upcoming Phase 8 transform backends — they hook into `daemon.NewTransformer` and the CLI gets them for free.
+- The `internal/cli/record.go` SIGUSR1 handler intentionally cancels only `recCtx`, not the outer `ctx`, so the captured audio still flows through the transcribe and inject stages — the same semantic the daemon's hotkey-release handler uses.
+- `internal/cli/stop.go` and `internal/cli/toggle.go` now write status messages through the cobra command's writer (not `os.Stdout`) so tests can capture them. This is a small but important hygiene change for any future CLI test that wants to assert on stdout.
+- `internal/cli/root.go` exposes `ExecuteForTestWithPlatform` so tests can inject fake platforms (fake recorders, fake injectors, fake device listers) without touching the production linux factory. The Phase 6 `ExecuteForTest` becomes a thin wrapper.
+- `internal/config/version.go` ships `Version = "0.1.0-dev"` as a single-source-of-truth string. Distribution CI overrides it via `-ldflags '-X github.com/hybridz/yap/internal/config.Version=...'` once Phase 12 wires release tooling — Phase 7 leaves the constant inline because there is exactly one place to bump on every release.
 
 ---
 

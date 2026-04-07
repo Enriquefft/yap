@@ -10,6 +10,191 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+### Phase 7 — CLI Rework
+
+#### Added
+- `internal/cli/listen.go` ships the new primary command `yap
+  listen`. It owns the wizard-needed-detection, the optional
+  `--foreground` mode (calls `daemon.Run` in-process for systemd /
+  launchd / containers), and the detached spawn path. The detached
+  child is started with `YAP_DAEMON=1` in its environment instead
+  of a hidden `--daemon-run` flag — `cmd/yap/main.go` reads that
+  env sentinel before cobra parses `os.Args` and calls
+  `daemon.Run(...)` directly, keeping the user-visible CLI surface
+  free of any internal bootstrap flag.
+- `internal/cli/record.go` ships `yap record`, a one-shot record →
+  transcribe → transform → inject pipeline that runs without the
+  daemon. Flags:
+  - `--transform` forces the transform stage on for one invocation,
+  - `--out=text` prints the transcribed text to stdout instead of
+    invoking the platform injector,
+  - `--device <name>` overrides `general.audio_device`,
+  - `--max-duration <sec>` overrides `general.max_duration`.
+  The command writes its own PID file to
+  `$XDG_DATA_HOME/yap/yap-record.pid` so `yap stop` and `yap toggle`
+  can target it. SIGINT/SIGTERM cancel the outer context (full
+  pipeline teardown); SIGUSR1 cancels only the per-recording context
+  so the captured audio still flows through the transcribe and
+  inject stages — the same semantic as the daemon's hotkey-release
+  handler. The text-out path is implemented by an in-package
+  `stdoutInjector` that satisfies `inject.Injector` so the engine
+  pipeline stays untouched.
+- `internal/cli/transcribe.go` ships `yap transcribe <file.wav>`. It
+  builds only a Transcriber via `daemon.NewTranscriber` and prints
+  every chunk. Pass `-` to read from stdin; `--json` emits one
+  TranscriptChunk JSON object per chunk.
+- `internal/cli/transform.go` ships `yap transform [text]`. The
+  command runs a single text payload through the configured
+  Transformer and prints the rewritten output. `--backend` forces a
+  specific backend and implicitly enables the transform stage for
+  that invocation; `--system-prompt` overrides the configured prompt;
+  `--stdin` reads the payload from stdin.
+- `internal/cli/paste.go` ships `yap paste [text]`. The command
+  builds only the platform Injector via `daemon.InjectionOptionsFromConfig`
+  and calls Inject. It is the canonical Phase 4 inject-layer debug
+  command.
+- `internal/cli/devices.go` ships `yap devices`. It enumerates audio
+  input devices via the new `platform.DeviceLister` interface and
+  prints them as a table; the system default is marked with an
+  asterisk.
+- `internal/cli/recordpid.go` is the small helper that owns the
+  record PID file's path resolution, atomic write, read, and
+  remove. Centralizing the path constant means a future move
+  changes one line.
+- `internal/cli/oneshot.go` is the small helper that owns
+  `closeIfCloser` (the io.Closer type assertion the one-shot
+  commands use to release whisperlocal-style backends),
+  `readTextInput` (positional arg / stdin resolution), and
+  `openInputFile` (file path / `-` stdin resolution).
+- `internal/platform/platform.go` adds the `Device` struct and
+  `DeviceLister` interface, plus the `Platform.DeviceLister` field.
+- `internal/platform/linux/devices.go` ships `NewDeviceLister`, a
+  PortAudio-backed enumerator that returns every input-capable
+  device with its host API name and a default-input marker. It is
+  wired into `linux.NewPlatform()`.
+- `internal/config/version.go` ships `config.Version =
+  "0.1.0-dev"`. The constant is the single source of truth for the
+  version string reported by `yap status` and the daemon's IPC
+  status response. Distribution CI overrides it via `-ldflags
+  '-X github.com/hybridz/yap/internal/config.Version=...'` once
+  Phase 12 wires release tooling.
+- `internal/cli/root.go` exposes
+  `cli.ExecuteForTestWithPlatform(p, argv, stdout, stderr)` so
+  tests can inject fake platforms (fake recorders, fake injectors,
+  fake device listers) without touching the production linux
+  factory.
+
+#### Changed
+- `internal/daemon/daemon.go` exposes three previously-unexported
+  helpers as public functions so the CLI's one-shot commands can
+  reuse the same on-disk-config-to-runtime bridges instead of
+  duplicating them:
+  - `daemon.NewTranscriber(pcfg.TranscriptionConfig) (transcribe.Transcriber, error)`
+  - `daemon.NewTransformer(pcfg.TransformConfig) (transform.Transformer, error)`
+  - `daemon.InjectionOptionsFromConfig(pcfg.InjectionConfig) platform.InjectionOptions`
+  All internal call sites in `daemon.Run` were updated; behavior is
+  unchanged.
+- `internal/ipc/protocol.go` extends `Response` with optional
+  status fields: `Mode`, `ConfigPath`, `Version`, `PID`, `Backend`,
+  `Model`. Every new field is `omitempty` so non-status responses
+  (toggle, stop) round-trip as the original `{ok,state,error}`
+  triple they always emitted.
+- `internal/ipc/server.go` changes `SetStatusFn`'s callback
+  signature from `func() string` to `func() ipc.Response`. The
+  daemon owns building the full struct because it knows every
+  field; the server stays a transport that forwards the response
+  verbatim. `internal/ipc/server_test.go` was updated to assert on
+  the new shape.
+- `internal/daemon/daemon.go` SetStatusFn callback now returns the
+  full extended Response with `Mode`, `ConfigPath`, `Version`,
+  `PID`, `Backend`, and `Model` populated from the loaded config
+  and the running process.
+- `internal/cli/status.go` prints the daemon's response verbatim
+  (it is already JSON with the extended fields). When the daemon
+  is not running, the local fallback shape now includes
+  `config_path` and `version` so operators can still identify the
+  installation.
+- `internal/cli/stop.go` is extended to also send SIGTERM to a
+  running `yap record` process via its PID file. Both daemon-stop
+  and record-stop are best-effort; the command exits 0 if either
+  was running and prints "No yap daemon or record process running"
+  when neither was. Status messages route through the cobra
+  command's writer (not `os.Stdout`) so tests can capture them.
+- `internal/cli/toggle.go` is extended to fall back to SIGUSR1 on
+  the running `yap record` process when no daemon socket exists.
+  The order of preference is: daemon IPC first, then the record
+  signal path, then exit 1 with `no daemon and no `yap record`
+  process running` if neither exists. SIGUSR1 was chosen to match
+  the record command's signal handler, which cancels only the
+  per-recording context (so transcribe and inject still run on the
+  captured audio). Status messages route through the cobra
+  command's writer for the same reason as `stop`.
+- `internal/cli/root.go` registers the new commands (`listen`,
+  `record`, `transcribe`, `transform`, `paste`, `devices`) and the
+  hidden `start` deprecation alias. The hidden `--daemon-run`
+  persistent flag and its `RunE` branch are gone.
+- `cmd/yap/main.go` is rewritten to handle the `YAP_DAEMON=1` env
+  sentinel before delegating to `cli.Execute()`. When the env var
+  is set the binary calls `daemon.Run(...)` directly and exits;
+  cobra never sees `os.Args` in that path.
+
+#### Removed
+- `internal/cli/start.go` is deleted. The `start` command lives on
+  as a hidden alias inside `internal/cli/listen.go`, registered by
+  `newStartCmd`. The alias prints
+  `yap: 'start' is deprecated; use 'yap listen' instead` to stderr
+  on every invocation and routes into the same `runListen` handler.
+  The alias will be dropped in the next major release.
+- The hidden `--daemon-run` persistent flag is removed from
+  `internal/cli/root.go`. Detached daemon spawning is now handled
+  by the `YAP_DAEMON=1` env sentinel in `cmd/yap/main.go`.
+
+#### Tests
+- `internal/cli/listen_test.go` covers `listen --help` and the
+  hidden `start` alias's deprecation message + Hidden flag.
+- `internal/cli/record_test.go` exercises the happy path (text-out
+  and inject), the recorder failure path, the invalid `--out` flag
+  validation, and the SIGUSR1 path that cancels only the recording
+  context. The tests use a `fakeRecorder` and the `recordingInjector`
+  defined in `paste_test.go` instead of touching real audio
+  hardware or the OS inject layer.
+- `internal/cli/transcribe_test.go` runs the mock transcribe backend
+  end-to-end, validates the JSON output mode, and asserts that an
+  unknown backend produces a clear error.
+- `internal/cli/transform_test.go` runs the passthrough transform
+  backend end-to-end, asserts the disabled-backend fallback still
+  echoes text, and asserts that an unknown backend override
+  produces a clear error.
+- `internal/cli/paste_test.go` exercises the inject path with a
+  `recordingInjector` (the fake `inject.Injector` reused by record
+  tests) and asserts that injector failures surface to the caller.
+- `internal/cli/devices_test.go` exercises the table output, the
+  nil DeviceLister error, and the lister-error pass-through using
+  a `fakeDeviceLister`.
+- `internal/cli/status_test.go` covers the no-daemon fallback shape
+  (asserts JSON parses, ok=false, version present) and the
+  with-daemon happy path (a real `ipc.Server` returning every
+  extended field, asserted through the parsed response).
+- `internal/cli/stop_test.go` exercises the no-op path, the
+  daemon-only path (real ipc.Server), the record-only path (real
+  child sleep process + PID file), and the both-paths-at-once
+  case. A stale PID file is also exercised.
+- `internal/cli/toggle_test.go` exercises the daemon IPC path, the
+  record signal path (real child shell process with a USR1 trap),
+  and the nothing-running error.
+- `internal/ipc/server_test.go` is updated for the new
+  `SetStatusFn` signature and asserts every extended Response
+  field round-trips through `dispatch`.
+- `internal/platform/linux/devices_test.go` asserts that
+  `NewDeviceLister` returns a non-nil lister and that
+  `NewPlatform` wires it into the composition root.
+
+#### Fixed
+- `internal/cli/stop.go` now removes the record PID file
+  immediately after delivering SIGTERM so a follow-up `yap stop`
+  reports correctly without waiting for the child to clear the
+  file itself.
+
 ### Phase 6 — Local Whisper Backend
 
 #### Added

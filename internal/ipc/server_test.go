@@ -134,15 +134,16 @@ func TestSetStatusFn(t *testing.T) {
 	defer os.Remove("/tmp/test-ipc-status.sock")
 
 	called := false
-	srv.SetStatusFn(func() string {
+	srv.SetStatusFn(func() Response {
 		called = true
-		return "idle"
+		return Response{Ok: true, State: "idle"}
 	})
 
 	require.NotNil(t, srv.statusFn)
 
 	result := srv.statusFn()
-	require.Equal(t, "idle", result)
+	require.True(t, result.Ok)
+	require.Equal(t, "idle", result.State)
 	require.True(t, called)
 }
 
@@ -188,13 +189,28 @@ func TestDispatchStatusWithFn(t *testing.T) {
 	defer srv.Close()
 
 	statusCalled := false
-	srv.SetStatusFn(func() string {
+	srv.SetStatusFn(func() Response {
 		statusCalled = true
-		return "recording"
+		return Response{
+			Ok:         true,
+			State:      "recording",
+			Mode:       "hold",
+			ConfigPath: "/tmp/yap.toml",
+			Version:    "0.1.0-test",
+			PID:        4242,
+			Backend:    "mock",
+			Model:      "mock-1",
+		}
 	})
 
 	resp := srv.dispatch(context.Background(), Request{Cmd: CmdStatus})
 	require.True(t, resp.Ok)
 	require.Equal(t, "recording", resp.State)
+	require.Equal(t, "hold", resp.Mode)
+	require.Equal(t, "/tmp/yap.toml", resp.ConfigPath)
+	require.Equal(t, "0.1.0-test", resp.Version)
+	require.Equal(t, 4242, resp.PID)
+	require.Equal(t, "mock", resp.Backend)
+	require.Equal(t, "mock-1", resp.Model)
 	require.True(t, statusCalled)
 }

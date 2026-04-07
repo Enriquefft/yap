@@ -19,12 +19,13 @@ import (
 // per-component factories at session-start time.
 func NewPlatform() platform.Platform {
 	return platform.Platform{
-		NewRecorder: NewRecorder,
-		Chime:       NewChimePlayer(),
-		NewHotkey:   NewHotkey,
-		HotkeyCfg:   NewHotkeyConfig(),
-		NewInjector: newLinuxInjector,
-		Notifier:    NewNotifier(),
+		NewRecorder:  NewRecorder,
+		Chime:        NewChimePlayer(),
+		NewHotkey:    NewHotkey,
+		HotkeyCfg:    NewHotkeyConfig(),
+		NewInjector:  newLinuxInjector,
+		Notifier:     NewNotifier(),
+		DeviceLister: NewDeviceLister(),
 	}
 }
 

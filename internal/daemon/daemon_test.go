@@ -71,7 +71,7 @@ func TestInjectionOptionsFromConfigBridge(t *testing.T) {
 			{Match: "code", Strategy: "clipboard"},
 		},
 	}
-	got := injectionOptionsFromConfig(in)
+	got := InjectionOptionsFromConfig(in)
 	want := platform.InjectionOptions{
 		PreferOSC52:      true,
 		BracketedPaste:   false,
@@ -110,7 +110,7 @@ func TestInjectionOptionsFromConfigEmptyOverrides(t *testing.T) {
 		BracketedPaste:   true,
 		ElectronStrategy: "clipboard",
 	}
-	got := injectionOptionsFromConfig(in)
+	got := InjectionOptionsFromConfig(in)
 	if got.AppOverrides != nil {
 		t.Errorf("AppOverrides = %v, want nil", got.AppOverrides)
 	}

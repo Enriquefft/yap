@@ -13,7 +13,7 @@ type Server struct {
 	ln         net.Listener
 	sockPath   string
 	toggleFn   func() string
-	statusFn   func() string
+	statusFn   func() Response
 	shutdownFn func()
 }
 
@@ -44,9 +44,12 @@ func (s *Server) SetToggleFn(fn func() string) {
 	s.toggleFn = fn
 }
 
-// SetStatusFn sets the status function for querying recording state.
-// Called by daemon to provide callback for status command.
-func (s *Server) SetStatusFn(fn func() string) {
+// SetStatusFn sets the status function for querying daemon state.
+// The callback returns a fully-populated Response (Ok, State, Mode,
+// ConfigPath, Version, PID, Backend, Model) so the server can write
+// it as-is. The daemon owns building this struct because it knows
+// every field; the server stays a transport.
+func (s *Server) SetStatusFn(fn func() Response) {
 	s.statusFn = fn
 }
 
@@ -113,9 +116,18 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 		return Response{Ok: true, State: "stopped"}
 
 	case CmdStatus:
-		// Report daemon status.
+		// Report daemon status. The daemon-supplied callback returns
+		// a fully populated Response; the server forwards it verbatim
+		// so optional fields (Mode, ConfigPath, Version, PID, Backend,
+		// Model) round-trip without the transport reshaping them.
 		if s.statusFn != nil {
-			return Response{Ok: true, State: s.statusFn()}
+			resp := s.statusFn()
+			if !resp.Ok && resp.Error == "" {
+				// Defensive: a status callback that forgets to set
+				// Ok still produces a valid wire shape.
+				resp.Ok = true
+			}
+			return resp
 		}
 		return Response{Ok: true, State: "idle"}
 

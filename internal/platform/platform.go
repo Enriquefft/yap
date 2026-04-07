@@ -119,6 +119,34 @@ type Notifier interface {
 	Notify(title, message string)
 }
 
+// Device describes a single audio input device suitable for use with
+// Recorder. The Name field is the value users supply via
+// general.audio_device in config; Description is a human-readable
+// summary printed by `yap devices`.
+type Device struct {
+	// Name is the canonical device identifier. Empty string never
+	// appears here — the system default is reported via the IsDefault
+	// flag on a real entry.
+	Name string
+	// Description is a short human-readable summary (channel count,
+	// host API name, etc.) used by the `yap devices` table.
+	Description string
+	// IsDefault marks the device the OS reports as the system default
+	// input. Exactly one entry should set this when a default exists.
+	IsDefault bool
+}
+
+// DeviceLister enumerates available audio input devices for the
+// `yap devices` CLI command. Implementations must be safe to call
+// outside the daemon — the CLI invokes them in one-shot mode without
+// holding the audio device.
+type DeviceLister interface {
+	// ListDevices returns every audio input device known to the
+	// platform. The returned slice is sorted by the platform's native
+	// enumeration order; callers may format it however they like.
+	ListDevices() ([]Device, error)
+}
+
 // Platform bundles all platform-specific implementations.
 // Constructed once at startup by the platform factory (e.g. linux.NewPlatform())
 // and injected into the daemon and engine.
@@ -147,4 +175,10 @@ type Platform struct {
 
 	// Notifier sends desktop error notifications.
 	Notifier Notifier
+
+	// DeviceLister enumerates audio input devices for the
+	// `yap devices` CLI command. Optional — platforms that cannot
+	// enumerate devices leave this nil and the CLI surfaces a clear
+	// error to the user.
+	DeviceLister DeviceLister
 }

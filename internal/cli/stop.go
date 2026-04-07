@@ -1,75 +1,131 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"syscall"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/ipc"
 	"github.com/hybridz/yap/internal/pidfile"
-	"github.com/adrg/xdg"
 	"github.com/spf13/cobra"
 )
 
 func newStopCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "stop",
-		Short: "Stop the yap daemon",
+		Short: "stop the yap daemon or an active `yap record`",
+		Long: `stop signals the running yap daemon to shut down cleanly, and
+also signals any running 'yap record' process (identified by its
+yap-record.pid file) to terminate. Either one missing is fine —
+stop exits 0 if anything was stopped.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runStop(cfg)
+			return runStop(cmd.OutOrStdout())
 		},
 	}
 }
 
-// runStop sends IPC stop command and waits for daemon shutdown.
-// DAEMON-02: Graceful shutdown via IPC.
-// DAEMON-04 (via daemon): SIGTERM causes clean shutdown.
-// IPC-03: Exit 0 on success, 1 on error.
-// IPC-04: Handle stale socket gracefully (daemon never started or crashed).
-func runStop(cfg *config.Config) error {
+// runStop is idempotent and best-effort. It stops the daemon (when
+// present) and the standalone `yap record` process (when present) and
+// exits 0 if at least one was running. When nothing was running it
+// still exits 0 so shell pipelines can invoke `yap stop` safely.
+//
+// Status messages are written to out so tests can capture them via
+// the cobra command's writer; runStop never touches os.Stdout.
+func runStop(out io.Writer) error {
+	daemonStopped, dErr := stopDaemon(out)
+	recordStopped, rErr := stopRecord(out)
+
+	if !daemonStopped && !recordStopped {
+		// Nothing to stop. Report clearly but exit 0 so scripts
+		// don't break on repeated invocation.
+		fmt.Fprintln(out, "No yap daemon or record process running")
+	}
+	// Surface the first real error, not the "not running" ones.
+	if dErr != nil {
+		return dErr
+	}
+	if rErr != nil {
+		return rErr
+	}
+	return nil
+}
+
+// stopDaemon runs the daemon-shutdown path. Returns (stopped, err)
+// where stopped is true if the daemon was present and the stop
+// request was acknowledged (IPC or fallback cleanup).
+func stopDaemon(out io.Writer) (bool, error) {
 	pidPath, err := xdg.DataFile("yap/yap.pid")
 	if err != nil {
-		return fmt.Errorf("resolve pid path: %w", err)
+		return false, fmt.Errorf("resolve pid path: %w", err)
 	}
-
 	sockPath, err := xdg.DataFile("yap/yap.sock")
 	if err != nil {
-		return fmt.Errorf("resolve socket path: %w", err)
+		return false, fmt.Errorf("resolve socket path: %w", err)
 	}
 
-	// IPC-04: If socket doesn't exist, daemon is not running (idempotent behavior).
-	if _, err := os.Stat(sockPath); os.IsNotExist(err) {
-		fmt.Printf("Daemon is not running\n")
-		return nil // Exit 0 for idempotency (scripts expect this).
+	if _, err := os.Stat(sockPath); errors.Is(err, os.ErrNotExist) {
+		// Daemon not running — not an error, just nothing to stop.
+		return false, nil
 	}
 
-	// Send IPC stop command (5s timeout per CONTEXT.md).
 	resp, err := ipc.Send(sockPath, ipc.CmdStop, 5*time.Second)
 	if err != nil {
-		// IPC failed — daemon may be hung or crashed.
-		// Try force cleanup: remove PID and socket files.
+		// IPC failed — daemon may be hung. Force cleanup.
 		pidfile.Remove(pidPath)
 		os.Remove(sockPath)
-		fmt.Printf("IPC stop failed; cleaned up stale files\n")
-		return nil // Exit 0 (idempotent).
+		fmt.Fprintln(out, "IPC stop failed; cleaned up stale files")
+		return true, nil
 	}
-
 	if !resp.Ok {
-		return fmt.Errorf("daemon rejected stop command: %s", resp.Error)
+		return true, fmt.Errorf("daemon rejected stop command: %s", resp.Error)
 	}
 
-	// IPC succeeded — poll for PID file removal to confirm shutdown.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if isLive, _ := pidfile.IsLive(pidPath); !isLive {
-			fmt.Printf("Daemon stopped\n")
-			return nil
+			fmt.Fprintln(out, "Daemon stopped")
+			return true, nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	fmt.Fprintln(out, "Warning: Daemon shutdown timeout; PID file still exists")
+	return true, nil
+}
 
-	// Daemon didn't shutdown within 3s — may be hung.
-	fmt.Printf("Warning: Daemon shutdown timeout; PID file still exists\n")
-	return nil // Exit 0 (don't fail; let user retry or force-kill).
+// stopRecord SIGTERMs the standalone `yap record` process, if any.
+// Returns (stopped, err) where stopped is true when the record PID
+// file existed and the signal was delivered successfully.
+func stopRecord(out io.Writer) (bool, error) {
+	pid, err := readRecordPID()
+	if err != nil {
+		return false, fmt.Errorf("record pid: %w", err)
+	}
+	if pid == 0 {
+		return false, nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		// Stale PID file — remove it and keep going.
+		removeRecordPID()
+		return false, nil
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+			removeRecordPID()
+			return false, nil
+		}
+		return false, fmt.Errorf("signal record pid %d: %w", pid, err)
+	}
+	// The signal was delivered to a real, signalable process. The
+	// PID file is no longer authoritative — the child will exit and
+	// the file becomes stale. Remove it now so a follow-up `yap stop`
+	// reports correctly.
+	removeRecordPID()
+	fmt.Fprintln(out, "Record process signalled (SIGTERM)")
+	return true, nil
 }

@@ -54,13 +54,18 @@ func DefaultDeps(p platform.Platform) Deps {
 	}
 }
 
-// newTranscriber bridges the on-disk transcription config into the
+// NewTranscriber bridges the on-disk transcription config into the
 // runtime transcribe.Config and looks up the factory via the registry.
 // pcfg.TranscriptionConfig is the on-disk schema; transcribe.Config
 // is the runtime library contract. Keeping them separate means the
 // public pkg/yap/transcribe surface does not depend on the TOML
 // schema package.
-func newTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error) {
+//
+// NewTranscriber is the single source of truth for "how the daemon
+// turns the on-disk transcription block into a Transcriber". Phase 7
+// exposed it publicly so the CLI's one-shot commands (`yap record`,
+// `yap transcribe`) reuse the same bridge instead of duplicating it.
+func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error) {
 	factory, err := transcribe.Get(tc.Backend)
 	if err != nil {
 		return nil, fmt.Errorf("transcription backend %q: %w", tc.Backend, err)
@@ -77,11 +82,15 @@ func newTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 	})
 }
 
-// newTransformer bridges pcfg.TransformConfig into transform.Config
+// NewTransformer bridges pcfg.TransformConfig into transform.Config
 // and looks up the factory via the registry. When the transform stage
 // is disabled in config, the factory is forced to "passthrough" so
 // the engine pipeline always has a non-nil transformer.
-func newTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
+//
+// NewTransformer is the single source of truth for "how the daemon
+// turns the on-disk transform block into a Transformer". The CLI's
+// one-shot commands (`yap record`, `yap transform`) reuse it.
+func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 	name := tc.Backend
 	if !tc.Enabled || name == "" {
 		name = "passthrough"
@@ -98,12 +107,16 @@ func newTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 	})
 }
 
-// injectionOptionsFromConfig bridges pcfg.InjectionConfig into the
+// InjectionOptionsFromConfig bridges pcfg.InjectionConfig into the
 // runtime platform.InjectionOptions struct. The two types stay
 // separate so the public TOML schema and the internal platform
 // adapter layer can evolve independently — same pattern as the
 // transcribe / transform bridges above.
-func injectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptions {
+//
+// InjectionOptionsFromConfig is the single source of truth for "how
+// the daemon turns the on-disk injection block into the platform
+// runtime options". The CLI's `yap paste` command reuses it.
+func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptions {
 	out := platform.InjectionOptions{
 		PreferOSC52:      ic.PreferOSC52,
 		BracketedPaste:   ic.BracketedPaste,
@@ -228,7 +241,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	defer srv.Close()
 
 	// Build transcribe + transform backends from the registry.
-	transcriber, err := newTranscriber(cfg.Transcription)
+	transcriber, err := NewTranscriber(cfg.Transcription)
 	if err != nil {
 		return fmt.Errorf("build transcriber: %w", err)
 	}
@@ -246,7 +259,7 @@ func Run(cfg *config.Config, deps Deps) error {
 			}
 		}()
 	}
-	transformer, err := newTransformer(cfg.Transform)
+	transformer, err := NewTransformer(cfg.Transform)
 	if err != nil {
 		return fmt.Errorf("build transformer: %w", err)
 	}
@@ -254,14 +267,14 @@ func Run(cfg *config.Config, deps Deps) error {
 	// Build the per-session injector from the bridged Phase 4
 	// InjectionOptions. The platform factory owns its strategy list
 	// and audit logger.
-	injector, err := deps.Platform.NewInjector(injectionOptionsFromConfig(cfg.Injection))
+	injector, err := deps.Platform.NewInjector(InjectionOptionsFromConfig(cfg.Injection))
 	if err != nil {
 		return fmt.Errorf("build injector: %w", err)
 	}
 
 	// Build engine. The constructor rejects nil dependencies — every
 	// stage is required and the daemon supplies a real one. The
-	// passthrough fallback for transformer is owned by newTransformer
+	// passthrough fallback for transformer is owned by NewTransformer
 	// (above), not the engine, keeping the engine free of backend
 	// imports. Notifications are owned by the daemon, not the
 	// engine: startRecording inspects Run's wrapped error and routes
@@ -285,14 +298,35 @@ func Run(cfg *config.Config, deps Deps) error {
 		notifier: deps.Platform.Notifier,
 	}
 
+	// Resolve the on-disk config path so the status response can
+	// surface it to operators. ConfigPath honors $YAP_CONFIG and the
+	// /etc/yap fallback, matching what `yap config path` returns.
+	configPath, err := config.ConfigPath()
+	if err != nil {
+		// Path resolution failures are non-fatal — the daemon can
+		// still serve everything else, the status response just
+		// omits the field.
+		configPath = ""
+	}
+
 	// Wire IPC handlers.
 	srv.SetShutdownFn(stop)
 	srv.SetToggleFn(d.toggleRecording)
-	srv.SetStatusFn(func() string {
+	srv.SetStatusFn(func() ipc.Response {
+		state := "idle"
 		if d.state.isActive() {
-			return "recording"
+			state = "recording"
 		}
-		return "idle"
+		return ipc.Response{
+			Ok:         true,
+			State:      state,
+			Mode:       cfg.General.Mode,
+			ConfigPath: configPath,
+			Version:    config.Version,
+			PID:        os.Getpid(),
+			Backend:    cfg.Transcription.Backend,
+			Model:      cfg.Transcription.Model,
+		}
 	})
 
 	go srv.Serve(ctx)
