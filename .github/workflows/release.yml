@@ -30,7 +30,9 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          files: result/bin/yap
+          files: |
+            result/bin/yap
+            install.sh
           draft: false
           prerelease: false
           generate_release_notes: true

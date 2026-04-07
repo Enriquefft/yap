@@ -1,3 +1,9 @@
 .direnv/
 result
 yap
+
+# Local secrets and workspace state
+.env
+.env.*
+!.env.example
+.claude/

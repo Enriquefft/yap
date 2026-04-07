@@ -2,23 +2,27 @@
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/hybridz/yap/release.yml?style=flat-square)
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)
-![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?style=flat-square&logo=go)
+![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat-square&logo=go)
 ![Release](https://img.shields.io/github/v/release/hybridz/yap?style=flat-square)
 
-Hold key, speak, text appears at cursor.
+Hold a key. Speak. Text appears wherever you're typing.
 
-yap is a lightweight voice-to-text tool that runs as a daemon with near-zero idle footprint. Hold a hotkey to record, release to transcribe, and watch your text appear exactly where you're typing.
+yap is a lightweight voice-to-text daemon with near-zero idle footprint. Its sole job is to let you drive any app — terminals and Claude Code first — with your voice, reliably and fast.
 
-## Why yap?
+> **Status:** pre-1.0. Linux is the current platform. macOS and Windows are on the roadmap. Breaking changes are possible until 1.0.
 
-- **Zero idle footprint** — ~5-10MB RAM when not recording, negligible CPU
-- **Fast transcription** — ~1-2 seconds after you release the key
-- **Single static binary** — No runtime dependencies, just one executable
-- **Privacy-focused** — Audio never leaves your machine without consent
-- **Audio feedback** — Subtle chimes confirm recording state
-- **Clipboard safe** — Your clipboard is preserved after pasting
+## Why yap
 
-## Quick Install
+- **Zero idle footprint** — a few MB of RAM and negligible CPU when not recording.
+- **Fast transcription** — short clips return in roughly a second.
+- **Single binary** — one static executable, no runtime dependencies.
+- **App-aware text injection** — terminals, Electron editors, browsers, tmux, and SSH sessions are first-class targets, not afterthoughts.
+- **Composable primitives** — `Record`, `Transcribe`, `Transform`, `Inject` are independent operations exposed through a public Go library.
+- **Clipboard safe** — your clipboard is preserved across paste operations that need it.
+
+For the full architectural picture, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For where the project is going, see [`ROADMAP.md`](ROADMAP.md).
+
+## Install
 
 ### One-line install (Linux)
 
@@ -26,144 +30,147 @@ yap is a lightweight voice-to-text tool that runs as a daemon with near-zero idl
 curl -fsSL https://yap.sh/install | bash
 ```
 
-### Nix
-
-```bash
-nix profile install github:hybridz/yap
-```
-
 ### Manual download
 
-Download the latest binary from [GitHub Releases](https://github.com/hybridz/yap/releases) and add it to your PATH.
+Grab the latest binary from [GitHub Releases](https://github.com/hybridz/yap/releases) and put it on your `PATH`.
 
-## Getting Started
-
-1. **Start yap** — The daemon runs an interactive first-run wizard on first launch:
-
-   ```bash
-   yap start
-   ```
-
-   The wizard will prompt you for:
-   - Your Groq API key (get it free at [console.groq.com](https://console.groq.com))
-   - Your preferred hotkey (default: Right Ctrl)
-   - Your language preference (default: auto-detect)
-
-2. **Hold your hotkey** — A chime confirms recording has started
-
-3. **Speak** — Talk naturally, no need to rush
-
-4. **Release the hotkey** — Recording stops, a chime confirms completion, and your transcribed text appears at your cursor
-
-## Usage
+### From source
 
 ```bash
-# Start the daemon (runs wizard on first run)
-yap start
-
-# Stop the daemon (idempotent, safe for scripts)
-yap stop
-
-# Check daemon status
-yap status
-
-# Toggle recording (start if idle, stop if recording)
-yap toggle
-
-# Configuration management
-yap config get hotkey
-yap config set hotkey KEY_RIGHTCTRL
-yap config set timeout_seconds 60
-yap config path
-```
-
-## Configuration
-
-Config file location: `~/.config/yap/config.toml`
-
-Example config:
-
-```toml
-# ~/.config/yap/config.toml
-
-api_key = "your-groq-api-key-here"
-hotkey = "KEY_RIGHTCTRL"
-language = "en"
-mic_device = ""
-timeout_seconds = 60
-```
-
-### Environment Variables
-
-- `GROQ_API_KEY` — Groq API key for transcription (overrides config file)
-- `YAP_HOTKEY` — Keyboard key for hold-to-talk (overrides config file)
-
-### First-Run Wizard
-
-On first run without a config, yap launches an interactive setup wizard that:
-
-1. Prompts for your Groq API key (required)
-2. Asks for your preferred hotkey (default: Right Ctrl)
-3. Asks for language preference (default: auto-detect)
-4. Creates `~/.config/yap/config.toml`
-5. Prints "You're ready! Hold [hotkey] to speak."
-
-## Features
-
-- **Daemon mode** — Background process with global hotkey listening
-- **CLI mode** — `yap start`/`yap stop` for external keybind integration
-- **Hold-to-talk** — Record while hotkey is held, stop on release
-- **Audio recording** — Via PortAudio (cross-platform)
-- **Transcription** — Via Groq Whisper API (free tier available)
-- **Paste at cursor** — Platform-native input simulation
-- **Clipboard preservation** — Save and restore clipboard after paste
-- **Audio feedback** — Subtle chime on recording start/stop
-- **Configurable timeout** — Max duration (default: 60s)
-- **Multiple languages** — Support for all Whisper languages
-
-## Platform Status
-
-| Platform | Status | Notes |
-|----------|--------|-------|
-| Linux | Full support | Current stable release |
-| macOS | Planned | Coming soon |
-| Windows | Planned | Coming soon |
-
-## Development
-
-### Build from source
-
-```bash
-# Clone the repository
 git clone https://github.com/hybridz/yap.git
 cd yap
-
-# Build
-make build
-
-# Build static binary
-make build-static
-
-# Run tests
+make build           # dynamic build
+make build-static    # static binary (musl)
 make test
 ```
 
-### Nix development shell
+## Getting Started
+
+The first time you launch the daemon, yap runs an interactive wizard to set up your hotkey, transcription backend, and language preference.
 
 ```bash
-nix develop
+yap listen
 ```
 
-### Contributing
+> The current binary still ships `yap start` as a synonym for `yap listen` while the CLI rework lands. Both work today; new docs and scripts should use `yap listen`.
 
-Contributions are welcome! Please read [LICENSE](LICENSE) (AGPL-3.0) and check [Issues](https://github.com/hybridz/yap/issues) for open work.
+The wizard will ask for:
 
-## Links
+1. Your transcription backend (Groq today, local whisper.cpp once that backend lands).
+2. The API key for the chosen backend, if it's a remote one.
+3. Your preferred hotkey (default: Right Ctrl).
+4. Your language preference (default: auto-detect).
 
-- [GitHub Issues](https://github.com/hybridz/yap/issues)
-- [PRD](PRD.md) — Product Requirements Document
-- [Roadmap](.planning/ROADMAP.md)
+Once it's running:
+
+1. **Hold the hotkey** — a chime confirms recording started.
+2. **Speak** — talk naturally.
+3. **Release the hotkey** — recording stops, a chime confirms, and the transcribed text is injected at your cursor.
+
+## CLI
+
+```bash
+yap listen                       # start the daemon (background, hotkey-driven)
+yap listen --foreground          # foreground mode (systemd, launchd, containers)
+yap stop                         # stop the daemon (idempotent)
+yap status                       # daemon state, mode, version, backend (JSON)
+yap toggle                       # toggle recording from a script or external keybind
+yap config get <key>             # dot-notation: yap config get transcription.backend
+yap config set <key> <value>     # dot-notation
+yap config path                  # print resolved config file path
+```
+
+Additional commands (`yap record`, `yap transcribe`, `yap transform`, `yap paste`, `yap devices`, `yap models`, `yap history`) ship as the corresponding roadmap phases land. See [`ROADMAP.md`](ROADMAP.md).
+
+## Configuration
+
+Config file location: `$XDG_CONFIG_HOME/yap/config.toml` (typically `~/.config/yap/config.toml`).
+
+The schema is nested. Each section has its own well-defined surface:
+
+```toml
+[general]
+hotkey = "KEY_RIGHTCTRL"        # single key today; combos land in a later phase
+mode = "hold"                   # "hold" | "toggle"
+max_duration = 60               # max recording seconds
+audio_feedback = true           # chime on start/stop
+audio_device = ""               # empty = system default
+silence_detection = false
+silence_threshold = 0.02
+silence_duration = 2.0
+history = false
+stream_partials = true
+
+[transcription]
+backend = "groq"                # remote today; "whisperlocal" becomes the default once it ships
+model = "whisper-large-v3"
+language = ""                   # empty = auto-detect
+prompt = ""
+
+# Used by remote backends:
+api_url = ""                    # empty = backend default
+api_key = ""                    # or env: YAP_API_KEY / GROQ_API_KEY
+
+[transform]
+enabled = false
+backend = "passthrough"         # "passthrough" | "local" | "openai"
+model = ""
+system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+api_url = ""
+api_key = ""                    # or env: YAP_TRANSFORM_API_KEY
+
+[injection]
+prefer_osc52 = true             # OSC52 for terminals when supported
+bracketed_paste = true          # wrap multi-line text for shells
+electron_strategy = "clipboard" # "clipboard" | "keystroke"
+# app_overrides = [
+#   { match = "firefox", strategy = "clipboard" },
+#   { match = "kitty",   strategy = "osc52" },
+# ]
+
+[tray]
+enabled = false
+```
+
+The TOML schema, the NixOS module, the wizard prompts, and the validation logic all generate from the same Go types in `pkg/yap/config/`. There is no hand-maintained drift across surfaces.
+
+### Environment Variables
+
+| Variable | Effect |
+|---|---|
+| `YAP_API_KEY` | Sets `transcription.api_key`. Primary, used by remote backends. |
+| `GROQ_API_KEY` | Compat alias for `YAP_API_KEY`. |
+| `YAP_TRANSFORM_API_KEY` | Sets `transform.api_key`. |
+| `YAP_HOTKEY` | Compat alias for `general.hotkey`. |
+| `YAP_CONFIG` | Override config file path. |
+
+## Privacy
+
+yap is designed for local-first transcription. The default backend will be `whisper.cpp` running on your machine, with no network calls and no cloud dependencies.
+
+Until that lands (Phase 6 in [`ROADMAP.md`](ROADMAP.md)), the bootstrap backend is **Groq**, which sends the audio you record to Groq's API for transcription. If you don't want audio leaving your machine, wait for the local backend or bring your own self-hosted OpenAI-compatible endpoint and point `transcription.api_url` at it.
+
+yap has no accounts, no telemetry, no analytics, and no cloud sync. Ever.
+
+## Platform Status
+
+| Platform | Status |
+|---|---|
+| Linux   | Supported. |
+| macOS   | Planned ([`ROADMAP.md`](ROADMAP.md) phase 13). |
+| Windows | Planned ([`ROADMAP.md`](ROADMAP.md) phase 14). |
+
+## Contributing
+
+Issues and PRs are welcome. See [`ROADMAP.md`](ROADMAP.md) for the phased plan and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the design contract any contribution should respect.
 
 ## License
 
-AGPL-3.0 — See [LICENSE](LICENSE) for details.
+[AGPL-3.0](LICENSE).
+
+## Links
+
+- [Architecture](ARCHITECTURE.md)
+- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md)
+- [GitHub Issues](https://github.com/hybridz/yap/issues)
