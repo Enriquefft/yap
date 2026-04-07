@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -14,8 +13,8 @@ import (
 )
 
 // stubHotkeyConfig is a test double for platform.HotkeyConfig.
-// DetectKey always fails (wizard falls through to manual entry).
-// ValidKey accepts any KEY_* name from a small allow list.
+// DetectKey fails so the wizard always falls back to manual entry;
+// ValidKey accepts a small allow list.
 type stubHotkeyConfig struct {
 	detectErr error
 }
@@ -28,9 +27,8 @@ func (s *stubHotkeyConfig) DetectKey(ctx context.Context) (string, error) {
 }
 
 func (s *stubHotkeyConfig) ValidKey(name string) bool {
-	// Accept common evdev key names used in tests.
 	switch name {
-	case "KEY_RIGHTCTRL", "KEY_SPACE", "KEY_A", "KEY_K":
+	case "KEY_RIGHTCTRL", "KEY_SPACE", "KEY_A", "KEY_K", "KEY_LEFTSHIFT":
 		return true
 	}
 	return false
@@ -38,308 +36,243 @@ func (s *stubHotkeyConfig) ValidKey(name string) bool {
 
 func (s *stubHotkeyConfig) ParseKey(name string) (platform.KeyCode, error) {
 	if s.ValidKey(name) {
-		return platform.KeyCode(29), nil // arbitrary code
+		return platform.KeyCode(29), nil
 	}
 	return 0, fmt.Errorf("unknown key %q", name)
 }
 
-// newStubHotkeyCfg returns a HotkeyConfig stub that always fails detection.
 func newStubHotkeyCfg() platform.HotkeyConfig {
 	return &stubHotkeyConfig{detectErr: fmt.Errorf("key detection not available in tests")}
 }
 
-// TestRunWizard_NoConfigPromptsForAPIKey verifies that RunWizard prompts for API key when config file doesn't exist
-func TestRunWizard_NoConfigPromptsForAPIKey(t *testing.T) {
-	// Set up test environment with temp XDG config dir
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	// Mock ConfigPath to return test path
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	// Mock input (gsk_ + 52 alphanumeric chars)
-	input := "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\n" +
-		"KEY_RIGHTCTRL\n" +
-		"en\n"
-	inputReader := strings.NewReader(input)
-
-	// Mock os.Stdin for test
-	origStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	os.Stdin = r
-	go func() {
-		w.WriteString(input)
-		w.Close()
-	}()
-	defer func() { os.Stdin = origStdin }()
-
-	var buf bytes.Buffer
-
-	// Run wizard
-	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
-	// Verify wizard prompted for API key
-	output := buf.String()
-	if !strings.Contains(output, "Welcome to yap") {
-		t.Errorf("Expected welcome message in output, got: %s", output)
-	}
-	if !strings.Contains(output, "Groq API key") {
-		t.Errorf("Expected API key prompt in output, got: %s", output)
-	}
-
-	// Verify config was returned
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	if cfg.APIKey != "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" {
-		t.Errorf("Expected API key to be set, got: %s", cfg.APIKey)
-	}
+// withTestConfigPath temporarily routes ConfigPath to a scratch file.
+// Returns a cleanup callback.
+func withTestConfigPath(t *testing.T, path string) func() {
+	t.Helper()
+	orig := ConfigPath
+	ConfigPath = func() (string, error) { return path, nil }
+	return func() { ConfigPath = orig }
 }
 
-// TestRunWizard_ValidatesAPIKeyFormat verifies that RunWizard validates API key format
-func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
+func TestRunWizard_SectionAwarePrompts(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
 
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	validKey := "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" // valid format: sk- + 48 chars
-
-	if !regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`).MatchString(validKey) {
-		t.Errorf("Test key doesn't match expected format: %s", validKey)
-	}
-
-	// This test verifies the validation logic exists
-	// The actual validation is tested in TestRunWizard_RejectsInvalidAPIKey
-}
-
-// TestRunWizard_PromptsForHotkeyWithDefault verifies that RunWizard prompts for hotkey with default "KEY_RIGHTCTRL"
-func TestRunWizard_PromptsForHotkeyWithDefault(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	input := "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\n" + // valid API key
-		"KEY_RIGHTCTRL\n" + // accept default
-		"en\n" // language
-	inputReader := strings.NewReader(input)
-
-	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	if cfg.Hotkey != "KEY_RIGHTCTRL" {
-		t.Errorf("Expected hotkey KEY_RIGHTCTRL, got: %s", cfg.Hotkey)
-	}
-
-	// Verify default was shown in prompt
-	output := buf.String()
-	if !strings.Contains(output, "KEY_RIGHTCTRL") {
-		t.Errorf("Expected default hotkey in prompt, got: %s", output)
-	}
-}
-
-// TestRunWizard_PromptsForLanguageWithDefault verifies that RunWizard prompts for language with default "en"
-func TestRunWizard_PromptsForLanguageWithDefault(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	input := "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\n" + // valid API key
-		"KEY_RIGHTCTRL\n" + // hotkey
-		"en\n" // accept default
-	inputReader := strings.NewReader(input)
-
-	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	if cfg.Language != "en" {
-		t.Errorf("Expected language en, got: %s", cfg.Language)
-	}
-
-	// Verify default was shown in prompt
-	output := buf.String()
-	if !strings.Contains(output, "en") {
-		t.Errorf("Expected default language in prompt, got: %s", output)
-	}
-}
-
-// TestRunWizard_WritesValidTOMLConfigFile verifies that RunWizard writes valid TOML config file to XDG path
-func TestRunWizard_WritesValidTOMLConfigFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	input := "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\n" + // valid API key
-		"KEY_RIGHTCTRL\n" + // hotkey
-		"en\n" // language
-	inputReader := strings.NewReader(input)
-
-	var buf bytes.Buffer
-	_, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	// Verify config file was created
-	if _, err := os.Stat(testConfigPath); os.IsNotExist(err) {
-		t.Fatalf("Config file was not created at %s", testConfigPath)
-	}
-
-	// Verify config file is valid TOML and contains expected values
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Failed to load created config: %v", err)
-	}
-
-	if cfg.APIKey != "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" {
-		t.Errorf("Expected API key in config, got: %s", cfg.APIKey)
-	}
-
-	if cfg.Hotkey != "KEY_RIGHTCTRL" {
-		t.Errorf("Expected hotkey in config, got: %s", cfg.Hotkey)
-	}
-
-	if cfg.Language != "en" {
-		t.Errorf("Expected language in config, got: %s", cfg.Language)
-	}
-}
-
-// TestRunWizard_RejectsInvalidAPIKey verifies that RunWizard returns error on invalid API key format
-func TestRunWizard_RejectsInvalidAPIKey(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	// Provide invalid API key (wrong format)
-	input := "invalid-key\n" + // invalid API key
-		"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\n" + // valid API key on retry
-		"KEY_RIGHTCTRL\n" +
-		"en\n"
-	inputReader := strings.NewReader(input)
-
-	var buf bytes.Buffer
-	cfg, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
-	// Should eventually succeed after retry
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	// Verify valid key was accepted
-	if cfg.APIKey != "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" {
-		t.Errorf("Expected valid API key after retry, got: %s", cfg.APIKey)
-	}
-
-	// Verify error message was shown
-	output := buf.String()
-	if !strings.Contains(output, "Invalid API key") && !strings.Contains(output, "format") {
-		t.Errorf("Expected validation error message, got: %s", output)
-	}
-}
-
-// TestRunWizard_SkippedWhenEnvVarSet verifies that RunWizard is skipped when GROQ_API_KEY env var is set
-func TestRunWizard_SkippedWhenEnvVarSet(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
-
-	// Set env var to skip wizard
-	testAPIKey := "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"
-	os.Setenv("GROQ_API_KEY", testAPIKey)
-	defer os.Unsetenv("GROQ_API_KEY")
-
-	var buf bytes.Buffer
-	// RunWizard should detect env var and return early
-	cfg, err := RunWizard(nil, &buf, newStubHotkeyCfg())
-
-	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
-	}
-
-	// Verify wizard used env var value
-	if cfg.APIKey != testAPIKey {
-		t.Errorf("Expected API key from env var, got: %s", cfg.APIKey)
-	}
-
-	// Verify wizard was skipped (no prompts shown)
-	output := buf.String()
-	if strings.Contains(output, "Welcome to yap") {
-		t.Errorf("Expected wizard to be skipped, but prompts were shown: %s", output)
-	}
-}
-
-// TestRunWizard_ConfirmsConfigPath verifies that RunWizard confirms config file path after writing
-func TestRunWizard_ConfirmsConfigPath(t *testing.T) {
-	tmpDir := t.TempDir()
-	testConfigPath := filepath.Join(tmpDir, "config.toml")
-
-	origConfigPath := ConfigPath
-	ConfigPath = func() (string, error) {
-		return testConfigPath, nil
-	}
-	defer func() { ConfigPath = origConfigPath }()
+	// Clear env vars so wizard runs full prompts.
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
 
 	input := "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\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
-	inputReader := strings.NewReader(input)
 
 	var buf bytes.Buffer
-	_, err := RunWizard(inputReader, &buf, newStubHotkeyCfg())
-
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
 	if err != nil {
-		t.Fatalf("RunWizard failed: %v", err)
+		t.Fatalf("RunWizard: %v", err)
 	}
 
-	// Verify confirmation message shows config path
 	output := buf.String()
-	if !strings.Contains(output, "Config saved") {
-		t.Errorf("Expected confirmation message, got: %s", output)
+	if !strings.Contains(output, "Welcome to yap") {
+		t.Errorf("expected welcome, got: %s", output)
 	}
-	if !strings.Contains(output, testConfigPath) {
-		t.Errorf("Expected config path in confirmation, got: %s", output)
+	if !strings.Contains(output, "[transcription]") {
+		t.Errorf("expected [transcription] section header in prompts, got: %s", output)
+	}
+	if !strings.Contains(output, "[general]") {
+		t.Errorf("expected [general] section header in prompts, got: %s", output)
+	}
+
+	if cfg.Transcription.APIKey != "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" {
+		t.Errorf("APIKey: %s", cfg.Transcription.APIKey)
+	}
+	if cfg.General.Hotkey != "KEY_RIGHTCTRL" {
+		t.Errorf("Hotkey: %s", cfg.General.Hotkey)
+	}
+	if cfg.Transcription.Language != "en" {
+		t.Errorf("Language: %s", cfg.Transcription.Language)
+	}
+	if cfg.Transcription.Backend != "groq" {
+		t.Errorf("Backend should be groq, got: %s", cfg.Transcription.Backend)
+	}
+}
+
+func TestRunWizard_OffersOnlyGroqBackend(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	input := "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\n" +
+		"KEY_SPACE\n" +
+		"\n"
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+
+	if cfg.Transcription.Backend != "groq" {
+		t.Errorf("wizard should default to groq, got %q", cfg.Transcription.Backend)
+	}
+	if !strings.Contains(buf.String(), "Transcription backend: groq") {
+		t.Errorf("expected single-backend short-circuit message, got: %s", buf.String())
+	}
+}
+
+func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	// First input is invalid; wizard re-prompts and accepts the second.
+	input := "invalid-key\n" +
+		"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\n" +
+		"KEY_RIGHTCTRL\n" +
+		"en\n"
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+	if cfg.Transcription.APIKey != "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" {
+		t.Errorf("expected retry to accept valid key, got %q", cfg.Transcription.APIKey)
+	}
+	if !strings.Contains(buf.String(), "Invalid API key") {
+		t.Errorf("expected validation error in output, got: %s", buf.String())
+	}
+}
+
+func TestRunWizard_WritesNestedTOMLFile(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	input := "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\n" +
+		"KEY_RIGHTCTRL\n" +
+		"en\n"
+
+	var buf bytes.Buffer
+	if _, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg()); err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+
+	data, err := os.ReadFile(cfgFile)
+	if err != nil {
+		t.Fatalf("read wizard output: %v", err)
+	}
+	s := string(data)
+	for _, header := range []string{"[general]", "[transcription]", "[transform]", "[injection]", "[tray]"} {
+		if !strings.Contains(s, header) {
+			t.Errorf("wizard output missing section %s. full:\n%s", header, s)
+		}
+	}
+}
+
+func TestRunWizard_SkippedWhenAPIKeyEnvSet(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	testAPIKey := "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"
+	t.Setenv("YAP_API_KEY", testAPIKey)
+	t.Setenv("GROQ_API_KEY", "")
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(nil, &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+
+	if cfg.Transcription.APIKey != testAPIKey {
+		t.Errorf("Expected API key from env var, got: %s", cfg.Transcription.APIKey)
+	}
+	if strings.Contains(buf.String(), "Welcome to yap") {
+		t.Errorf("wizard should be skipped when env key is set, got: %s", buf.String())
+	}
+	if _, err := os.Stat(cfgFile); err != nil {
+		t.Errorf("wizard should still write a default config file: %v", err)
+	}
+}
+
+func TestRunWizard_SkippedWhenGroqKeyEnvSet(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	testAPIKey := "gsk_legacyAA00000000000000000000000000000000000000000000"
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", testAPIKey)
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(nil, &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+
+	if cfg.Transcription.APIKey != testAPIKey {
+		t.Errorf("GROQ_API_KEY should populate APIKey, got: %s", cfg.Transcription.APIKey)
+	}
+}
+
+func TestRunWizard_ManualHotkeyComboValidation(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	// Enter a combo string; stub validates each segment.
+	input := "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\n" +
+		"KEY_LEFTSHIFT+KEY_SPACE\n" +
+		"en\n"
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+	if cfg.General.Hotkey != "KEY_LEFTSHIFT+KEY_SPACE" {
+		t.Errorf("expected combo hotkey, got %q", cfg.General.Hotkey)
+	}
+}
+
+func TestRunWizard_ManualHotkeyRejectsInvalidSegment(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	// First attempt contains an invalid segment; wizard loops and
+	// accepts the second attempt.
+	input := "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\n" +
+		"KEY_LEFTSHIFT+KEY_BOGUS\n" +
+		"KEY_RIGHTCTRL\n" +
+		"en\n"
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+	if cfg.General.Hotkey != "KEY_RIGHTCTRL" {
+		t.Errorf("expected retried hotkey, got %q", cfg.General.Hotkey)
+	}
+	if !strings.Contains(buf.String(), "Invalid hotkey segment") {
+		t.Errorf("expected validation error, got: %s", buf.String())
 	}
 }

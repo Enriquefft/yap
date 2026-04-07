@@ -1,129 +1,155 @@
+// Package config is a thin shim around pkg/yap/config. The schema and
+// validation live in pkg/yap/config; this package only handles disk I/O,
+// XDG path resolution, the legacy-flat-to-nested migration, and the
+// /etc/yap/config.toml fallback that the NixOS module relies on.
 package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
+	pcfg "github.com/hybridz/yap/pkg/yap/config"
 )
 
-// Config holds all yap configuration. Passed via dependency injection — never stored globally.
-type Config struct {
-	APIKey         string `toml:"api_key"`
-	Hotkey         string `toml:"hotkey"`
-	Language       string `toml:"language"`
-	MicDevice      string `toml:"mic_device"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
-}
+// Config is the on-disk configuration document. It is a type alias for
+// pkg/yap/config.Config so callers may use either package without a
+// conversion. The shape lives in pkg/yap/config; do not redefine here.
+type Config = pcfg.Config
 
-// defaults returns a Config with safe defaults for a missing config file.
-func defaults() Config {
-	return Config{
-		Hotkey:         "KEY_RIGHTCTRL",
-		Language:       "en",
-		TimeoutSeconds: 60,
-	}
-}
+// systemConfigPath is the location written by the NixOS module. The
+// user-level XDG file always takes precedence; this is only consulted
+// when the user has not run the wizard yet.
+const systemConfigPath = "/etc/yap/config.toml"
 
-// ConfigPath returns the XDG-compliant path to the config file.
-// Uses adrg/xdg — NOT os.UserConfigDir() which has a known XDG_CONFIG_HOME bug (Go issue #76320).
-// xdg.Reload() is called to re-read the current environment (adrg/xdg caches dirs in init()).
-// Declared as a variable so tests can substitute it.
+// ConfigPath resolves the config file path with this precedence:
+//
+//  1. $YAP_CONFIG (explicit override; used in tests and alternate profiles)
+//  2. $XDG_CONFIG_HOME/yap/config.toml (user-level, via adrg/xdg) — if it exists
+//  3. /etc/yap/config.toml (system-level, written by the NixOS module) — if it exists
+//  4. The XDG user path (used as the default Save target on first run)
+//
+// xdg.Reload() is called so the function honors XDG_CONFIG_HOME changes
+// made after process start (the adrg/xdg library caches resolved
+// directories at init time).
+//
+// ConfigPath is a package-level var so the wizard tests can replace it.
+// New code should not introduce additional package-level mutable state.
 var ConfigPath = func() (string, error) {
+	if p := os.Getenv(pcfg.EnvConfig); p != "" {
+		return p, nil
+	}
 	xdg.Reload()
-	return xdg.ConfigFile("yap/config.toml")
+	user, err := xdg.ConfigFile("yap/config.toml")
+	if err != nil {
+		return "", err
+	}
+	if _, statErr := os.Stat(user); statErr == nil {
+		return user, nil
+	}
+	if _, statErr := os.Stat(systemConfigPath); statErr == nil {
+		return systemConfigPath, nil
+	}
+	return user, nil
 }
 
-// Load reads the config file, applies defaults for missing keys, and applies env var overrides.
-// A missing config file is NOT an error — it returns defaults.
+// Load reads the config file, applies defaults for missing keys, runs
+// the legacy-flat-to-nested migration if needed, and applies env var
+// overrides. Deprecation notices and unknown-key warnings are written
+// to os.Stderr.
+//
+// A missing config file is NOT an error: Load returns the default
+// config with env overrides applied. This handles the first-run
+// scenario before the wizard creates a file.
 func Load() (Config, error) {
-	cfg := defaults()
+	return LoadWithNotices(os.Stderr)
+}
+
+// LoadWithNotices is Load with an explicit notice writer. The daemon
+// and the CLI use Load (which writes to stderr); tests capture notices
+// by passing a *bytes.Buffer. This is the constructor-injection point
+// for migration messages — no package-level writer variable.
+func LoadWithNotices(notices io.Writer) (Config, error) {
+	cfg := pcfg.DefaultConfig()
 
 	configPath, err := ConfigPath()
 	if err != nil {
 		return cfg, fmt.Errorf("xdg config path: %w", err)
 	}
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Missing config file — return defaults, not an error.
-		// This handles first-run scenario before the wizard creates a config.
-		applyEnvOverrides(&cfg)
-		return cfg, nil
-	}
-
-	md, err := toml.DecodeFile(configPath, &cfg)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return cfg, fmt.Errorf("parse config %s: %w", configPath, err)
+		if os.IsNotExist(err) {
+			pcfg.ApplyEnvOverrides(&cfg)
+			return cfg, nil
+		}
+		return cfg, fmt.Errorf("read config %s: %w", configPath, err)
 	}
 
-	// Warn about unrecognized keys (non-fatal).
-	for _, key := range md.Undecoded() {
-		fmt.Fprintf(os.Stderr, "yap: warning: unknown config key: %s\n", key)
+	cfg, err = decodeAndMigrate(notices, configPath, data, cfg)
+	if err != nil {
+		return cfg, err
 	}
 
-	applyEnvOverrides(&cfg)
+	pcfg.ApplyEnvOverrides(&cfg)
 	return cfg, nil
 }
 
-// applyEnvOverrides applies environment variable overrides after TOML decode.
-// GROQ_API_KEY overrides api_key; YAP_HOTKEY overrides hotkey.
-func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("GROQ_API_KEY"); v != "" {
-		cfg.APIKey = v
-	}
-	if v := os.Getenv("YAP_HOTKEY"); v != "" {
-		cfg.Hotkey = v
-	}
-}
-
-// Save atomically writes the config to the config file.
-// Pattern: Write to temp file → sync → rename (atomic, prevents corruption).
+// Save atomically writes cfg to the user-level config path. Save
+// always writes to the user XDG path, never to /etc/yap (the system
+// path is for NixOS-managed installs).
 func Save(cfg Config) error {
-	configPath, err := ConfigPath()
+	configPath, err := userConfigPath()
 	if err != nil {
 		return fmt.Errorf("xdg config path: %w", err)
 	}
 
-	// Create parent directories if they don't exist
 	configDir := filepath.Dir(configPath)
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	// Create temp file in same directory (same filesystem for atomic rename)
 	tempFile, err := os.CreateTemp(configDir, "yap-config-*.toml")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tempPath := tempFile.Name()
 
-	// Encode config to temp file
 	if err := toml.NewEncoder(tempFile).Encode(cfg); err != nil {
 		tempFile.Close()
 		os.Remove(tempPath)
 		return fmt.Errorf("encode config: %w", err)
 	}
 
-	// Sync temp file to disk
 	if err := tempFile.Sync(); err != nil {
 		tempFile.Close()
 		os.Remove(tempPath)
 		return fmt.Errorf("sync temp file: %w", err)
 	}
 
-	// Close temp file
 	if err := tempFile.Close(); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
-	// Atomic rename temp file to config file
 	if err := os.Rename(tempPath, configPath); err != nil {
 		os.Remove(tempPath)
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 
 	return nil
+}
+
+// userConfigPath resolves the user-level XDG config path, ignoring the
+// /etc/yap fallback. Used by Save which must never overwrite the
+// system-managed file.
+func userConfigPath() (string, error) {
+	if p := os.Getenv(pcfg.EnvConfig); p != "" {
+		return p, nil
+	}
+	xdg.Reload()
+	return xdg.ConfigFile("yap/config.toml")
 }

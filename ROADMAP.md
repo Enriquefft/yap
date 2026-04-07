@@ -11,7 +11,7 @@
 |---|-------|--------|
 | 0 | Cleanup & Debt | done |
 | 1 | Platform Abstraction | done |
-| 2 | Config Rework | pending |
+| 2 | Config Rework | done |
 | 3 | Library Extraction (`pkg/yap/`) | pending |
 | 4 | Text Injection Overhaul | pending |
 | 5 | Streaming Pipeline | pending |
@@ -79,29 +79,53 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 2 — Config Rework
+## Phase 2 — Config Rework — DONE
 
 **Depends on:** Phase 1
-**Current state:** flat 5-field struct in `internal/config/config.go`; `internal/transcribe/` has hardcoded `apiURL`/`model`; flat-key-only `config get/set`.
 
-- [ ] Move config types to `pkg/yap/config/` (no circular dependency for Phase 3)
-- [ ] Rewrite `Config` into nested `General`, `Transcription`, `Transform`, `Injection`, `Tray` sections
-- [ ] Add every field up front (including `silence_*`, `injection.*`, `tray.*`, `transcription.backend`, `stream_partials`)
-- [ ] Rename `timeout_seconds` → `max_duration`, `mic_device` → `audio_device`
-- [ ] Wire env var overrides: `YAP_API_KEY` (primary), `GROQ_API_KEY` (compat), `YAP_TRANSFORM_API_KEY`, `YAP_HOTKEY` (compat)
-- [ ] `yap config get/set` accepts dot-notation (e.g. `transcription.backend`)
-- [ ] `internal/config/migrate.go` — auto-migrate flat → nested on first save with one-line notice
-- [ ] Update wizard for section-aware prompts
-- [ ] Regenerate `nixosModules.nix` from the nested types (no hand-maintained drift)
-- [ ] Validation: hotkey via `HotkeyConfig.ValidKey`, `max_duration` ∈ [1, 300], backend in allowed set, URL well-formed when remote, `transform.model` non-empty when `transform.enabled = true`
+- [x] Move config types to `pkg/yap/config/` (no circular dependency for Phase 3)
+- [x] Rewrite `Config` into nested `General`, `Transcription`, `Transform`, `Injection`, `Tray` sections
+- [x] Add every field up front (including `silence_*`, `injection.*`, `tray.*`, `transcription.backend`, `stream_partials`)
+- [x] Rename `timeout_seconds` → `max_duration`, `mic_device` → `audio_device`
+- [x] Wire env var overrides: `YAP_API_KEY` (primary), `GROQ_API_KEY` (compat), `YAP_TRANSFORM_API_KEY`, `YAP_HOTKEY` (compat)
+- [x] `yap config get/set` accepts dot-notation (e.g. `transcription.backend`)
+- [x] `internal/config/migrate.go` — auto-migrate flat → nested on next Load with one-line notice
+- [x] Update wizard for section-aware prompts
+- [x] Regenerate `nixosModules.nix` from the nested types (no hand-maintained drift)
+- [x] Validation: hotkey via `HotkeyConfig.ValidKey`, `max_duration` ∈ [1, 300], backend in allowed set, URL well-formed when remote, `transform.model` non-empty when `transform.enabled = true`
 
 **Done when:**
-- [ ] Fresh install produces a `config.toml` with all five sections
-- [ ] Existing flat config loads, migrates on next save, preserves original keys
-- [ ] `yap config set transform.enabled true` writes the nested value
-- [ ] `YAP_API_KEY` and `GROQ_API_KEY` both override `transcription.api_key`
-- [ ] No hardcoded `apiURL` or `model` left in `internal/transcribe/`
-- [ ] `nixosModules.nix` accepts every key the TOML schema accepts
+- [x] Fresh install produces a `config.toml` with all five sections
+- [x] Existing flat config loads, migrates on next save, preserves original keys
+- [x] `yap config set transform.enabled true` writes the nested value
+- [x] `YAP_API_KEY` and `GROQ_API_KEY` both override `transcription.api_key`
+- [x] No hardcoded `apiURL` or `model` left in `internal/transcribe/`
+- [x] `nixosModules.nix` accepts every key the TOML schema accepts
+
+### Findings
+
+- **`/etc/yap/config.toml` fallback** was added to `internal/config.ConfigPath()`
+  so the regenerated NixOS module can deliver system-wide configuration via
+  `environment.etc."yap/config.toml".source`. Precedence:
+  `$YAP_CONFIG` > `~/.config/yap/config.toml` > `/etc/yap/config.toml` > defaults.
+  `config.Save()` always writes to the user XDG path so the system file is
+  never clobbered by CLI mutations.
+- **Package-level mutable state was eliminated from `internal/transcribe/`.**
+  A new `noglobals_test.go` AST guard walks the production `.go` files and
+  fails the build if any of `apiURL`, `model`, `clientTimeout`, or
+  `notifyFn` ever reappears as a package-level var. Every test constructs
+  a fresh `Options` payload via `httptest.NewServer` — no global swaps.
+- **Migration notice uses `sync.Once`** with a writer injected via
+  `LoadWithNotices(io.Writer)`. Tests reset the once-guard via
+  `config.ResetMigrationNoticeForTest()` (exposed through `export_test.go`).
+- **Wizard backend list is gated** by a single-line `wizardOfferedBackends`
+  constant. Phase 6 flips it to include `"whisperlocal"`; the validator
+  already accepts every backend defined in `ValidBackends()`.
+- **`gen-nixos` tool** lives in `internal/cmd/gen-nixos/`. It reads the
+  `yap:"..."` struct tags via reflection, renders a `text/template`
+  source, and a golden-file test (`main_test.go`) fails the build if the
+  committed `nixosModules.nix` drifts from the generator output. Run
+  `go generate ./pkg/yap/config/...` after any schema change.
 
 ---
 

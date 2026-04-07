@@ -2,59 +2,49 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/hybridz/yap/internal/config"
+	pcfg "github.com/hybridz/yap/pkg/yap/config"
 	"github.com/spf13/cobra"
 )
 
-func newConfigGetCmd(cfg *config.Config) *cobra.Command {
+// newConfigGetCmd constructs the `yap config get <key>` subcommand.
+//
+// Keys are dot-notation paths into the nested schema defined in
+// pkg/yap/config, e.g. `transcription.backend`, `general.hotkey`,
+// `injection.app_overrides.0.match`.
+//
+// The rootCfg pointer is unused here — each invocation loads a fresh
+// Config so env overrides and file edits land immediately.
+func newConfigGetCmd(_ *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <key>",
 		Short: "Get a configuration value",
-		Long: `Get a configuration value. Available keys:
-  api_key         - Groq API key for transcription
-  hotkey          - Keyboard key for hold-to-talk
-  language        - Language code for transcription
-  mic_device      - Specific microphone device
-  timeout_seconds - Recording timeout in seconds`,
+		Long: `Get a configuration value by dot-notation path.
+
+Examples:
+  yap config get general.hotkey
+  yap config get transcription.backend
+  yap config get transform.enabled
+  yap config get injection.electron_strategy
+  yap config get injection.app_overrides.0.match
+
+Section-level paths (e.g. "general") return a struct summary; drill
+down to a leaf to get the exact value.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 
-			// Validate key
-			validKeys := map[string]bool{
-				"api_key":         true,
-				"hotkey":          true,
-				"language":        true,
-				"mic_device":      true,
-				"timeout_seconds": true,
-			}
-
-			if !validKeys[key] {
-				return fmt.Errorf("invalid key %q. Valid keys: api_key, hotkey, language, mic_device, timeout_seconds", key)
-			}
-
-			// Load config
-			loadedCfg, err := config.Load()
+			loaded, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			// Print value based on key
-			switch key {
-			case "api_key":
-				fmt.Fprintln(os.Stdout, loadedCfg.APIKey)
-			case "hotkey":
-				fmt.Fprintln(os.Stdout, loadedCfg.Hotkey)
-			case "language":
-				fmt.Fprintln(os.Stdout, loadedCfg.Language)
-			case "mic_device":
-				fmt.Fprintln(os.Stdout, loadedCfg.MicDevice)
-			case "timeout_seconds":
-				fmt.Fprintln(os.Stdout, loadedCfg.TimeoutSeconds)
+			value, err := pcfg.Get(&loaded, key)
+			if err != nil {
+				return err
 			}
-
+			fmt.Fprintln(cmd.OutOrStdout(), value)
 			return nil
 		},
 	}

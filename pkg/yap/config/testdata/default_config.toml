@@ -1,0 +1,36 @@
+[general]
+  hotkey = "KEY_RIGHTCTRL"
+  mode = "hold"
+  max_duration = 60
+  audio_feedback = true
+  audio_device = ""
+  silence_detection = false
+  silence_threshold = 0.02
+  silence_duration = 2.0
+  history = false
+  stream_partials = true
+
+[transcription]
+  backend = "groq"
+  model = "whisper-large-v3-turbo"
+  model_path = ""
+  language = "en"
+  prompt = ""
+  api_url = ""
+  api_key = ""
+
+[transform]
+  enabled = false
+  backend = "passthrough"
+  model = ""
+  system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+  api_url = ""
+  api_key = ""
+
+[injection]
+  prefer_osc52 = true
+  bracketed_paste = true
+  electron_strategy = "clipboard"
+
+[tray]
+  enabled = false

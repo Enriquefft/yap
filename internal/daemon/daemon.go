@@ -17,35 +17,54 @@ import (
 	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/hybridz/yap/internal/platform"
 	"github.com/hybridz/yap/internal/transcribe"
+	pcfg "github.com/hybridz/yap/pkg/yap/config"
 )
 
-// transcribeAdapter wraps transcribe.Transcribe to implement engine.Transcriber.
-type transcribeAdapter struct{}
+// transcribeAdapter wraps transcribe.Transcribe to implement
+// engine.Transcriber. Options are captured at construction time so
+// the engine sees an API that matches its batch interface, while the
+// underlying call receives the full Options payload.
+type transcribeAdapter struct {
+	opts transcribe.Options
+}
 
-func (transcribeAdapter) Transcribe(ctx context.Context, apiKey string, wavData []byte, language string) (string, error) {
-	return transcribe.Transcribe(ctx, apiKey, wavData, language)
+func (a transcribeAdapter) Transcribe(ctx context.Context, apiKey string, wavData []byte, language string) (string, error) {
+	return transcribe.Transcribe(ctx, a.opts, apiKey, wavData, language)
+}
+
+// newTranscribeAdapter builds an engine.Transcriber from the
+// transcription section of cfg. The HTTP client is left nil so the
+// transcribe package constructs one with opts.Timeout.
+func newTranscribeAdapter(tc pcfg.TranscriptionConfig) engine.Transcriber {
+	return transcribeAdapter{
+		opts: transcribe.Options{
+			APIURL:  tc.ResolvedAPIURL(),
+			Model:   tc.Model,
+			Timeout: pcfg.DefaultTimeout,
+		},
+	}
 }
 
 // Deps holds all injectable dependencies for the daemon.
 // Use DefaultDeps for production; substitute fields in tests.
 type Deps struct {
-	Platform     platform.Platform
-	Transcriber  engine.Transcriber
-	XDGDataFile  func(string) (string, error)
-	PIDWrite     func(string) error
-	PIDRemove    func(string)
-	NewIPCServer func(string) (*ipc.Server, error)
+	Platform        platform.Platform
+	NewTranscriber  func(pcfg.TranscriptionConfig) engine.Transcriber
+	XDGDataFile     func(string) (string, error)
+	PIDWrite        func(string) error
+	PIDRemove       func(string)
+	NewIPCServer    func(string) (*ipc.Server, error)
 }
 
 // DefaultDeps returns production dependencies for the given platform.
 func DefaultDeps(p platform.Platform) Deps {
 	return Deps{
-		Platform:     p,
-		Transcriber:  transcribeAdapter{},
-		XDGDataFile:  xdg.DataFile,
-		PIDWrite:     pidfile.Write,
-		PIDRemove:    pidfile.Remove,
-		NewIPCServer: ipc.NewServer,
+		Platform:       p,
+		NewTranscriber: newTranscribeAdapter,
+		XDGDataFile:    xdg.DataFile,
+		PIDWrite:       pidfile.Write,
+		PIDRemove:      pidfile.Remove,
+		NewIPCServer:   ipc.NewServer,
 	}
 }
 
@@ -115,7 +134,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	defer deps.PIDRemove(pidPath)
 
 	// Create recorder for this session.
-	rec, err := deps.Platform.NewRecorder(cfg.MicDevice)
+	rec, err := deps.Platform.NewRecorder(cfg.General.AudioDevice)
 	if err != nil {
 		return fmt.Errorf("init audio: %w", err)
 	}
@@ -127,9 +146,9 @@ func Run(cfg *config.Config, deps Deps) error {
 	defer stop()
 
 	// Parse hotkey code from config.
-	hotkeyCode, err := deps.Platform.HotkeyCfg.ParseKey(cfg.Hotkey)
+	hotkeyCode, err := deps.Platform.HotkeyCfg.ParseKey(cfg.General.Hotkey)
 	if err != nil {
-		return fmt.Errorf("invalid hotkey %q: %w", cfg.Hotkey, err)
+		return fmt.Errorf("invalid hotkey %q: %w", cfg.General.Hotkey, err)
 	}
 
 	// Initialize hotkey listener.
@@ -155,14 +174,15 @@ func Run(cfg *config.Config, deps Deps) error {
 	defer srv.Close()
 
 	// Build engine.
+	transcriber := deps.NewTranscriber(cfg.Transcription)
 	eng := engine.New(
 		rec,
 		deps.Platform.Chime,
 		deps.Platform.Paster,
 		deps.Platform.Notifier,
-		deps.Transcriber,
-		cfg.APIKey,
-		cfg.Language,
+		transcriber,
+		cfg.Transcription.APIKey,
+		cfg.Transcription.Language,
 	)
 
 	d := &Daemon{
@@ -183,7 +203,7 @@ func Run(cfg *config.Config, deps Deps) error {
 
 	go srv.Serve(ctx)
 
-	timeoutSec := cfg.TimeoutSeconds
+	timeoutSec := cfg.General.MaxDuration
 	if timeoutSec == 0 {
 		timeoutSec = 60
 	}
@@ -225,7 +245,7 @@ func (d *Daemon) toggleRecording() string {
 		return "idle"
 	}
 
-	timeoutSec := d.cfg.TimeoutSeconds
+	timeoutSec := d.cfg.General.MaxDuration
 	if timeoutSec == 0 {
 		timeoutSec = 60
 	}

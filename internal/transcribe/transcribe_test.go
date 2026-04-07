@@ -1,69 +1,111 @@
-package transcribe
+package transcribe_test
 
 import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hybridz/yap/internal/transcribe"
 )
 
-// TestModelParam verifies multipart request always includes model=whisper-large-v3-turbo (TRANS-01)
+// newTestOptions returns Options pointing at srv with safe defaults.
+// Tests that need a different Model/Timeout mutate the returned value.
+func newTestOptions(srv *httptest.Server) transcribe.Options {
+	return transcribe.Options{
+		APIURL:  srv.URL,
+		Model:   "whisper-large-v3-turbo",
+		Timeout: 30 * time.Second,
+		Client:  srv.Client(),
+	}
+}
+
 func TestModelParam(t *testing.T) {
 	receivedModel := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Parse multipart form to check model parameter
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(32 << 20); err != nil {
-			t.Fatalf("Failed to parse multipart form: %v", err)
+			t.Fatalf("parse multipart form: %v", err)
 		}
 		receivedModel = r.FormValue("model")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test transcription"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	// Override API URL for test
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("fake wav data"), "en")
 	if err != nil {
-		t.Fatalf("Transcribe failed: %v", err)
+		t.Fatalf("Transcribe: %v", err)
 	}
-
 	if receivedModel != "whisper-large-v3-turbo" {
-		t.Errorf("got model %q, want %q", receivedModel, "whisper-large-v3-turbo")
+		t.Errorf("got model %q, want whisper-large-v3-turbo", receivedModel)
 	}
 }
 
-// TestMultipartForm verifies request includes file field named "file" with filename "audio.wav" (TRANS-02)
+func TestModelParam_CustomModel(t *testing.T) {
+	var receivedModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			t.Fatal(err)
+		}
+		receivedModel = r.FormValue("model")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"text": "ok"}`)
+	}))
+	defer srv.Close()
+
+	opts := newTestOptions(srv)
+	opts.Model = "custom-model-name"
+	_, err := transcribe.Transcribe(context.Background(), opts, "test-key", []byte("wav"), "en")
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if receivedModel != "custom-model-name" {
+		t.Errorf("got model %q, want custom-model-name", receivedModel)
+	}
+}
+
+func TestAPIURLOverride_PostedHere(t *testing.T) {
+	// Proves that the package uses Options.APIURL, not a package-
+	// level default. If the package were still reading a global,
+	// httptest.NewServer's URL would be ignored.
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"text": "hit"}`)
+	}))
+	defer srv.Close()
+
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "key", []byte("wav"), "en")
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if !hit {
+		t.Error("request did not reach httptest server — Options.APIURL not honored")
+	}
+}
+
 func TestMultipartForm(t *testing.T) {
 	var gotFilename string
 	var gotLanguage string
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Parse multipart form
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reader, err := r.MultipartReader()
 		if err != nil {
-			t.Fatalf("Failed to get multipart reader: %v", err)
+			t.Fatalf("multipart reader: %v", err)
 		}
-
 		for {
 			part, err := reader.NextPart()
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				t.Fatalf("Failed to read part: %v", err)
+				t.Fatalf("next part: %v", err)
 			}
-
 			switch part.FormName() {
 			case "file":
 				gotFilename = part.FileName()
@@ -72,350 +114,251 @@ func TestMultipartForm(t *testing.T) {
 				gotLanguage = string(lang)
 			}
 		}
-
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("fake wav data"), "en")
 	if err != nil {
-		t.Fatalf("Transcribe failed: %v", err)
+		t.Fatalf("Transcribe: %v", err)
 	}
-
 	if gotFilename != "audio.wav" {
-		t.Errorf("got filename %q, want %q", gotFilename, "audio.wav")
+		t.Errorf("filename: got %q, want audio.wav", gotFilename)
 	}
 	if gotLanguage != "en" {
-		t.Errorf("got language %q, want %q", gotLanguage, "en")
+		t.Errorf("language: got %q, want en", gotLanguage)
 	}
 }
 
-// TestHTTPTimeout verifies client has 30-second timeout (TRANS-03)
 func TestHTTPTimeout(t *testing.T) {
-	// Use a server that takes longer than the timeout
 	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		time.Sleep(200 * time.Millisecond) // Longer than test timeout
+		time.Sleep(200 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
+	// Supply our own client with a short timeout so we exercise the
+	// timeout path without waiting 30 seconds.
+	opts := transcribe.Options{
+		APIURL: srv.URL,
+		Model:  "whisper-large-v3-turbo",
+		Client: &http.Client{Timeout: 50 * time.Millisecond},
+	}
 
-	// Override client timeout for test (normally 30s)
-	oldClientTimeout := clientTimeout
-	clientTimeout = 50 * time.Millisecond
-	defer func() { clientTimeout = oldClientTimeout }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), opts, "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Error("Expected timeout error, got nil")
+		t.Error("expected timeout error, got nil")
 	}
-
-	// Should have made attempts (timeout triggers retries, with backoff)
-	// With 50ms timeout and 200ms server sleep, each request times out after 50ms
-	// Then backoff: 50ms, 100ms, 200ms = total ~1s for 4 attempts
 	if requestCount < 1 {
-		t.Errorf("Expected at least 1 HTTP request, got %d", requestCount)
-	}
-
-	// Verify the timeout was actually used (error should contain timeout-related info)
-	if !strings.Contains(strings.ToLower(err.Error()), "timeout") && !strings.Contains(strings.ToLower(err.Error()), "deadline") {
-		t.Logf("Error: %v", err) // Just log it, don't fail - timeout errors vary
+		t.Errorf("expected at least 1 HTTP request, got %d", requestCount)
 	}
 }
 
-// TestRetryClassification_4xx verifies HTTP 401 results in immediate error, no retry (TRANS-04)
 func TestRetryClassification_4xx(t *testing.T) {
 	callCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `{"error": {"message": "invalid API key", "type": "authentication_error"}}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for 401, got nil")
+		t.Fatal("expected error for 401, got nil")
 	}
-
 	if callCount != 1 {
-		t.Errorf("got %d HTTP calls for 401 error, want 1 (no retry)", callCount)
+		t.Errorf("got %d calls, want 1 (no retry on 4xx)", callCount)
 	}
-
-	// Verify error contains API message
 	if !strings.Contains(err.Error(), "invalid API key") {
 		t.Errorf("error should contain API message, got: %v", err)
 	}
 }
 
-// TestRetryClassification_5xx verifies HTTP 503 triggers up to 3 retries (TRANS-04)
 func TestRetryClassification_5xx(t *testing.T) {
 	callCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, `{"error": {"message": "service unavailable", "type": "server_error"}}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for 503, got nil")
+		t.Fatal("expected 503 error, got nil")
 	}
-
 	if callCount != 4 {
-		t.Errorf("got %d HTTP calls for 503 error, want 4 (initial + 3 retries)", callCount)
+		t.Errorf("got %d calls, want 4 (initial + 3 retries)", callCount)
 	}
 }
 
-// TestRetryClassification_timeout verifies HTTP client timeout treated as retryable (TRANS-04)
-func TestRetryClassification_timeout(t *testing.T) {
+func TestRetryClassification_Timeout(t *testing.T) {
 	callCount := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		// Sleep longer than the HTTP client timeout
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	// Set a very short HTTP client timeout (not context timeout)
-	oldClientTimeout := clientTimeout
-	clientTimeout = 50 * time.Millisecond
-	defer func() { clientTimeout = oldClientTimeout }()
-
-	// Use a background context (no timeout)
-	ctx := context.Background()
-
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
-	if err == nil {
-		t.Fatal("Expected timeout error, got nil")
+	opts := transcribe.Options{
+		APIURL: srv.URL,
+		Model:  "whisper-large-v3-turbo",
+		Client: &http.Client{Timeout: 50 * time.Millisecond},
 	}
 
-	// Should retry on HTTP client timeout
+	_, err := transcribe.Transcribe(context.Background(), opts, "test-key", []byte("wav"), "en")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
 	if callCount < 2 {
-		t.Errorf("got %d HTTP calls for timeout, want >= 2 (retries occurred)", callCount)
+		t.Errorf("got %d calls, want >= 2 (timeout retried)", callCount)
 	}
 }
 
-// TestAPIKey verifies Authorization header contains "Bearer {apiKey}" (TRANS-05)
 func TestAPIKey(t *testing.T) {
 	var gotAuthHeader string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuthHeader = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
 	testKey := "gsk_test_api_key_12345"
-
-	_, err := Transcribe(ctx, testKey, wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), testKey, []byte("wav"), "en")
 	if err != nil {
-		t.Fatalf("Transcribe failed: %v", err)
+		t.Fatalf("Transcribe: %v", err)
 	}
-
-	expectedAuth := "Bearer " + testKey
-	if gotAuthHeader != expectedAuth {
-		t.Errorf("got Authorization header %q, want %q", gotAuthHeader, expectedAuth)
+	want := "Bearer " + testKey
+	if gotAuthHeader != want {
+		t.Errorf("auth header: got %q, want %q", gotAuthHeader, want)
 	}
 }
 
-// TestSuccessResponse verifies JSON {"text":"hello"} returns "hello", nil (TRANS-01)
 func TestSuccessResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "hello world"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	result, err := Transcribe(ctx, "test-key", wavData, "en")
+	result, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err != nil {
-		t.Fatalf("Transcribe failed: %v", err)
+		t.Fatalf("Transcribe: %v", err)
 	}
-
 	if result != "hello world" {
-		t.Errorf("got transcription %q, want %q", result, "hello world")
+		t.Errorf("got %q, want %q", result, "hello world")
 	}
 }
 
-// TestErrorResponse verifies non-200 response parses Groq error JSON (TRANS-04)
 func TestErrorResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error": {"message": "invalid file format", "type": "invalid_request_error"}}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for 400, got nil")
+		t.Fatal("expected error for 400")
 	}
-
-	// Verify error contains API message
 	if !strings.Contains(err.Error(), "invalid file format") {
 		t.Errorf("error should contain API message, got: %v", err)
 	}
-
-	// Verify error type is APIError
-	var apiErr *APIError
-	if !strings.Contains(err.Error(), "groq API error") {
-		t.Errorf("error should be APIError, got: %v", err)
+	if !strings.Contains(err.Error(), "transcription API error") {
+		t.Errorf("error should be APIError shape, got: %v", err)
 	}
-	_ = apiErr // Suppress unused variable warning
 }
 
-// TestRetryBackoff verifies delays between retries are ~500ms, ~1s, ~2s (allow 10% tolerance)
 func TestRetryBackoff(t *testing.T) {
 	var timestamps []time.Time
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		timestamps = append(timestamps, time.Now())
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, `{"error": {"message": "service unavailable", "type": "server_error"}}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for 503, got nil")
+		t.Fatal("expected 503 error")
 	}
-
 	if len(timestamps) != 4 {
 		t.Fatalf("expected 4 timestamps, got %d", len(timestamps))
 	}
-
-	// Check backoff delays with 10% tolerance
-	expectedDelays := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond, 2000 * time.Millisecond}
-	for i, expected := range expectedDelays {
+	expected := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond, 2000 * time.Millisecond}
+	for i, e := range expected {
 		actual := timestamps[i+1].Sub(timestamps[i])
-		minExpected := time.Duration(float64(expected) * 0.9)
-		maxExpected := time.Duration(float64(expected) * 1.1)
-
-		if actual < minExpected || actual > maxExpected {
-			t.Errorf("retry %d: got delay %v, want %v ±10%%", i, actual, expected)
+		lo := time.Duration(float64(e) * 0.9)
+		hi := time.Duration(float64(e) * 1.1)
+		if actual < lo || actual > hi {
+			t.Errorf("retry %d: got %v, want %v ±10%%", i, actual, e)
 		}
 	}
 }
 
-// TestTranscribeEmptyWave verifies error handling for empty WAV data
 func TestTranscribeEmptyWave(t *testing.T) {
-	ctx := context.Background()
-	wavData := []byte("")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be hit when wav is empty")
+	}))
+	defer srv.Close()
 
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "test-key", nil, "en")
 	if err == nil {
-		t.Fatal("Expected error for empty WAV data, got nil")
+		t.Fatal("expected error for empty WAV data")
 	}
 }
 
-// TestTranscribeNoAPIKey verifies error handling for empty API key
 func TestTranscribeNoAPIKey(t *testing.T) {
-	ctx := context.Background()
-	wavData := []byte("fake wav data")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("server should not be hit when API key is empty")
+	}))
+	defer srv.Close()
 
-	_, err := Transcribe(ctx, "", wavData, "en")
+	_, err := transcribe.Transcribe(context.Background(), newTestOptions(srv), "", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for empty API key, got nil")
+		t.Fatal("expected error for empty API key")
 	}
 }
 
-// TestContextCancellation verifies request aborts on context cancellation
+func TestTranscribe_RequiresAPIURL(t *testing.T) {
+	opts := transcribe.Options{Model: "whisper-large-v3-turbo", Timeout: time.Second}
+	_, err := transcribe.Transcribe(context.Background(), opts, "key", []byte("wav"), "en")
+	if err == nil || !strings.Contains(err.Error(), "APIURL is required") {
+		t.Errorf("expected APIURL-required error, got %v", err)
+	}
+}
+
+func TestTranscribe_RequiresModel(t *testing.T) {
+	opts := transcribe.Options{APIURL: "http://example.test", Timeout: time.Second}
+	_, err := transcribe.Transcribe(context.Background(), opts, "key", []byte("wav"), "en")
+	if err == nil || !strings.Contains(err.Error(), "Model is required") {
+		t.Errorf("expected Model-required error, got %v", err)
+	}
+}
+
 func TestContextCancellation(t *testing.T) {
 	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		time.Sleep(1 * time.Second) // Sleep to allow context cancellation
+		time.Sleep(1 * time.Second)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	oldAPIURL := apiURL
-	apiURL = server.URL
-	defer func() { apiURL = oldAPIURL }()
-
-	// Create context and cancel it immediately
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	wavData := []byte("fake wav data")
-
-	_, err := Transcribe(ctx, "test-key", wavData, "en")
+	_, err := transcribe.Transcribe(ctx, newTestOptions(srv), "test-key", []byte("wav"), "en")
 	if err == nil {
-		t.Fatal("Expected error for cancelled context, got nil")
-	}
-
-	// Should not make any requests if context is already cancelled
-	if requestCount > 1 {
-		log.Printf("Note: %d requests made despite context being cancelled", requestCount)
+		t.Fatal("expected error for cancelled context")
 	}
 }

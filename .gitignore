@@ -1,6 +1,6 @@
 .direnv/
-result
-yap
+/result
+/yap
 
 # Local secrets and workspace state
 .env

@@ -2,78 +2,59 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 
 	"github.com/hybridz/yap/internal/config"
+	"github.com/hybridz/yap/internal/platform"
+	pcfg "github.com/hybridz/yap/pkg/yap/config"
 	"github.com/spf13/cobra"
 )
 
-func newConfigSetCmd(cfg *config.Config) *cobra.Command {
+// newConfigSetCmd constructs the `yap config set <key> <value>`
+// subcommand.
+//
+// Keys are dot-notation paths into the nested schema. The command
+// loads, mutates, validates, and saves. Validation failures abort
+// before the file is touched.
+//
+// Struct-level mutations (e.g. appending to injection.app_overrides)
+// are delegated to `yap config overrides`.
+func newConfigSetCmd(_ *config.Config, p platform.Platform) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a configuration value",
-		Long: `Set a configuration value. Available keys:
-  api_key         - Groq API key for transcription
-  hotkey          - Keyboard key for hold-to-talk (e.g., KEY_RIGHTCTRL)
-  language        - Language code for transcription (default: en)
-  mic_device      - Specific microphone device (optional)
-  timeout_seconds - Recording timeout in seconds (1-300, default: 60)`,
+		Long: `Set a configuration value by dot-notation path.
+
+Examples:
+  yap config set general.hotkey KEY_SPACE
+  yap config set general.max_duration 120
+  yap config set transcription.backend groq
+  yap config set transform.enabled true
+  yap config set injection.electron_strategy keystroke
+
+Mutations to injection.app_overrides are handled by
+  yap config overrides add|remove|clear`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key := args[0]
-			value := args[1]
+			key, value := args[0], args[1]
 
-			// Validate key
-			validKeys := map[string]bool{
-				"api_key":         true,
-				"hotkey":          true,
-				"language":        true,
-				"mic_device":      true,
-				"timeout_seconds": true,
-			}
-
-			if !validKeys[key] {
-				return fmt.Errorf("invalid key %q. Valid keys: api_key, hotkey, language, mic_device, timeout_seconds", key)
-			}
-
-			// Load existing config
-			loadedCfg, err := config.Load()
+			loaded, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
 
-			// Update config based on key type
-			switch key {
-			case "api_key":
-				loadedCfg.APIKey = value
-			case "hotkey":
-				loadedCfg.Hotkey = value
-			case "language":
-				loadedCfg.Language = value
-			case "mic_device":
-				loadedCfg.MicDevice = value
-			case "timeout_seconds":
-				timeout, err := strconv.Atoi(value)
-				if err != nil {
-					return fmt.Errorf("timeout_seconds must be a number: %w", err)
-				}
-				if timeout < 1 {
-					return fmt.Errorf("timeout_seconds must be at least 1 second")
-				}
-				if timeout > 300 {
-					return fmt.Errorf("timeout_seconds cannot exceed 300 seconds (5 minutes)")
-				}
-				loadedCfg.TimeoutSeconds = timeout
+			if err := pcfg.Set(&loaded, key, value); err != nil {
+				return err
 			}
 
-			// Save updated config
-			if err := config.Save(loadedCfg); err != nil {
+			if err := loaded.Validate(p.HotkeyCfg); err != nil {
+				return fmt.Errorf("config would be invalid after set: %w", err)
+			}
+
+			if err := config.Save(loaded); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
 
-			// Print confirmation
-			fmt.Fprintf(os.Stdout, "Set %s to %s\n", key, value)
+			fmt.Fprintf(cmd.OutOrStdout(), "Set %s to %s\n", key, value)
 			return nil
 		},
 	}

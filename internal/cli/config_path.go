@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/hybridz/yap/internal/config"
 	"github.com/spf13/cobra"
@@ -20,7 +19,7 @@ func newConfigPathCmd(cfg *config.Config) *cobra.Command {
 				return fmt.Errorf("resolve config path: %w", err)
 			}
 
-			fmt.Fprintln(os.Stdout, path)
+			fmt.Fprintln(cmd.OutOrStdout(), path)
 			return nil
 		},
 	}
