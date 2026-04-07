@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -157,10 +159,11 @@ func (rs *recordState) cancelRecording() {
 
 // Daemon represents the background process.
 type Daemon struct {
-	cfg   *config.Config
-	ctx   context.Context
-	state recordState
-	eng   *engine.Engine
+	cfg      *config.Config
+	ctx      context.Context
+	state    recordState
+	eng      *engine.Engine
+	notifier platform.Notifier
 }
 
 // New creates a new Daemon. Kept for test compatibility.
@@ -239,20 +242,30 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("build injector: %w", err)
 	}
 
-	// Build engine.
-	eng := engine.New(
+	// Build engine. The constructor rejects nil dependencies — every
+	// stage is required and the daemon supplies a real one. The
+	// passthrough fallback for transformer is owned by newTransformer
+	// (above), not the engine, keeping the engine free of backend
+	// imports. Notifications are owned by the daemon, not the
+	// engine: startRecording inspects Run's wrapped error and routes
+	// non-cancellation failures into the platform Notifier directly.
+	eng, err := engine.New(
 		rec,
 		deps.Platform.Chime,
-		injector,
-		deps.Platform.Notifier,
 		transcriber,
 		transformer,
+		injector,
+		slog.Default(),
 	)
+	if err != nil {
+		return fmt.Errorf("engine init: %w", err)
+	}
 
 	d := &Daemon{
-		cfg: cfg,
-		ctx: ctx,
-		eng: eng,
+		cfg:      cfg,
+		ctx:      ctx,
+		eng:      eng,
+		notifier: deps.Platform.Notifier,
 	}
 
 	// Wire IPC handlers.
@@ -273,19 +286,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	}
 
 	onPress := func() {
-		if d.state.isActive() {
-			return
-		}
-
-		recCtx, recCancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-		d.state.setCancel(recCancel)
-		d.state.setIsActive(true)
-
-		go func() {
-			defer d.state.setIsActive(false)
-			d.eng.RecordAndInject(ctx, recCtx, timeoutSec,
-				assets.StartChime, assets.StopChime, assets.WarningChime)
-		}()
+		d.startRecording(timeoutSec)
 	}
 
 	onRelease := func() {
@@ -301,17 +302,22 @@ func Run(cfg *config.Config, deps Deps) error {
 	return nil
 }
 
-// toggleRecording toggles recording state for IPC toggle command.
-// Returns new state: "recording" or "idle".
-func (d *Daemon) toggleRecording() string {
+// startRecording is the shared press/toggle entry point. It is
+// idempotent on the active state — both onPress (hotkey) and
+// toggleRecording (IPC) call it; the deduplication keeps the goroutine
+// shell single-sourced and immune to drift between the two paths.
+//
+// timeoutSec is the recording timeout in seconds; the engine schedules
+// the warning chime against it and the recording context inherits a
+// time.Duration*Second deadline so the recorder can never run forever.
+//
+// startRecording returns true if a new recording was started, false if
+// one was already in flight. Pipeline errors are routed to the
+// notifier so the user gets an OS toast on real failures; cancellation
+// (the normal stop path) is silently ignored.
+func (d *Daemon) startRecording(timeoutSec int) bool {
 	if d.state.isActive() {
-		d.state.cancelRecording()
-		return "idle"
-	}
-
-	timeoutSec := d.cfg.General.MaxDuration
-	if timeoutSec == 0 {
-		timeoutSec = 60
+		return false
 	}
 
 	recCtx, recCancel := context.WithTimeout(d.ctx, time.Duration(timeoutSec)*time.Second)
@@ -320,9 +326,35 @@ func (d *Daemon) toggleRecording() string {
 
 	go func() {
 		defer d.state.setIsActive(false)
-		d.eng.RecordAndInject(d.ctx, recCtx, timeoutSec,
-			assets.StartChime, assets.StopChime, assets.WarningChime)
+		err := d.eng.Run(d.ctx, engine.RunOptions{
+			RecordCtx:      recCtx,
+			StartChime:     assets.StartChime,
+			StopChime:      assets.StopChime,
+			WarningChime:   assets.WarningChime,
+			TimeoutSec:     timeoutSec,
+			StreamPartials: d.cfg.General.StreamPartials,
+		})
+		if err != nil &&
+			!errors.Is(err, context.Canceled) &&
+			!errors.Is(err, context.DeadlineExceeded) &&
+			d.notifier != nil {
+			d.notifier.Notify("yap pipeline error", err.Error())
+		}
 	}()
+	return true
+}
 
+// toggleRecording toggles recording state for the IPC toggle command.
+// Returns the new state: "recording" or "idle".
+func (d *Daemon) toggleRecording() string {
+	if d.state.isActive() {
+		d.state.cancelRecording()
+		return "idle"
+	}
+	timeoutSec := d.cfg.General.MaxDuration
+	if timeoutSec == 0 {
+		timeoutSec = 60
+	}
+	d.startRecording(timeoutSec)
 	return "recording"
 }

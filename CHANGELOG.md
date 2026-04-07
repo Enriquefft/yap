@@ -10,6 +10,129 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+### Phase 5 — Streaming Pipeline
+
+#### Added
+- `internal/engine/engine.go` is now a true streaming orchestrator.
+  The new `Engine.Run(ctx, opts)` entry point drives a fully
+  channel-piped pipeline: the recorder feeds an `io.Reader` into
+  `Transcriber.Transcribe`, the resulting `<-chan TranscriptChunk` is
+  threaded through `Transformer.Transform`, and the final channel is
+  handed to `Injector.InjectStream`. There is no batch-collection
+  step at any boundary, no `strings.Builder` shim between stages,
+  and no engine-level fan-in goroutine — the engine blocks on
+  `InjectStream` and the upstream goroutines (transcriber, batch
+  helper, transformer) wind down through a shared sub-context the
+  engine cancels on every return path.
+- `engine.RunOptions` bundles the per-session knobs the daemon and
+  the CLI one-shot need: `RecordCtx`, `StartChime`, `StopChime`,
+  `WarningChime`, `TimeoutSec`, and `StreamPartials`. Splitting the
+  per-recording context out of the long-lived daemon context lets
+  the caller stop recording without aborting the in-flight
+  transcription / injection — the property the Phase 4 plan called
+  out in §1.4.
+- `engine.batchChunks` is the only place the engine accumulates
+  transcript text. It exists exclusively for the
+  `general.stream_partials = false` path and re-emits the collected
+  text as a single `IsFinal` chunk on a fresh channel, preserving
+  the channel-based invariant end to end (the injector still sees
+  a `<-chan TranscriptChunk`, just with one element instead of N).
+  Error chunks are forwarded verbatim so transcription failures
+  surface even when partials are disabled.
+- `engine.New` is now a validating constructor: it returns
+  `(*Engine, error)` and rejects nil `Recorder`, `Transcriber`,
+  `Transformer`, and `Injector` so misconfiguration surfaces at
+  daemon startup rather than at the first hotkey press. The
+  `Logger` parameter is optional — a nil logger collapses to
+  `slog.New(slog.DiscardHandler)`. The constructor no longer takes
+  a `platform.Notifier` either: notifications are owned by the
+  caller (the daemon's `startRecording` helper inspects Run's
+  wrapped error and routes non-cancellation failures into
+  `Notifier.Notify` itself). Routing notifications through the
+  engine would have been a second source of truth for "did this
+  fail" — the orchestrator's §1.5 explicitly rejected that. There
+  is no internal default Transformer: the daemon's `newTransformer`
+  helper still resolves `passthrough` when the user disables the
+  transform stage, but the engine itself does not import
+  `passthrough` (or any other concrete backend).
+- `internal/daemon/daemon.go` gains a shared `startRecording`
+  helper. Both the hotkey `onPress` callback and the IPC
+  `toggleRecording` handler call it, replacing the duplicated
+  goroutine shells from Phase 4. The helper owns the recording
+  context lifecycle, dispatches the engine call into a goroutine,
+  inspects the returned error, and routes non-cancellation
+  failures into `Notifier.Notify` so the user gets a desktop toast
+  on real pipeline errors while normal cancellation
+  (`context.Canceled`, `context.DeadlineExceeded`) stays silent.
+
+#### Changed
+- `internal/engine/engine.go` no longer exposes the
+  Phase 3/4 `RecordAndInject(daemonCtx, recCtx, ...)` method. It is
+  deleted outright (not renamed to a shim) and every call site
+  updates to `Engine.Run(ctx, RunOptions{...})`. Pipeline errors
+  are now returned from `Run` instead of swallowed via the
+  notifier; the daemon inspects the wrapped error and notifies
+  selectively.
+- `internal/engine/engine_test.go` is rewritten around the
+  streaming API. The new `recordingInjector` is a stateful fake
+  that implements `inject.Injector` and snapshots every chunk it
+  sees on `InjectStream`, so tests can prove the engine actually
+  pipes channels through (the `TestEngineRun_StreamingMultiChunk`
+  case feeds 3 chunks in and asserts 3 chunks out, in order). A
+  `goroutineLeakGuard` helper snapshots `runtime.NumGoroutine()`
+  before each test and asserts the count returned to baseline
+  after `Run` returned, enforcing the engine's
+  zero-goroutine-leak invariant on every test.
+- `internal/daemon/daemon.go` constructs the engine via the new
+  validating `engine.New` signature, supplying `slog.Default()` as
+  the engine logger and propagating any construction error to the
+  caller as a wrapped `engine init: ...`. The daemon now stores
+  `platform.Notifier` on the `Daemon` struct so the
+  `startRecording` helper can route pipeline errors to the user
+  without re-reaching into the `Deps` bag from the goroutine
+  closure.
+
+#### Removed
+- `Engine.RecordAndInject` is deleted. Any future re-introduction
+  is detected by the Phase 5 `grep -rn 'RecordAndInject'
+  internal/` check, which must return zero results.
+- The Phase 3 default-passthrough fallback inside `engine.New` is
+  deleted. The engine no longer imports
+  `pkg/yap/transform/passthrough`; the daemon's `newTransformer`
+  helper is the single source of truth for "transform stage is
+  disabled → use passthrough". This is what makes the engine free
+  of every concrete backend import.
+
+#### Findings
+- **One synchronous block per `Run` call.** The engine spawns at
+  most one batchChunks goroutine plus whatever the transcriber and
+  transformer spawn internally; the engine blocks on
+  `Injector.InjectStream` (which itself blocks until the chunk
+  channel closes or ctx cancels), so the function returns only
+  after every dependent goroutine has wound down. This is what
+  lets the test suite use a goroutine-count diff as the leak
+  guard rather than depending on a third-party goleak package.
+- **Cancellation and error propagation share one sub-context.**
+  `runPipeline` derives a `pipeCtx` from the caller's ctx and
+  defers `cancel()`, so any return path — whether nil, a wrapped
+  inject error, or a transcription failure — tears down the
+  upstream goroutines through that single cancel call. Splitting
+  the cancellation tree into multiple sub-contexts was the
+  alternative the orchestrator considered and rejected: it makes
+  goroutine ownership ambiguous and gives the test suite a much
+  harder time proving leaks are absent.
+- **`stream_partials = false` still routes through the channel
+  pipeline.** A short-circuit that skipped the transformer and
+  the injector channel was the obvious "optimization", and is
+  exactly the kind of structural exception the Phase 5 plan
+  forbids. Routing the batched chunk through the same
+  `transformer.Transform → injector.InjectStream` path means a
+  future `transform.Transformer` (Phase 8) sees the same chunk
+  shape regardless of whether the user has partials enabled, and
+  the injector's per-target batching/streaming decision stays
+  centralized in the injector instead of being forked across the
+  engine.
+
 ### Phase 4 — Text Injection Overhaul
 
 #### Added

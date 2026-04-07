@@ -309,24 +309,54 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 5 — Streaming Pipeline
+## Phase 5 — Streaming Pipeline — DONE
 
 **Depends on:** Phase 3, Phase 4
-**Current state:** `engine.RecordAndPaste()` is blocking sequential; `Transcriber` returns `(string, error)`.
+**Previous state:** `engine.RecordAndInject()` was a blocking sequential pipeline that batched the transcript into a `strings.Builder` between the transformer and the injector, swallowed every error through the notifier, and pulled `pkg/yap/transform/passthrough` directly as a default fallback inside `engine.New`. The Phase 3 streaming `Transcriber` interface was already in place, but the engine collected its channel at the boundary instead of piping it.
 
-- [ ] Adopt streaming `Transcriber.Transcribe(ctx, audio) (<-chan TranscriptChunk, error)` end-to-end
-- [ ] Wrap Groq backend in batch-to-chunk adapter (single `IsFinal` chunk)
-- [ ] Engine: goroutines for record → transcribe → transform → inject, channel-piped
-- [ ] Error propagation: any goroutine error cancels `ctx`, drains downstream, surfaces the first error
-- [ ] Replace `Engine.RecordAndPaste()` with `Engine.Run(ctx, opts)`
-- [ ] `general.stream_partials` controls partial delivery
-- [ ] Cancellation drains chunks, commits injected text, cleans up backend
+- [x] Adopt streaming `Transcriber.Transcribe(ctx, audio) (<-chan TranscriptChunk, error)` end-to-end
+- [x] Groq backend already wraps its single result as one `IsFinal` chunk on the streaming channel (Phase 3); no change needed in Phase 5
+- [x] Engine pipes the transcribe channel through `Transformer.Transform` and into `Injector.InjectStream` with no batch-collection at any boundary
+- [x] Error propagation: any pipeline-stage error (`record:`, `encode:`, `transcribe:`, `transform:`, `inject:`) is wrapped and returned from `Engine.Run`; the daemon inspects the wrapped error and notifies on non-cancellation failures
+- [x] Replace `Engine.RecordAndInject()` with `Engine.Run(ctx, RunOptions)` — `RecordAndInject` is deleted, not renamed to a shim
+- [x] `general.stream_partials` controls partial delivery via the engine-internal `batchChunks` helper; when false, the helper collapses N chunks into one `IsFinal` chunk and the injector still receives a `<-chan TranscriptChunk`
+- [x] Cancellation drains chunks through a shared `pipeCtx` derived from the caller's ctx, cleans up every engine-spawned goroutine, and surfaces `context.Canceled` / `context.DeadlineExceeded` as the pipeline outcome
+- [x] `engine.New` is a validating constructor that returns `(*Engine, error)` and rejects nil `Recorder`, `Transcriber`, `Transformer`, and `Injector`
+- [x] Daemon `onPress` and `toggleRecording` share a `startRecording` helper to dedupe the per-session goroutine shell
 
 **Done when:**
-- [ ] Groq backend works through the streaming interface with no behavior change
-- [ ] Engine has zero direct backend imports (only `pkg/yap/` interfaces)
-- [ ] SIGINT during `yap record` leaves the inject target in a consistent state
-- [ ] `internal/engine/engine_test.go` exercises the pipeline with the `mock` backend emitting multiple chunks
+- [x] Groq backend works through the streaming interface with no behavior change (`pkg/yap/transcribe/groq` is unchanged in Phase 5)
+- [x] Engine has zero direct backend imports — `internal/engine/engine.go` imports only `pkg/yap/transcribe`, `pkg/yap/transform`, `pkg/yap/inject`, `internal/platform`, and the standard library
+- [x] SIGINT during `yap record` cancels the daemon ctx, the engine's `pipeCtx` cancels with it, and the injector commits whatever it had buffered (Phase 4 contract) before the engine returns
+- [x] `internal/engine/engine_test.go` exercises the pipeline with the `mock` backend emitting multiple chunks (`TestEngineRun_StreamingMultiChunk` feeds 3 chunks in and asserts 3 chunks delivered to `Injector.InjectStream` in order)
+
+### Findings
+
+- **The `stream_partials = false` path still routes through the
+  channel pipeline.** The plan deliberately rejected a short-circuit
+  that would skip the transformer and the injector channel when
+  partials are disabled. Routing the batched chunk through the same
+  `transformer.Transform → injector.InjectStream` path keeps the
+  injector's per-target batching decision centralized and means a
+  future Phase 8 transformer sees the same chunk shape regardless
+  of whether partials are on. The cost is one extra goroutine
+  (`batchChunks`) on the false path, which is the right trade.
+- **`engine_test.go` necessarily imports `mock` and `passthrough`.**
+  The Phase 5 plan §1.7 mandates a multi-chunk test against
+  `pkg/yap/transcribe/mock` and §3.2 sketches use
+  `passthrough.New()`. The "engine has zero backend imports"
+  invariant is enforced on `engine.go` (production), not on
+  `engine_test.go` (which is allowed to import test helpers from
+  any registered backend). Future re-checks must scope the grep
+  to non-`_test.go` files.
+- **Goroutine-leak guard uses `runtime.NumGoroutine()` diff, not
+  goleak.** The engine spawns at most one extra goroutine
+  (`batchChunks`) plus whatever the transcriber and transformer
+  spawn internally; all of them wind down through the single
+  `pipeCtx` cancel deferred in `runPipeline`. This makes a simple
+  before/after count diff sufficient to prove no leaks, without
+  pulling in a third-party leak detector and the package-graph
+  cost that comes with it.
 
 ---
 
