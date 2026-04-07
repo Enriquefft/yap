@@ -10,6 +10,84 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+### Phase 3 — Library Extraction (`pkg/yap/`)
+
+#### Added
+- `pkg/yap/` is now the public library surface for yap's primitives.
+  Third-party Go programs can import `github.com/hybridz/yap/pkg/yap`
+  and drive transcription end-to-end without touching the daemon or
+  the CLI. The top-level `yap.Client` type wraps a `Transcriber` and
+  a `Transformer` behind a functional-options API (`WithTranscriber`,
+  `WithTransformer`) and exposes both a batch `Transcribe` and a
+  streaming `TranscribeStream` entry point.
+- `pkg/yap/transcribe` declares the stable `Transcriber` interface.
+  It emits chunks on a `<-chan TranscriptChunk`, so batch backends
+  wrap their single result as one `IsFinal` chunk and streaming
+  backends (landing in Phase 5/6) can emit incrementally without
+  breaking the contract. The package ships a `Config` struct, a
+  `Factory` type, a sentinel `ErrUnknownBackend` error, and a
+  `Register`/`Get`/`Backends` registry so backends self-register in
+  their own `init()` functions.
+- `pkg/yap/transcribe/groq` ports the former `internal/transcribe`
+  Groq client behind the new `Backend` type with constructor
+  injection only — zero package-level var state. Retry semantics,
+  multipart form shape, and APIError behavior are preserved exactly.
+- `pkg/yap/transcribe/openai` provides a generic OpenAI-compatible
+  backend for any server that speaks `/v1/audio/transcriptions`
+  (vLLM, llama.cpp server, litellm, Fireworks, OpenAI itself).
+- `pkg/yap/transcribe/mock` provides a deterministic test backend
+  that drains the supplied audio reader and emits a caller-configurable
+  chunk sequence on the channel.
+- `pkg/yap/transform` declares the `Transformer` interface, the
+  transform-specific `Config` type, and a registry identical in shape
+  to the transcribe package's. `pkg/yap/transform/passthrough` is
+  the default identity transformer and is always available in the
+  registry so the engine can run with the transform stage disabled.
+- `pkg/yap/inject` declares the `Injector`, `Target`, `AppType`, and
+  `Strategy` types that Phase 4 will implement. The interfaces
+  unblock Phase 4 without wiring any concrete strategy in Phase 3.
+- AST-level no-globals guards cover every new production file.
+  `pkg/yap/transcribe` and `pkg/yap/transform` allow exactly
+  `registryMu`, `registry`, and `ErrUnknownBackend` with documented
+  rationale; all other packages forbid package-level `var`
+  declarations outright.
+- `pkg/yap/yap_test.go` is an external-package (`package yap_test`)
+  integration test that stands up a fake Groq server, builds a
+  backend through the public API, wraps it in a `yap.Client`, and
+  verifies `client.Transcribe` returns the expected text. It is the
+  proof-of-consumability demanded by ROADMAP Phase 3 "Done when".
+
+#### Changed
+- `internal/engine/engine.go` no longer defines its own local
+  `Transcriber` interface. The engine imports
+  `pkg/yap/transcribe.Transcriber` directly and routes the chunk
+  channel through a `pkg/yap/transform.Transformer` (defaulting to
+  passthrough when nil). The engine constructor no longer takes an
+  `apiKey` — credentials are owned by the backend and injected at
+  backend-construction time. This is a breaking call-site shift
+  that ripples through every test and the daemon.
+- `internal/daemon/daemon.go` now looks transcribers and
+  transformers up by name via `transcribe.Get`/`transform.Get` and
+  bridges the on-disk `pcfg.TranscriptionConfig` /
+  `pcfg.TransformConfig` into the runtime `transcribe.Config` /
+  `transform.Config` structs. The `Deps.NewTranscriber` field and
+  the `transcribeAdapter` helper are gone; backends are wired
+  purely through the registry. The daemon imports every backend
+  sub-package for its side-effect registration
+  (`_ "github.com/hybridz/yap/pkg/yap/transcribe/groq"`, etc.).
+
+#### Removed
+- `internal/transcribe/` is deleted in its entirety. The Groq
+  client, its test suite, and its AST no-globals guard all live
+  under `pkg/yap/transcribe/groq/` now, ported to the streaming
+  channel API. The import path
+  `github.com/hybridz/yap/internal/transcribe` no longer exists and
+  must not be re-introduced.
+- `engine.Transcriber` (the former local interface), the
+  `transcribeAdapter` bridge in the daemon, and the
+  `Deps.NewTranscriber` injection hook are all gone — the registry
+  is now the single source of truth for backend selection.
+
 ### Phase 0 — Cleanup & Debt
 
 #### Added

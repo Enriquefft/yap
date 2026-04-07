@@ -12,7 +12,7 @@
 | 0 | Cleanup & Debt | done |
 | 1 | Platform Abstraction | done |
 | 2 | Config Rework | done |
-| 3 | Library Extraction (`pkg/yap/`) | pending |
+| 3 | Library Extraction (`pkg/yap/`) | done |
 | 4 | Text Injection Overhaul | pending |
 | 5 | Streaming Pipeline | pending |
 | 6 | Local Whisper Backend | pending |
@@ -129,31 +129,72 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 3 — Library Extraction (`pkg/yap/`)
+## Phase 3 — Library Extraction (`pkg/yap/`) — DONE
 
 **Depends on:** Phase 2
-**Current state:** every meaningful package is `internal/`; `internal/transcribe/` has package-level mutable `apiURL`, `clientTimeout`, `notifyFn`.
 
-- [ ] Create `pkg/yap/` and `pkg/yap/client.go` with functional options
-- [ ] `pkg/yap/transcribe/transcribe.go` — `Transcriber` interface (streaming chunk shape, even if first impls are batch)
-- [ ] `pkg/yap/transcribe/groq/` — current Groq backend, constructor injection only, zero package-level state
-- [ ] `pkg/yap/transcribe/openai/` — generic OpenAI-compatible
-- [ ] `pkg/yap/transcribe/mock/` — deterministic test backend
-- [ ] Backend registry: `transcribe.Register("groq", factoryFn)` keyed by config `backend` name
-- [ ] `pkg/yap/transform/transform.go` — `Transformer` interface
-- [ ] `pkg/yap/transform/passthrough/` — no-op default (real backends in Phase 8)
-- [ ] `pkg/yap/inject/` — `Injector`, `Target`, `AppType`, `Strategy` interfaces (concrete impls in Phase 4)
-- [ ] Delete `internal/transcribe/` entirely
-- [ ] `internal/engine/engine.go` becomes a pure orchestrator over `pkg/yap/` interfaces
-- [ ] `internal/cli/` and `internal/daemon/` import from `pkg/yap/`
+- [x] Create `pkg/yap/` and `pkg/yap/yap.go` with functional options
+- [x] `pkg/yap/transcribe/transcribe.go` — `Transcriber` interface (streaming chunk shape, even if first impls are batch)
+- [x] `pkg/yap/transcribe/groq/` — current Groq backend, constructor injection only, zero package-level state
+- [x] `pkg/yap/transcribe/openai/` — generic OpenAI-compatible
+- [x] `pkg/yap/transcribe/mock/` — deterministic test backend
+- [x] Backend registry: `transcribe.Register("groq", factoryFn)` keyed by config `backend` name
+- [x] `pkg/yap/transform/transform.go` — `Transformer` interface
+- [x] `pkg/yap/transform/passthrough/` — no-op default (real backends in Phase 8)
+- [x] `pkg/yap/inject/` — `Injector`, `Target`, `AppType`, `Strategy` interfaces (concrete impls in Phase 4)
+- [x] Delete `internal/transcribe/` entirely
+- [x] `internal/engine/engine.go` becomes a pure orchestrator over `pkg/yap/` interfaces
+- [x] `internal/cli/` and `internal/daemon/` import from `pkg/yap/`
 
 **Done when:**
-- [ ] `go doc github.com/hybridz/yap/pkg/yap` documents the public API
-- [ ] `grep -rn 'var.*=.*&http.Client' pkg/yap/` returns zero results
-- [ ] A separate Go program can import `pkg/yap/transcribe/groq` and transcribe a WAV
-- [ ] `internal/transcribe/` no longer exists
-- [ ] `pkg/yap/client_test.go` exercises the library as an external consumer would
-- [ ] All existing tests still pass
+- [x] `go doc github.com/hybridz/yap/pkg/yap` documents the public API
+- [x] `grep -rn 'var.*=.*&http.Client' pkg/yap/` returns zero results
+- [x] A separate Go program can import `pkg/yap/transcribe/groq` and transcribe a WAV
+- [x] `internal/transcribe/` no longer exists
+- [x] `pkg/yap/yap_test.go` exercises the library as an external consumer would (`package yap_test`)
+- [x] All existing tests still pass
+
+### Findings
+
+- **Engine `apiKey` parameter eliminated.** The engine's `New()`
+  signature dropped `apiKey` and `language`; credentials now live in
+  the backend's `transcribe.Config`, built once by the daemon from
+  `pcfg.TranscriptionConfig`. This is a breaking call-site shift
+  that ripples through the daemon, CLI, and every engine test — the
+  right call because the engine has no business touching secrets.
+- **Registry over `Deps.NewTranscriber`.** The `Deps` struct no
+  longer carries a `NewTranscriber` factory hook; backend selection
+  is by name via `transcribe.Get(cfg.Transcription.Backend)` and the
+  daemon side-effect-imports every backend sub-package. Tests that
+  need a fake backend register it under `"mock"` (already registered
+  by `pkg/yap/transcribe/mock` at init time).
+- **`pkg/yap/transcribe` does not import `pkg/yap/config`.** The
+  runtime library stays decoupled from the on-disk TOML schema; the
+  daemon owns the conversion via `newTranscriber` and
+  `newTransformer` helpers. Third-party library consumers pay
+  nothing for a TOML package they do not need.
+- **Streaming interface is live, engine is still batch.** Groq and
+  OpenAI backends deliver a single `IsFinal` chunk; the engine
+  ranges over the channel and concatenates `Text` into a batch
+  string before handing to the Paster. Phase 5 will rewrite the
+  engine as a true channel-piped pipeline — the Phase 3 interface
+  is already in the shape it needs to be.
+- **AST no-globals guards cover every new package.**
+  `pkg/yap/transcribe` and `pkg/yap/transform` whitelist exactly
+  `registryMu`, `registry`, and `ErrUnknownBackend`. Backend
+  sub-packages (`groq`, `openai`, `passthrough`) and the
+  identity-only `passthrough` package forbid package-level `var`
+  declarations outright.
+- **Groq backend test `TestCtxCancelDrainsChannel` uses a bounded
+  server sleep** rather than an indefinite `<-r.Context().Done()`
+  hang. Indefinite handler hangs can keep the `httptest.Server`'s
+  `Close()` blocked on a dangling keep-alive goroutine; a 3-second
+  `time.After` + context-cancellation select avoids that without
+  losing test meaning.
+- **`yap.Client.Transcribe` returns `ctx.Err()` after draining** an
+  empty chunk stream so cancellation surfaces as an error even when
+  backends drop in-flight chunks on `ctx.Done()`. Without this the
+  Client would return `""` + `nil` on cancel, which no caller wants.
 
 ---
 

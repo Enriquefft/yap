@@ -16,56 +16,81 @@ import (
 	"github.com/hybridz/yap/internal/ipc"
 	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/internal/transcribe"
 	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	"github.com/hybridz/yap/pkg/yap/transcribe"
+	// Register every transcribe backend the daemon can select at
+	// runtime. Side-effect imports are the Phase 3 contract.
+	_ "github.com/hybridz/yap/pkg/yap/transcribe/groq"
+	_ "github.com/hybridz/yap/pkg/yap/transcribe/mock"
+	_ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
+	"github.com/hybridz/yap/pkg/yap/transform"
+	// Register every transform backend. Phase 3 only ships
+	// passthrough; Phase 8 adds local + openai.
+	_ "github.com/hybridz/yap/pkg/yap/transform/passthrough"
 )
-
-// transcribeAdapter wraps transcribe.Transcribe to implement
-// engine.Transcriber. Options are captured at construction time so
-// the engine sees an API that matches its batch interface, while the
-// underlying call receives the full Options payload.
-type transcribeAdapter struct {
-	opts transcribe.Options
-}
-
-func (a transcribeAdapter) Transcribe(ctx context.Context, apiKey string, wavData []byte, language string) (string, error) {
-	return transcribe.Transcribe(ctx, a.opts, apiKey, wavData, language)
-}
-
-// newTranscribeAdapter builds an engine.Transcriber from the
-// transcription section of cfg. The HTTP client is left nil so the
-// transcribe package constructs one with opts.Timeout.
-func newTranscribeAdapter(tc pcfg.TranscriptionConfig) engine.Transcriber {
-	return transcribeAdapter{
-		opts: transcribe.Options{
-			APIURL:  tc.ResolvedAPIURL(),
-			Model:   tc.Model,
-			Timeout: pcfg.DefaultTimeout,
-		},
-	}
-}
 
 // Deps holds all injectable dependencies for the daemon.
 // Use DefaultDeps for production; substitute fields in tests.
 type Deps struct {
-	Platform        platform.Platform
-	NewTranscriber  func(pcfg.TranscriptionConfig) engine.Transcriber
-	XDGDataFile     func(string) (string, error)
-	PIDWrite        func(string) error
-	PIDRemove       func(string)
-	NewIPCServer    func(string) (*ipc.Server, error)
+	Platform     platform.Platform
+	XDGDataFile  func(string) (string, error)
+	PIDWrite     func(string) error
+	PIDRemove    func(string)
+	NewIPCServer func(string) (*ipc.Server, error)
 }
 
 // DefaultDeps returns production dependencies for the given platform.
 func DefaultDeps(p platform.Platform) Deps {
 	return Deps{
-		Platform:       p,
-		NewTranscriber: newTranscribeAdapter,
-		XDGDataFile:    xdg.DataFile,
-		PIDWrite:       pidfile.Write,
-		PIDRemove:      pidfile.Remove,
-		NewIPCServer:   ipc.NewServer,
+		Platform:     p,
+		XDGDataFile:  xdg.DataFile,
+		PIDWrite:     pidfile.Write,
+		PIDRemove:    pidfile.Remove,
+		NewIPCServer: ipc.NewServer,
 	}
+}
+
+// newTranscriber bridges the on-disk transcription config into the
+// runtime transcribe.Config and looks up the factory via the registry.
+// pcfg.TranscriptionConfig is the on-disk schema; transcribe.Config
+// is the runtime library contract. Keeping them separate means the
+// public pkg/yap/transcribe surface does not depend on the TOML
+// schema package.
+func newTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error) {
+	factory, err := transcribe.Get(tc.Backend)
+	if err != nil {
+		return nil, fmt.Errorf("transcription backend %q: %w", tc.Backend, err)
+	}
+	return factory(transcribe.Config{
+		APIURL:    tc.ResolvedAPIURL(),
+		APIKey:    tc.APIKey,
+		Model:     tc.Model,
+		Language:  tc.Language,
+		Prompt:    tc.Prompt,
+		ModelPath: tc.ModelPath,
+		Timeout:   pcfg.DefaultTimeout,
+	})
+}
+
+// newTransformer bridges pcfg.TransformConfig into transform.Config
+// and looks up the factory via the registry. When the transform stage
+// is disabled in config, the factory is forced to "passthrough" so
+// the engine pipeline always has a non-nil transformer.
+func newTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
+	name := tc.Backend
+	if !tc.Enabled || name == "" {
+		name = "passthrough"
+	}
+	factory, err := transform.Get(name)
+	if err != nil {
+		return nil, fmt.Errorf("transform backend %q: %w", name, err)
+	}
+	return factory(transform.Config{
+		APIURL:       tc.APIURL,
+		APIKey:       tc.APIKey,
+		Model:        tc.Model,
+		SystemPrompt: tc.SystemPrompt,
+	})
 }
 
 // recordState holds the recording state machine.
@@ -173,16 +198,24 @@ func Run(cfg *config.Config, deps Deps) error {
 	}
 	defer srv.Close()
 
+	// Build transcribe + transform backends from the registry.
+	transcriber, err := newTranscriber(cfg.Transcription)
+	if err != nil {
+		return fmt.Errorf("build transcriber: %w", err)
+	}
+	transformer, err := newTransformer(cfg.Transform)
+	if err != nil {
+		return fmt.Errorf("build transformer: %w", err)
+	}
+
 	// Build engine.
-	transcriber := deps.NewTranscriber(cfg.Transcription)
 	eng := engine.New(
 		rec,
 		deps.Platform.Chime,
 		deps.Platform.Paster,
 		deps.Platform.Notifier,
 		transcriber,
-		cfg.Transcription.APIKey,
-		cfg.Transcription.Language,
+		transformer,
 	)
 
 	d := &Daemon{
