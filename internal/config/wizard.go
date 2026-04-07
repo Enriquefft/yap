@@ -23,10 +23,11 @@ import (
 var apiKeyPattern = regexp.MustCompile(`^gsk_[a-zA-Z0-9]{52}$`)
 
 // wizardOfferedBackends is the list of transcription backends the
-// interactive wizard offers. Phase 6 adds "whisperlocal" here. The
-// validator still accepts every backend defined in
-// pkg/yap/config.ValidBackends(); this list is a UX knob.
-var wizardOfferedBackends = []string{"groq"}
+// interactive wizard offers. Phase 6 puts "whisperlocal" first so a
+// fresh install picks the local backend by default. The validator
+// still accepts every backend defined in pkg/yap/config.ValidBackends();
+// this list is a UX knob.
+var wizardOfferedBackends = []string{"whisperlocal", "groq"}
 
 // RunWizard runs an interactive first-run setup wizard. If YAP_API_KEY
 // or GROQ_API_KEY is set in the environment, the wizard skips prompts
@@ -40,12 +41,16 @@ var wizardOfferedBackends = []string{"groq"}
 // to inject a scratch file.
 func RunWizard(input io.Reader, output io.Writer, hotkeyCfg platform.HotkeyConfig) (Config, error) {
 	// Env short-circuit: if the user already has an API key in the
-	// environment, we do not prompt. We still build a nested Config
-	// with the env key applied.
+	// environment, the wizard assumes they want a remote backend with
+	// that key applied. We default to "groq" because it is the only
+	// remote backend the wizard offers; users with a custom OpenAI-
+	// compatible endpoint already know how to edit the TOML directly.
 	if apiKey := envAPIKey(); apiKey != "" {
 		cfg := pcfg.DefaultConfig()
+		cfg.Transcription.Backend = "groq"
+		cfg.Transcription.Model = "whisper-large-v3-turbo"
 		cfg.Transcription.APIKey = apiKey
-		fmt.Fprintln(output, "Using API key from environment (YAP_API_KEY/GROQ_API_KEY)")
+		fmt.Fprintln(output, "Using API key from environment (YAP_API_KEY/GROQ_API_KEY); selecting groq backend.")
 		configPath, err := ConfigPath()
 		if err != nil {
 			return cfg, fmt.Errorf("resolve config path: %w", err)
@@ -70,11 +75,32 @@ func RunWizard(input io.Reader, output io.Writer, hotkeyCfg platform.HotkeyConfi
 	}
 	cfg.Transcription.Backend = backend
 
-	apiKey, err := promptAPIKey(scanner, output)
-	if err != nil {
-		return Config{}, fmt.Errorf("failed to get API key: %w", err)
+	switch backend {
+	case "whisperlocal":
+		// Local backend uses base.en (the only currently-pinned
+		// model). The user can swap models later via `yap config
+		// set transcription.model`. The wizard does not prompt for
+		// a model: there is exactly one option today.
+		cfg.Transcription.Model = "base.en"
+		fmt.Fprintln(output, "Selected local whisper.cpp backend with model base.en.")
+		fmt.Fprintln(output, "On first dictation, run `yap models download base.en` if you have not already")
+		fmt.Fprintln(output, "(the model file is ~150 MB; the daemon will refuse to start without it).")
+	case "groq":
+		// Remote backend needs an API key. Use the existing prompt.
+		apiKey, err := promptAPIKey(scanner, output)
+		if err != nil {
+			return Config{}, fmt.Errorf("failed to get API key: %w", err)
+		}
+		cfg.Transcription.APIKey = apiKey
+		// Groq's well-known model name; the default config sets
+		// base.en for the local backend so we override here.
+		cfg.Transcription.Model = "whisper-large-v3-turbo"
+	default:
+		// The validator and wizardOfferedBackends should prevent
+		// reaching this branch. Surfacing it as an error is the
+		// correct fail-fast behavior if the wizard list ever drifts.
+		return Config{}, fmt.Errorf("wizard does not handle backend %q", backend)
 	}
-	cfg.Transcription.APIKey = apiKey
 
 	// General section
 	fmt.Fprintln(output)
@@ -117,9 +143,9 @@ func envAPIKey() string {
 }
 
 // promptBackend prompts the user to choose a transcription backend.
-// The offered list is wizardOfferedBackends; in Phase 2 that's only
-// "groq", and the wizard short-circuits to it. Phase 6 widens the
-// list and this function will loop.
+// The offered list is wizardOfferedBackends. Phase 6 promotes
+// "whisperlocal" to the first entry, so a user who hits Enter without
+// typing anything gets the local backend.
 func promptBackend(scanner *bufio.Scanner, output io.Writer) (string, error) {
 	if len(wizardOfferedBackends) == 1 {
 		backend := wizardOfferedBackends[0]

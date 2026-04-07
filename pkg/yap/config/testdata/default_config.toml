@@ -11,9 +11,10 @@
   stream_partials = true
 
 [transcription]
-  backend = "groq"
-  model = "whisper-large-v3-turbo"
+  backend = "whisperlocal"
+  model = "base.en"
   model_path = ""
+  whisper_server_path = ""
   language = "en"
   prompt = ""
   api_url = ""

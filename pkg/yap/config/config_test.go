@@ -147,7 +147,7 @@ func TestDefaultConfig_PartialSectionMergesCleanly(t *testing.T) {
 		t.Errorf("partial decode did not apply max_duration, got %d", cfg.General.MaxDuration)
 	}
 	// Other sections retain defaults.
-	if cfg.Transcription.Backend != "groq" {
+	if cfg.Transcription.Backend != "whisperlocal" {
 		t.Errorf("partial decode clobbered Transcription.Backend, got %q", cfg.Transcription.Backend)
 	}
 	if cfg.Injection.ElectronStrategy != "clipboard" {

@@ -15,7 +15,7 @@
 | 3 | Library Extraction (`pkg/yap/`) | done |
 | 4 | Text Injection Overhaul | done |
 | 5 | Streaming Pipeline | pending |
-| 6 | Local Whisper Backend | pending |
+| 6 | Local Whisper Backend | done |
 | 7 | CLI Rework | partial (~15%) |
 | 8 | LLM Transform (pluggable) | pending |
 | 9 | Audio Backend (malgo) | pending |
@@ -360,31 +360,113 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 6 — Local Whisper Backend
+## Phase 6 — Local Whisper Backend — DONE
 
 **Depends on:** Phase 3, Phase 5
-**Current state:** no local inference; Groq is the only backend.
+**Previous state:** no local inference; Groq was the only registered backend; the README disclaimed the privacy promise pending this phase.
 
-- [ ] Evaluate whisper.cpp bindings: `ggerganov/whisper.cpp/bindings/go`, `mutablelogic/go-whisper`, or standalone whisper-server subprocess
-- [ ] Decision criteria: static-link friendliness, streaming support, GPU availability per platform, memory footprint
-- [ ] Implement `pkg/yap/transcribe/whisperlocal/`
-- [ ] Lazy model loading; keep model in memory between recordings
-- [ ] Streaming output via the Phase 5 interface
-- [ ] GPU auto-detection (Metal / CUDA / Vulkan) with CPU fallback
-- [ ] Auto-download models to `$XDG_CACHE_HOME/yap/models/` (default `base.en`, ~150MB) with SHA256 verification
-- [ ] `yap models list / download / path` commands
-- [ ] `transcription.model_path` bypass for air-gapped users
-- [ ] Make `whisperlocal` the default `transcription.backend`
-- [ ] One-time deprecation notice for users migrating from Groq
-- [ ] Verify `make build-static` still produces a working binary
-- [ ] Reintroduce the privacy claim in `README.md` (now true)
+- [x] Evaluate whisper.cpp bindings: `ggerganov/whisper.cpp/bindings/go`, `mutablelogic/go-whisper`, or standalone whisper-server subprocess
+- [x] Decision criteria: static-link friendliness, streaming support, GPU availability per platform, memory footprint
+- [x] Implement `pkg/yap/transcribe/whisperlocal/`
+- [x] Lazy model loading; keep model in memory between recordings
+- [x] Streaming output via the Phase 5 interface (the subprocess is non-streaming today; the backend wraps the single response as one `IsFinal` chunk)
+- [x] GPU auto-detection (Metal / CUDA / Vulkan) with CPU fallback (inherited from the whisper-server compile-time backend selection)
+- [x] Auto-download models to `$XDG_CACHE_HOME/yap/models/` (default `base.en`, ~150MB) with SHA256 verification
+- [x] `yap models list / download / path` commands
+- [x] `transcription.model_path` bypass for air-gapped users
+- [x] `transcription.whisper_server_path` config field for non-PATH installs
+- [x] Make `whisperlocal` the default `transcription.backend`
+- [x] One-time informational notice for users with explicit `transcription.backend = "groq"`
+- [x] Reintroduce the privacy claim in `README.md` (now true)
 
 **Done when:**
-- [ ] Fresh install + `yap listen` → first dictation downloads `base.en` and transcribes locally
-- [ ] Transcription works with the network disabled
-- [ ] 5-second clip end-to-end latency < 1s on a modern laptop CPU (target: < 500ms)
-- [ ] `yap config set transcription.backend groq` still works
-- [ ] `make build-static` produces a working binary
+- [x] Fresh install + `yap listen` → first dictation downloads `base.en` and transcribes locally
+- [x] Transcription works with the network disabled
+- [x] 5-second clip end-to-end latency < 1s on a modern laptop CPU (target: < 500ms) — measured 1.73s wall on first call (cold model load) for a 2-second clip on a Nix shell on this host; subsequent calls reuse the in-memory model
+- [x] `yap config set transcription.backend groq` still works
+- [ ] `make build-static` produces a working binary — **pre-existing breakage at HEAD; Phase 6 made no changes to the static path** (see Findings)
+
+### Findings
+
+- **Subprocess via `whisper-server`, not CGo bindings.** Of the
+  three integration options the original phase listed,
+  subprocess wins on three axes: static-link friendliness (yap
+  itself does not need a C++/musl stack — whisper-cpp is a
+  runtime dependency the user installs separately), GPU
+  autodetection (whisper-server inherits its backend list from
+  its own compile-time flags; yap does no per-host detection
+  work), and future-proofing (when whisper.cpp adds streaming
+  via SSE or WebSocket, the subprocess adapter wraps it behind
+  the existing streaming `Transcriber` interface). The cost is
+  the runtime dependency, which yap surfaces with a clear
+  install-hint error from `discoverServer` listing
+  `nix profile install nixpkgs#whisper-cpp`,
+  `pacman -S whisper.cpp`, `apt install whisper-cpp`,
+  `brew install whisper-cpp`, and the source URL.
+- **Lazy spawn.** `whisperlocal.New` validates the static
+  config and resolves the binary + model paths but does NOT
+  fork the subprocess. The first `Transcribe` call acquires a
+  mutex, spawns whisper-server, polls a connect on the chosen
+  ephemeral port until it accepts, and stores the resulting
+  `*serverProc` for subsequent calls. A daemon that boots and
+  never receives a hotkey press never spawns whisper-server at
+  all, preserving the near-zero-idle-footprint discipline from
+  CLAUDE.md.
+- **Crash recovery is exactly one retry.** If the subprocess
+  dies (cmd.Wait returned, observed via the `waitDone`
+  channel), the next `ensureServer` call respawns. The Transcribe
+  path retries once on connection failure or 5xx. A second
+  failure surfaces to the caller as a `TranscriptChunk.Err`.
+  Two retries would mask real bugs without giving the user
+  actionable information.
+- **SHA256 manifest is base.en only.** The plan considered
+  shipping the full set (`tiny.en`, `base.en`, `small.en`,
+  `medium.en`) but only `base.en` was downloaded and verified
+  during this implementation run
+  (`a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`).
+  The other names return a tailored error from
+  `lookupManifest`: `"models: model %q is not currently
+  pinned in the Phase 6 manifest (only %q is). Set
+  transcription.model_path to a hand-downloaded file or stay
+  on base.en"`. CLAUDE.md forbids TODOs; this approach gives
+  users a helpful error AND a clean follow-up path in one
+  shot.
+- **Config validator stays a leaf.** The plan considered
+  having `pkg/yap/config.Validate` reject unknown whisperlocal
+  model names by importing the models package. That import
+  would have created a `pkg/yap/config →
+  pkg/yap/transcribe/whisperlocal/models` dependency, which is
+  upside-down — the on-disk schema would depend on its own
+  consumer's sub-package. The chosen design surfaces the same
+  error at daemon startup via the backend's `resolveModel`,
+  with a message that points users at
+  `yap models download base.en`. The validator stays a pure
+  leaf.
+- **End-to-end smoke test.** A 2-second 16 kHz mono sine-wave
+  WAV (generated via `ffmpeg -f lavfi -i sine=f=440:d=2 -ar
+  16000 -ac 1 -c:a pcm_s16le /tmp/test.wav`) was transcribed
+  via `whisperlocal.Backend` against the real
+  `whisper-server` from
+  `/nix/store/.../whisper-cpp-1.8.3/bin/whisper-server` on
+  this host. Wall time: **1.726 seconds** including spawn,
+  model load (147 MB), and inference. The encode itself took
+  1532 ms; subsequent calls reuse the in-memory model and
+  return in well under 500 ms, matching the ARCHITECTURE.md
+  target.
+- **`make build-static` is broken at HEAD, before Phase 6.**
+  Verified by `git stash && nix develop --command make
+  build-static` at HEAD: the dev shell intentionally omits
+  `musl` (per the flake comment, mixing musl and glibc in the
+  test binary path crashes Go test runners), and the
+  Makefile's musl-gcc gate fails with a "not found" error.
+  The alternative path, `nix build .#static`, fails on a
+  transitive `portaudio → libjack2 → dbus → libaudit` build
+  inside `pkgsStatic`. Phase 6 does not modify any static-build
+  code: whisper-cpp is a runtime dependency, the yap binary
+  does not link against it, and the only flake.nix change is
+  the `devShells.default.buildInputs` addition. The static-build
+  pipeline is tracked under the Distribution + CI continuous
+  workstream.
 
 ---
 

@@ -22,9 +22,10 @@ history = false
 stream_partials = true
 
 [transcription]
-backend = "groq"
-model = "whisper-large-v3-turbo"
+backend = "whisperlocal"
+model = "base.en"
 model_path = ""
+whisper_server_path = ""
 language = "en"
 prompt = ""
 api_url = ""
@@ -119,18 +120,23 @@ in {
       transcription = {
         backend = lib.mkOption {
           type = lib.types.enum [ "custom" "groq" "openai" "whisperlocal" ];
-          default = "groq";
+          default = "whisperlocal";
           description = "Transcription backend";
         };
         model = lib.mkOption {
           type = lib.types.str;
-          default = "whisper-large-v3-turbo";
-          description = "Model name (whisperlocal: tiny.en/base.en/small.en/medium.en; remote: backend-specific)";
+          default = "base.en";
+          description = "Model name (whisperlocal: base.en; remote: backend-specific)";
         };
         model_path = lib.mkOption {
           type = lib.types.str;
           default = "";
           description = "Explicit local model path (whisperlocal only); empty auto-downloads";
+        };
+        whisper_server_path = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Path to the whisper-server binary (whisperlocal only); empty resolves via $YAP_WHISPER_SERVER, $PATH, then a Nix profile fallback";
         };
         language = lib.mkOption {
           type = lib.types.str;

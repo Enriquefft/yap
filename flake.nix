@@ -73,6 +73,11 @@
             # Including musl here adds -L/musl/lib to NIX_LDFLAGS, causing musl+glibc
             # mixing in test binaries which crashes at startup (segfault on go test).
             ffmpeg
+            # whisper-cpp ships the whisper-server subprocess yap launches as
+            # the local transcription backend (Phase 6). The yap binary itself
+            # does not link against whisper.cpp — discovery is via PATH at
+            # runtime, so this is purely a developer convenience.
+            whisper-cpp
           ];
 
           shellHook = ''

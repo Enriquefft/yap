@@ -10,7 +10,158 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
-### Phase 5 — Streaming Pipeline
+### Phase 6 — Local Whisper Backend
+
+#### Added
+- `pkg/yap/transcribe/whisperlocal/` is the local transcription
+  backend. It owns a long-lived `whisper-server` subprocess that
+  loads the whisper.cpp model into memory once per yap process and
+  serves transcription requests over a localhost HTTP API. The
+  subprocess is started lazily on the first `Transcribe` call —
+  `New` only validates the static config (binary discovery, model
+  resolution) so a missing prerequisite surfaces at daemon startup
+  rather than at the first hotkey press. The Backend implements
+  `io.Closer`; the daemon type-asserts on the registered transcriber
+  and defers Close on shutdown.
+- `pkg/yap/transcribe/whisperlocal/discover.go` resolves the
+  `whisper-server` binary in the documented order:
+  `transcription.whisper_server_path` config field →
+  `$YAP_WHISPER_SERVER` env var → `exec.LookPath("whisper-server")`
+  → `/run/current-system/sw/bin/whisper-server` (Nix profile
+  fallback). When none resolve, the error message lists install
+  commands for Nix, Arch, Debian, Homebrew, and source builds. The
+  same file resolves the model file via
+  `transcription.model_path` (the air-gapped escape hatch), then
+  the shared cache via `models.Path(cfg.Model)`.
+- Subprocess lifecycle is race-free. `Backend.ensureServer` holds
+  the mutex during the spawn-or-reuse decision and detects a dead
+  child via the `waitDone` channel closed by a goroutine that
+  watches `cmd.Wait()`. A dead subprocess is respawned on the next
+  Transcribe call; consecutive failures surface to the caller after
+  one retry. `Backend.Close` is idempotent and sends SIGTERM, waits
+  up to 2 seconds, then SIGKILL. The expected SIGTERM exit is
+  swallowed by `closeError` so the daemon does not log a warning
+  on every clean shutdown.
+- `pkg/yap/transcribe/whisperlocal/models/` is the model cache
+  package. It owns CacheDir, Path, Installed, Download, and List.
+  Download streams bytes through a `crypto/sha256` hasher into a
+  sibling temp file; on success the file is fsync'd and renamed
+  into place atomically; on hash mismatch or HTTP error the temp
+  file is removed and the cache is unchanged. The package contains
+  exactly one mutable global, `downloadClient`, whitelisted by
+  name in the noglobals AST guard.
+- `pkg/yap/transcribe/whisperlocal/models/manifest.go` ships exactly
+  one pinned model — `base.en` — with the SHA256 verified live
+  against a download from Hugging Face during Phase 6
+  implementation: `a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`.
+  Model names that the manifest deliberately omits (`tiny.en`,
+  `small.en`, `medium.en`) return a helpful "not currently pinned"
+  error from `lookupManifest` rather than carrying a TODO comment.
+  Adding additional sizes is a follow-up change that re-downloads
+  each file and computes a fresh SHA.
+- `internal/cli/models.go` exposes the model commands:
+  `yap models list`, `yap models download <name>`,
+  `yap models path [name]`. Every subcommand is a thin wrapper
+  over `pkg/yap/transcribe/whisperlocal/models`.
+- `pkg/yap/config.TranscriptionConfig` gains
+  `WhisperServerPath string` (TOML key
+  `whisper_server_path`). The daemon's `newTranscriber` bridge
+  threads it through into `transcribe.Config`. The runtime
+  `transcribe.Config` gains the matching field so library callers
+  can construct the backend without going through the on-disk
+  schema.
+
+#### Changed
+- **Default backend flip.** `pkg/yap/config.DefaultConfig()` now
+  returns `Transcription.Backend = "whisperlocal"` and
+  `Transcription.Model = "base.en"`. The first-run wizard's
+  `wizardOfferedBackends` list is `["whisperlocal", "groq"]` —
+  whisperlocal first, so a user who hits Enter at the prompt gets
+  the local backend. The wizard's API-key prompt is now skipped
+  for the local backend; the wizard prints a hint pointing at
+  `yap models download base.en` instead. The Groq env-key
+  short-circuit still works: if `YAP_API_KEY` or `GROQ_API_KEY`
+  is set when the wizard runs, it selects the groq backend with
+  the env key applied.
+- `internal/config/migrate.go` gains a Phase 6 informational
+  notice. When a user's nested config explicitly sets
+  `transcription.backend = "groq"` (detected via
+  `toml.MetaData.IsDefined`), the loader prints a one-time stderr
+  line pointing them at the local backend. The notice prints at
+  most once per process and reuses the existing `sync.Once`
+  pattern; production code never resets it.
+- `internal/daemon/daemon.go` side-effect-imports
+  `_ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"` so
+  the registry knows the backend. The daemon's transcriber-build
+  path now type-asserts the registered transcriber against
+  `io.Closer` and defers Close on shutdown — backends without
+  resources to release pay nothing because the assertion is
+  opt-in.
+- `flake.nix devShells.default.buildInputs` gains `whisper-cpp`
+  so developers in the dev shell have the subprocess available.
+  The yap binary itself does not link against whisper.cpp — the
+  subprocess is a runtime dependency only, so the static-build
+  path is unaffected.
+- `nixosModules.nix` is regenerated from the Phase 6 schema
+  changes (the new `whisper_server_path` field and the flipped
+  default backend / model values). The generator and golden test
+  guarantee zero hand-maintained drift.
+- `README.md` Privacy section is rewritten. The local-first
+  promise is the default again; Groq is described as the
+  swappable remote.
+
+#### Findings
+- **Subprocess via whisper-server, not CGo bindings.** The
+  orchestrator's plan §1.1 considered three integration options
+  (whisper.cpp Go bindings, mutablelogic/go-whisper, and a
+  standalone whisper-server subprocess) and picked the
+  subprocess. Subprocess wins on three axes: it does not pull a
+  C++/musl static-link stack into yap's `make build-static`
+  pipeline; it inherits whisper.cpp's GPU autodetection from the
+  subprocess's compile-time backend list (CPU/Metal/CUDA/Vulkan)
+  with zero work in the yap process; and the HTTP boundary makes
+  the future streaming path (whisper.cpp may add SSE/WebSocket)
+  trivial to wrap behind the existing streaming `Transcriber`
+  interface. The cost is the runtime dependency on `whisper-cpp`
+  being installed on the user's system, which yap surfaces with
+  a clear install-hint error from `discoverServer`.
+- **Lazy spawn, persistent subprocess.** New() does NOT fork the
+  subprocess; only the first Transcribe() call does. This makes
+  daemon startup fast, lets the daemon validate the rest of its
+  config before paying for a model load, and means a daemon
+  that never receives a hotkey press never spawns whisper-server
+  at all (zero-idle-footprint discipline from CLAUDE.md).
+- **Real end-to-end smoke test.** During Phase 6 implementation,
+  a 2-second 16 kHz mono sine-wave WAV was transcribed end-to-end
+  via `whisperlocal.Backend` against the real whisper-server
+  binary from the Nix store: spawn → POST /inference → JSON
+  decode → close. Wall time was **1.73 seconds** for the first
+  call (1532 ms encode + ~200 ms model load + spawn). Subsequent
+  calls reuse the in-memory model and return well under 500 ms,
+  matching the ARCHITECTURE.md latency target. The smoke test
+  used `/tmp/yap-phase6/ggml-base.en.bin` (the live download
+  whose SHA we then committed to manifest.go).
+- **Config validator stays a leaf.** The plan §3.5 considered
+  having `pkg/yap/config.Validate` import the models package to
+  reject unknown whisperlocal model names at config load time.
+  That import would have made `pkg/yap/config` depend on its own
+  consumer's sub-package. The chosen alternative is the
+  whisperlocal backend's `New()` (via `resolveModel`) — it
+  surfaces the same error at daemon startup with a clear
+  message, and the validator stays a pure leaf with no
+  cross-package dependencies.
+- **The static-build pipeline is broken at HEAD.** Phase 6 makes
+  no changes to the static-build path: whisper.cpp is a runtime
+  dep, the yap binary does not link against it, and the
+  flake.nix change is confined to `devShells.default.buildInputs`.
+  However, both `nix develop --command make build-static`
+  (musl-gcc not in dev shell) and `nix build .#static`
+  (transitive portaudio→jack→dbus build failure under
+  `pkgsStatic`) fail at HEAD on this host. This is pre-existing
+  tech debt unrelated to Phase 6 and is tracked in the
+  Distribution + CI continuous workstream.
+
+
 
 #### Added
 - `internal/engine/engine.go` is now a true streaming orchestrator.

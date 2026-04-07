@@ -8,3 +8,9 @@ import "sync"
 func ResetMigrationNoticeForTest() {
 	migrationNoticeOnce = sync.Once{}
 }
+
+// ResetGroqDeprecationNoticeForTest restores the one-shot Phase 6
+// deprecation notice guard. Production code never calls this.
+func ResetGroqDeprecationNoticeForTest() {
+	groqDeprecationNoticeOnce = sync.Once{}
+}

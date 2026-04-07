@@ -35,13 +35,14 @@ type GeneralConfig struct {
 // backend is active at a time; fields are a superset of every backend's
 // needs so the schema does not fragment.
 type TranscriptionConfig struct {
-	Backend   string `toml:"backend"    yap:"enum=whisperlocal,groq,openai,custom;doc=Transcription backend"`
-	Model     string `toml:"model"      yap:"doc=Model name (whisperlocal: tiny.en/base.en/small.en/medium.en; remote: backend-specific)"`
-	ModelPath string `toml:"model_path" yap:"doc=Explicit local model path (whisperlocal only); empty auto-downloads"`
-	Language  string `toml:"language"   yap:"doc=ISO language code; empty auto-detects"`
-	Prompt    string `toml:"prompt"     yap:"doc=Context hint passed to the backend when supported"`
-	APIURL    string `toml:"api_url"    yap:"doc=Remote endpoint URL; required when backend is remote"`
-	APIKey    string `toml:"api_key"    yap:"secret;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
+	Backend           string `toml:"backend"             yap:"enum=whisperlocal,groq,openai,custom;doc=Transcription backend"`
+	Model             string `toml:"model"               yap:"doc=Model name (whisperlocal: base.en; remote: backend-specific)"`
+	ModelPath         string `toml:"model_path"          yap:"doc=Explicit local model path (whisperlocal only); empty auto-downloads"`
+	WhisperServerPath string `toml:"whisper_server_path" yap:"doc=Path to the whisper-server binary (whisperlocal only); empty resolves via $YAP_WHISPER_SERVER, $PATH, then a Nix profile fallback"`
+	Language          string `toml:"language"            yap:"doc=ISO language code; empty auto-detects"`
+	Prompt            string `toml:"prompt"              yap:"doc=Context hint passed to the backend when supported"`
+	APIURL            string `toml:"api_url"             yap:"doc=Remote endpoint URL; required when backend is remote"`
+	APIKey            string `toml:"api_key"             yap:"secret;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
 }
 
 // ResolvedAPIURL returns the URL the transcriber should POST to. For
@@ -97,9 +98,11 @@ type TrayConfig struct {
 // in ARCHITECTURE.md. Every field has an explicit value; zero-values
 // are intentional only where documented.
 //
-// Phase 2 bootstraps with the Groq remote backend because the local
-// Whisper backend does not land until Phase 6. Phase 6 will flip
-// Transcription.Backend to "whisperlocal".
+// Phase 6 flipped Transcription.Backend from "groq" to "whisperlocal"
+// and Transcription.Model from "whisper-large-v3-turbo" to "base.en"
+// so the default install is local-first. Users who want the cloud
+// backend run `yap config set transcription.backend groq` and supply
+// an API key.
 func DefaultConfig() Config {
 	return Config{
 		General: GeneralConfig{
@@ -115,13 +118,14 @@ func DefaultConfig() Config {
 			StreamPartials:   true,
 		},
 		Transcription: TranscriptionConfig{
-			Backend:   "groq",
-			Model:     "whisper-large-v3-turbo",
-			ModelPath: "",
-			Language:  "en",
-			Prompt:    "",
-			APIURL:    "",
-			APIKey:    "",
+			Backend:           "whisperlocal",
+			Model:             "base.en",
+			ModelPath:         "",
+			WhisperServerPath: "",
+			Language:          "en",
+			Prompt:            "",
+			APIURL:            "",
+			APIKey:            "",
 		},
 		Transform: TransformConfig{
 			Enabled:      false,

@@ -61,6 +61,12 @@ type Config struct {
 	// ModelPath points at a local model file. Used by whisperlocal;
 	// ignored by remote backends.
 	ModelPath string
+	// WhisperServerPath points at a whisper.cpp `whisper-server`
+	// binary. Used only by the whisperlocal backend; ignored by
+	// remote backends. When empty, whisperlocal falls back to the
+	// $YAP_WHISPER_SERVER environment variable, then $PATH lookup,
+	// then a Nix profile fallback.
+	WhisperServerPath string
 	// Timeout is the per-request timeout. Zero means the backend's
 	// default. Ignored when HTTPClient is set.
 	Timeout time.Duration

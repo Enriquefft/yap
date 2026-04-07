@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	_ "github.com/hybridz/yap/pkg/yap/transcribe/groq"
 	_ "github.com/hybridz/yap/pkg/yap/transcribe/mock"
 	_ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
+	_ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"
 	"github.com/hybridz/yap/pkg/yap/transform"
 	// Register every transform backend. Phase 3 only ships
 	// passthrough; Phase 8 adds local + openai.
@@ -64,13 +66,14 @@ func newTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 		return nil, fmt.Errorf("transcription backend %q: %w", tc.Backend, err)
 	}
 	return factory(transcribe.Config{
-		APIURL:    tc.ResolvedAPIURL(),
-		APIKey:    tc.APIKey,
-		Model:     tc.Model,
-		Language:  tc.Language,
-		Prompt:    tc.Prompt,
-		ModelPath: tc.ModelPath,
-		Timeout:   pcfg.DefaultTimeout,
+		APIURL:            tc.ResolvedAPIURL(),
+		APIKey:            tc.APIKey,
+		Model:             tc.Model,
+		Language:          tc.Language,
+		Prompt:            tc.Prompt,
+		ModelPath:         tc.ModelPath,
+		WhisperServerPath: tc.WhisperServerPath,
+		Timeout:           pcfg.DefaultTimeout,
 	})
 }
 
@@ -228,6 +231,20 @@ func Run(cfg *config.Config, deps Deps) error {
 	transcriber, err := newTranscriber(cfg.Transcription)
 	if err != nil {
 		return fmt.Errorf("build transcriber: %w", err)
+	}
+	// Backends that own per-process resources (e.g. whisperlocal's
+	// long-lived whisper-server subprocess) implement io.Closer. The
+	// daemon is the canonical place to call Close because it owns
+	// the lifetime of the registered transcriber. The Phase 3
+	// Transcriber interface intentionally does not require Close —
+	// the type assertion stays opt-in so library backends without
+	// resources to release pay nothing.
+	if closer, ok := transcriber.(io.Closer); ok {
+		defer func() {
+			if cerr := closer.Close(); cerr != nil {
+				slog.Default().Warn("transcriber close error", "err", cerr)
+			}
+		}()
 	}
 	transformer, err := newTransformer(cfg.Transform)
 	if err != nil {

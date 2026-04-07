@@ -54,7 +54,7 @@ func withTestConfigPath(t *testing.T, path string) func() {
 	return func() { ConfigPath = orig }
 }
 
-func TestRunWizard_SectionAwarePrompts(t *testing.T) {
+func TestRunWizard_SectionAwarePrompts_Groq(t *testing.T) {
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
 	defer withTestConfigPath(t, cfgFile)()
@@ -63,7 +63,9 @@ func TestRunWizard_SectionAwarePrompts(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	input := "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\n" +
+	// Sequence: backend selection ("groq"), api key, hotkey, language.
+	input := "groq\n" +
+		"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\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
 
@@ -96,9 +98,12 @@ func TestRunWizard_SectionAwarePrompts(t *testing.T) {
 	if cfg.Transcription.Backend != "groq" {
 		t.Errorf("Backend should be groq, got: %s", cfg.Transcription.Backend)
 	}
+	if cfg.Transcription.Model != "whisper-large-v3-turbo" {
+		t.Errorf("Model should be whisper-large-v3-turbo for groq, got: %s", cfg.Transcription.Model)
+	}
 }
 
-func TestRunWizard_OffersOnlyGroqBackend(t *testing.T) {
+func TestRunWizard_DefaultsToWhisperlocal(t *testing.T) {
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
 	defer withTestConfigPath(t, cfgFile)()
@@ -106,7 +111,10 @@ func TestRunWizard_OffersOnlyGroqBackend(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	input := "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\n" +
+	// Empty backend choice = first option (whisperlocal). Then
+	// hotkey + language. No API key prompt is presented for the
+	// local backend.
+	input := "\n" +
 		"KEY_SPACE\n" +
 		"\n"
 
@@ -116,11 +124,49 @@ func TestRunWizard_OffersOnlyGroqBackend(t *testing.T) {
 		t.Fatalf("RunWizard: %v", err)
 	}
 
-	if cfg.Transcription.Backend != "groq" {
-		t.Errorf("wizard should default to groq, got %q", cfg.Transcription.Backend)
+	if cfg.Transcription.Backend != "whisperlocal" {
+		t.Errorf("wizard should default to whisperlocal, got %q", cfg.Transcription.Backend)
 	}
-	if !strings.Contains(buf.String(), "Transcription backend: groq") {
-		t.Errorf("expected single-backend short-circuit message, got: %s", buf.String())
+	if cfg.Transcription.Model != "base.en" {
+		t.Errorf("expected base.en model, got %q", cfg.Transcription.Model)
+	}
+	if cfg.Transcription.APIKey != "" {
+		t.Errorf("local backend should not have an API key, got %q", cfg.Transcription.APIKey)
+	}
+	if cfg.General.Hotkey != "KEY_SPACE" {
+		t.Errorf("expected hotkey KEY_SPACE, got %q", cfg.General.Hotkey)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "yap models download base.en") {
+		t.Errorf("expected wizard to mention model download, got:\n%s", out)
+	}
+}
+
+func TestRunWizard_RejectsUnknownBackend(t *testing.T) {
+	tmp := t.TempDir()
+	cfgFile := filepath.Join(tmp, "config.toml")
+	defer withTestConfigPath(t, cfgFile)()
+
+	t.Setenv("YAP_API_KEY", "")
+	t.Setenv("GROQ_API_KEY", "")
+
+	// Reject "potato" then accept "whisperlocal" (default), then
+	// hotkey, then language.
+	input := "potato\n" +
+		"\n" +
+		"KEY_SPACE\n" +
+		"\n"
+
+	var buf bytes.Buffer
+	cfg, err := RunWizard(strings.NewReader(input), &buf, newStubHotkeyCfg())
+	if err != nil {
+		t.Fatalf("RunWizard: %v", err)
+	}
+	if cfg.Transcription.Backend != "whisperlocal" {
+		t.Errorf("expected fallback to whisperlocal after invalid input, got %q", cfg.Transcription.Backend)
+	}
+	if !strings.Contains(buf.String(), "Invalid backend") {
+		t.Errorf("expected invalid-backend error message, got:\n%s", buf.String())
 	}
 }
 
@@ -132,8 +178,10 @@ func TestRunWizard_ValidatesAPIKeyFormat(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	// First input is invalid; wizard re-prompts and accepts the second.
-	input := "invalid-key\n" +
+	// Choose groq backend, then submit invalid api key, then valid,
+	// then hotkey, then language.
+	input := "groq\n" +
+		"invalid-key\n" +
 		"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\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
@@ -159,7 +207,8 @@ func TestRunWizard_WritesNestedTOMLFile(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	input := "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\n" +
+	// Default to whisperlocal: empty backend, then hotkey, then language.
+	input := "\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"
 
@@ -198,6 +247,9 @@ func TestRunWizard_SkippedWhenAPIKeyEnvSet(t *testing.T) {
 	if cfg.Transcription.APIKey != testAPIKey {
 		t.Errorf("Expected API key from env var, got: %s", cfg.Transcription.APIKey)
 	}
+	if cfg.Transcription.Backend != "groq" {
+		t.Errorf("env-key short-circuit should select groq, got %q", cfg.Transcription.Backend)
+	}
 	if strings.Contains(buf.String(), "Welcome to yap") {
 		t.Errorf("wizard should be skipped when env key is set, got: %s", buf.String())
 	}
@@ -224,6 +276,9 @@ func TestRunWizard_SkippedWhenGroqKeyEnvSet(t *testing.T) {
 	if cfg.Transcription.APIKey != testAPIKey {
 		t.Errorf("GROQ_API_KEY should populate APIKey, got: %s", cfg.Transcription.APIKey)
 	}
+	if cfg.Transcription.Backend != "groq" {
+		t.Errorf("env-key short-circuit should select groq, got %q", cfg.Transcription.Backend)
+	}
 }
 
 func TestRunWizard_ManualHotkeyComboValidation(t *testing.T) {
@@ -234,8 +289,9 @@ func TestRunWizard_ManualHotkeyComboValidation(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	// Enter a combo string; stub validates each segment.
-	input := "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\n" +
+	// Default backend (whisperlocal); enter a combo string; stub
+	// validates each segment.
+	input := "\n" +
 		"KEY_LEFTSHIFT+KEY_SPACE\n" +
 		"en\n"
 
@@ -257,9 +313,9 @@ func TestRunWizard_ManualHotkeyRejectsInvalidSegment(t *testing.T) {
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 
-	// First attempt contains an invalid segment; wizard loops and
-	// accepts the second attempt.
-	input := "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\n" +
+	// Default backend (whisperlocal); first hotkey attempt contains
+	// an invalid segment; wizard loops and accepts the second.
+	input := "\n" +
 		"KEY_LEFTSHIFT+KEY_BOGUS\n" +
 		"KEY_RIGHTCTRL\n" +
 		"en\n"

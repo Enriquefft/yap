@@ -160,7 +160,7 @@ func TestGet_DefaultValuesFormat(t *testing.T) {
 		{"general.audio_feedback", "true"},
 		{"general.silence_threshold", "0.02"},
 		{"general.silence_duration", "2"},
-		{"transcription.backend", "groq"},
+		{"transcription.backend", "whisperlocal"},
 		{"transform.enabled", "false"},
 		{"injection.electron_strategy", "clipboard"},
 		{"tray.enabled", "false"},

@@ -53,6 +53,7 @@ func newRootCmd(p platform.Platform) *cobra.Command {
 	root.AddCommand(newStatusCmd(&rootCfg))
 	root.AddCommand(newToggleCmd(&rootCfg))
 	root.AddCommand(newConfigCmd(&rootCfg, p))
+	root.AddCommand(newModelsCmd())
 
 	// Hidden flag for internal daemon spawning.
 	root.PersistentFlags().BoolVar(&daemonRun, "daemon-run", false, "")

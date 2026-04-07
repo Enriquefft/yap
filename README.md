@@ -56,10 +56,18 @@ yap listen
 
 The wizard will ask for:
 
-1. Your transcription backend (Groq today, local whisper.cpp once that backend lands).
+1. Your transcription backend. The default is **whisperlocal** (local whisper.cpp via the `whisper-server` subprocess); **groq** is available as a remote fallback.
 2. The API key for the chosen backend, if it's a remote one.
 3. Your preferred hotkey (default: Right Ctrl).
 4. Your language preference (default: auto-detect).
+
+If you pick the local backend on first run, download the model with:
+
+```bash
+yap models download base.en
+```
+
+The model file is ~150 MB. The daemon refuses to start with the local backend until the file is in the cache (or `transcription.model_path` points at one).
 
 Once it's running:
 
@@ -78,9 +86,12 @@ yap toggle                       # toggle recording from a script or external ke
 yap config get <key>             # dot-notation: yap config get transcription.backend
 yap config set <key> <value>     # dot-notation
 yap config path                  # print resolved config file path
+yap models list                  # list pinned whisper.cpp models and install state
+yap models download <name>       # download a model into the cache (SHA256-verified)
+yap models path [name]           # print the cache directory or a specific model path
 ```
 
-Additional commands (`yap record`, `yap transcribe`, `yap transform`, `yap paste`, `yap devices`, `yap models`, `yap history`) ship as the corresponding roadmap phases land. See [`ROADMAP.md`](ROADMAP.md).
+Additional commands (`yap record`, `yap transcribe`, `yap transform`, `yap paste`, `yap devices`, `yap history`) ship as the corresponding roadmap phases land. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Configuration
 
@@ -102,8 +113,10 @@ history = false
 stream_partials = true
 
 [transcription]
-backend = "groq"                # remote today; "whisperlocal" becomes the default once it ships
-model = "whisper-large-v3"
+backend = "whisperlocal"        # default. Set to "groq" or "openai" for a remote backend.
+model = "base.en"               # whisperlocal: base.en (only pinned). remote: backend-specific.
+model_path = ""                 # explicit local model path; empty auto-resolves from the cache
+whisper_server_path = ""        # explicit whisper-server binary; empty resolves via PATH
 language = ""                   # empty = auto-detect
 prompt = ""
 
@@ -146,9 +159,11 @@ The TOML schema, the NixOS module, the wizard prompts, and the validation logic 
 
 ## Privacy
 
-yap is designed for local-first transcription. The default backend will be `whisper.cpp` running on your machine, with no network calls and no cloud dependencies.
+yap is local-first by default. The default transcription backend is **whisperlocal**, which runs `whisper.cpp` on your machine via a long-lived `whisper-server` subprocess. With the local backend, your audio never leaves your machine.
 
-Until that lands (Phase 6 in [`ROADMAP.md`](ROADMAP.md)), the bootstrap backend is **Groq**, which sends the audio you record to Groq's API for transcription. If you don't want audio leaving your machine, wait for the local backend or bring your own self-hosted OpenAI-compatible endpoint and point `transcription.api_url` at it.
+The model file (currently `base.en`, ~150 MB) is downloaded once into `$XDG_CACHE_HOME/yap/models/` from Hugging Face, with a SHA256 verified against the pinned manifest in `pkg/yap/transcribe/whisperlocal/models/manifest.go`. After the download, no further network calls are made for transcription.
+
+Remote backends are available as a swap. **Groq** is the supported remote: set `transcription.backend = "groq"` and provide `YAP_API_KEY`. Any other OpenAI-compatible endpoint works via `transcription.backend = "openai"` (or `"custom"`) plus `transcription.api_url`.
 
 yap has no accounts, no telemetry, no analytics, and no cloud sync. Ever.
 
