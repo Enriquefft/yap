@@ -22,6 +22,21 @@ type Transformer interface {
 	Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error)
 }
 
+// Checker is an optional interface implemented by backends that
+// support a startup health probe. Callers (typically the daemon)
+// type-assert on this interface after constructing a transformer: if
+// the assertion succeeds they call HealthCheck once, log or notify
+// on failure, and decide whether to proceed with the configured
+// backend or fall back to passthrough.
+//
+// HealthCheck should be idempotent and cheap — it runs on every
+// daemon startup. Implementations typically issue a single GET
+// against a low-cost endpoint (Ollama's GET /, OpenAI's GET
+// /v1/models) and return nil on any 2xx response.
+type Checker interface {
+	HealthCheck(ctx context.Context) error
+}
+
 // Config is the runtime configuration for a Transformer backend. Like
 // transcribe.Config it is deliberately independent from
 // pkg/yap/config: third-party library users should not have to pull

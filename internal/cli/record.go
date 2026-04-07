@@ -101,7 +101,11 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	}
 	defer closeIfCloser(transcriber)
 
-	transformer, err := daemon.NewTransformer(eff.Transform)
+	// Phase 8: wrap the configured transform backend in a fallback
+	// decorator so `yap record --transform` degrades gracefully when
+	// the backend is unreachable. The platform notifier is the same
+	// one the daemon uses, so the user sees the same toast.
+	transformer, err := daemon.NewTransformerWithFallback(eff.Transform, p.Notifier)
 	if err != nil {
 		return fmt.Errorf("record: build transformer: %w", err)
 	}

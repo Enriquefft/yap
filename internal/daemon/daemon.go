@@ -28,8 +28,12 @@ import (
 	_ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
 	_ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"
 	"github.com/hybridz/yap/pkg/yap/transform"
-	// Register every transform backend. Phase 3 only ships
-	// passthrough; Phase 8 adds local + openai.
+	"github.com/hybridz/yap/pkg/yap/transform/fallback"
+	// Register every transform backend. Phase 3 only shipped
+	// passthrough; Phase 8 adds local (Ollama native) and openai
+	// (any OpenAI-compatible SSE endpoint).
+	_ "github.com/hybridz/yap/pkg/yap/transform/local"
+	_ "github.com/hybridz/yap/pkg/yap/transform/openai"
 	_ "github.com/hybridz/yap/pkg/yap/transform/passthrough"
 )
 
@@ -88,9 +92,46 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 // the engine pipeline always has a non-nil transformer.
 //
 // NewTransformer is the single source of truth for "how the daemon
-// turns the on-disk transform block into a Transformer". The CLI's
-// one-shot commands (`yap record`, `yap transform`) reuse it.
+// turns the on-disk transform block into a Transformer" without
+// graceful-degradation wrapping. The CLI's debug-oriented
+// `yap transform` command uses this so backend failures surface
+// loudly instead of silently falling back.
+//
+// Callers that want graceful degradation (the daemon startup path,
+// `yap record`) should use NewTransformerWithFallback and supply a
+// live Notifier.
 func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
+	return NewTransformerWithFallback(tc, nil)
+}
+
+// NewTransformerWithFallback builds a Transformer per the on-disk
+// transform config and optionally wraps it in a fallback decorator
+// that degrades to passthrough on backend failure.
+//
+// The wrapping only happens when all of the following are true:
+//
+//   - transform.enabled is true
+//   - the configured backend is non-trivial (not "passthrough")
+//   - a non-nil notifier was supplied
+//
+// When any of those conditions is false the primary transformer is
+// returned directly. This preserves Phase 7's public API for the
+// CLI's debug `yap transform` command, which intentionally passes a
+// nil notifier to see real errors.
+//
+// When wrapping is active, a startup health check runs synchronously
+// via the backend's optional transform.Checker interface. On health
+// failure the notifier receives one user-visible message and the
+// returned transformer is the passthrough — no network round-trip
+// per recording for the duration of this session.
+//
+// On mid-recording transform failures (the primary emits an error
+// chunk), the fallback decorator replays the buffered input through
+// passthrough and calls the notifier once with the primary's error.
+func NewTransformerWithFallback(
+	tc pcfg.TransformConfig,
+	notifier platform.Notifier,
+) (transform.Transformer, error) {
 	name := tc.Backend
 	if !tc.Enabled || name == "" {
 		name = "passthrough"
@@ -99,12 +140,65 @@ func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("transform backend %q: %w", name, err)
 	}
-	return factory(transform.Config{
+	primary, err := factory(transform.Config{
 		APIURL:       tc.APIURL,
 		APIKey:       tc.APIKey,
 		Model:        tc.Model,
 		SystemPrompt: tc.SystemPrompt,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("transform backend %q: %w", name, err)
+	}
+
+	if name == "passthrough" || notifier == nil {
+		return primary, nil
+	}
+
+	// Run the startup health probe if the backend supports it. A
+	// failure does not refuse daemon startup — it raises a
+	// notification and swaps the primary out for passthrough for the
+	// rest of the session. This matches the graceful-degradation
+	// ethos documented on ROADMAP Phase 8.
+	if checker, ok := primary.(transform.Checker); ok {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := checker.HealthCheck(checkCtx)
+		cancel()
+		if err != nil {
+			notifier.Notify(
+				"yap: transform backend unreachable",
+				fmt.Sprintf("%s: %v — falling back to passthrough", name, err),
+			)
+			return passthroughTransformer()
+		}
+	}
+
+	fb, err := passthroughTransformer()
+	if err != nil {
+		return nil, err
+	}
+	wrapped, err := fallback.New(primary, fb, func(err error) {
+		notifier.Notify(
+			"yap: transform failed",
+			fmt.Sprintf("%s: %v — injected raw transcription", name, err),
+		)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return wrapped, nil
+}
+
+// passthroughTransformer constructs the default identity transformer.
+// Used by NewTransformerWithFallback when the primary backend fails
+// its health probe (swap in passthrough for this session) and when
+// wrapping the primary in a fallback decorator (passthrough is the
+// identity tail of that decorator).
+func passthroughTransformer() (transform.Transformer, error) {
+	factory, err := transform.Get("passthrough")
+	if err != nil {
+		return nil, fmt.Errorf("transform passthrough: %w", err)
+	}
+	return factory(transform.Config{})
 }
 
 // InjectionOptionsFromConfig bridges pcfg.InjectionConfig into the
@@ -259,7 +353,12 @@ func Run(cfg *config.Config, deps Deps) error {
 			}
 		}()
 	}
-	transformer, err := NewTransformer(cfg.Transform)
+	// Phase 8: wrap the configured transform backend in a fallback
+	// decorator that falls back to passthrough on primary failure
+	// and raises a user-visible notification. A startup health probe
+	// is issued synchronously inside NewTransformerWithFallback when
+	// the backend supports transform.Checker.
+	transformer, err := NewTransformerWithFallback(cfg.Transform, deps.Platform.Notifier)
 	if err != nil {
 		return fmt.Errorf("build transformer: %w", err)
 	}

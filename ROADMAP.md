@@ -508,25 +508,81 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 8 — LLM Transform (pluggable)
+## Phase 8 — LLM Transform (pluggable) — DONE
 
 **Depends on:** Phase 2, Phase 3, Phase 5
 
-- [ ] `pkg/yap/transform/local/` — Ollama / llama.cpp server client (default `http://localhost:11434/v1`)
-- [ ] Streaming SSE for both backends
-- [ ] Health check at startup with clear error if backend unreachable
-- [ ] `pkg/yap/transform/openai/` — generic OpenAI-compatible remote
-- [ ] Exponential backoff on 5xx, fail-fast on 4xx
-- [ ] `YAP_TRANSFORM_API_KEY` env override (added in Phase 2)
-- [ ] Wire both into the engine pipeline
-- [ ] Default system prompt focused on transcription cleanup
-- [ ] Graceful degradation: on transform failure, inject raw transcription + send notification
-- [ ] `yap record --transform` flag bypasses `transform.enabled = false` for one invocation
+- [x] `pkg/yap/transform/local/` — Ollama native API client (default `http://localhost:11434`, `POST /api/chat`, NDJSON streaming)
+- [x] Streaming for both backends (NDJSON for local, SSE for openai)
+- [x] Health check at startup with clear error if backend unreachable (new `transform.Checker` interface, daemon calls it from `NewTransformerWithFallback`)
+- [x] `pkg/yap/transform/openai/` — generic OpenAI-compatible remote (SSE, `POST {api_url}/chat/completions`)
+- [x] Exponential backoff on 5xx, fail-fast on 4xx (shared `pkg/yap/transform/httpstream` helper)
+- [x] `YAP_TRANSFORM_API_KEY` env override (added in Phase 2)
+- [x] Wire both into the engine pipeline (side-effect imports in `internal/daemon/daemon.go`)
+- [x] Default system prompt focused on transcription cleanup (backend `DefaultSystemPrompt` mirrors the on-disk default owned by `pkg/yap/config`)
+- [x] Graceful degradation: on transform failure, inject raw transcription + send notification (`pkg/yap/transform/fallback/` decorator wrapped in `daemon.NewTransformerWithFallback`)
+- [x] `yap record --transform` flag bypasses `transform.enabled = false` for one invocation (Phase 7 feature preserved; Phase 8 routes it through the new fallback wrapper so it degrades gracefully too)
 
 **Done when:**
-- [ ] With Ollama running and `transform.backend = "local"`, dictation is cleaned before injection
-- [ ] Stopping Ollama mid-dictation produces a notification and injects raw transcription
-- [ ] `transform.backend = "openai"` works without code changes
+- [x] With Ollama running and `transform.backend = "local"`, dictation is cleaned before injection
+- [x] Stopping Ollama mid-dictation produces a notification and injects raw transcription
+- [x] `transform.backend = "openai"` works without code changes
+
+### Findings
+
+- **Local backend is Ollama-native, not OpenAI-compat.** The plan
+  settled on `POST {api_url}/api/chat` with NDJSON streaming rather
+  than routing through Ollama's OpenAI-compat shim. Users who want
+  the OpenAI-compat path (llama.cpp-server, vLLM, Ollama's /v1 layer)
+  point `transform.backend = "openai"` at the appropriate URL —
+  `http://localhost:8080/v1`, `http://localhost:11434/v1`, etc. The
+  `local` name is preserved for schema stability (Phase 2 already
+  enumerated it) even though it is now specifically "Ollama". This
+  is documented in the package godoc of both backends.
+- **`httpstream` is a public sub-package, not internal.** Both
+  backends need the same HTTP-streaming + retry scaffolding. Putting
+  it under `pkg/yap/transform/httpstream/` instead of
+  `pkg/yap/transform/internal/httpstream/` lets third parties
+  writing their own transform backend reuse the same policy without
+  copy-pasting the retry loop. The surface is a single `Client`
+  struct, `NewClient(timeout)`, `PostJSON`, and the
+  `NonRetryableError` sentinel.
+- **Fallback uses buffered replay, not tee.** The transform input
+  channel is consumable once, so the decorator drains the full input
+  into a slice before either transformer runs. For dictation this is
+  a few hundred bytes to a few kB, the cost is trivial, and the
+  semantics are simple: "if the primary fails for any reason, replay
+  the same chunks through the fallback". Partial success is treated
+  as failure — we never mix transformed and raw output.
+- **Upstream errors bypass both transformers.** When an input chunk
+  carries `chunk.Err != nil` (a transcription failure), the fallback
+  decorator propagates it directly without running either the
+  primary or the fallback. Transcription failures are not a
+  transform-layer concern; papering over them with a raw replay
+  would be wrong.
+- **Checker is a new type, not a method on Transformer.** The
+  `transform.Checker` interface is a separate one-method interface
+  that backends opt into. The daemon type-asserts on it; backends
+  that skip it (passthrough, for instance) still work. This matches
+  the `io.Closer` opt-in pattern already used for long-lived
+  backends like whisperlocal.
+- **Startup health check is synchronous but bounded.** The daemon
+  runs the probe inside `NewTransformerWithFallback` with a 5s
+  timeout. A failure fires one notification and swaps the primary
+  out for passthrough for the rest of the session. The daemon never
+  refuses to start over a transform health failure, matching the
+  graceful-degradation ethos.
+- **CLI `yap transform` intentionally bypasses fallback.** The debug
+  tool passes a nil notifier to `NewTransformer`, which delegates
+  to `NewTransformerWithFallback(tc, nil)` and returns the primary
+  directly. The point of `yap transform` is to see real errors when
+  iterating on prompts or backend configs.
+- **OpenAI backend rejects empty api_url at construction.** Unlike
+  the local backend, there is no sensible default URL — it depends
+  entirely on which upstream server the user is targeting (real
+  OpenAI, llama.cpp-server, vLLM, Together.ai...). The validation
+  happens in `New`, which surfaces the error as a hard config error
+  the first time the transformer is built.
 
 ---
 

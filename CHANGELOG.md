@@ -10,6 +10,70 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+### Phase 8 — LLM Transform (pluggable)
+
+#### Added
+- `pkg/yap/transform/httpstream/` — public HTTP streaming helper
+  shared by the local and openai transform backends. Centralises
+  JSON request encoding, 5xx/timeout retry with 500ms/1s/2s backoff
+  mirroring the Phase 3 groq pattern, and 4xx fail-fast via the
+  exported `NonRetryableError` type. The package is deliberately
+  public (not under `internal/`) so third parties writing their own
+  transform backend under `github.com/hybridz/yap/pkg/yap/transform`
+  can reuse the same scaffolding.
+- `pkg/yap/transform/local/` — Ollama-native transform backend
+  (`POST {api_url}/api/chat` with NDJSON streaming response).
+  Defaults `transform.api_url` to `http://localhost:11434` when
+  empty. Implements the new `transform.Checker` interface with a
+  startup health probe against `GET /`. Registered in the registry
+  under the name "local" via side-effect import.
+- `pkg/yap/transform/openai/` — generic OpenAI-compatible SSE
+  transform backend (`POST {api_url}/chat/completions`). Works
+  against real OpenAI, llama.cpp-server, vLLM, Ollama's /v1 compat,
+  Together.ai, and any other vendor speaking the same shape. Users
+  running llama.cpp-server should point this backend at
+  `http://localhost:8080/v1` rather than using the local backend,
+  because the local backend targets Ollama's native API shape.
+  Rejects an empty `api_url` at construction time — there is no
+  sensible default. Implements `transform.Checker` via a
+  `GET {api_url}/models` probe. Registered under the name "openai".
+- `pkg/yap/transform/fallback/` — transform.Transformer decorator
+  that runs a primary backend and, on any primary failure (factory
+  error or mid-stream error chunk), replays the buffered input
+  through a fallback transformer while firing a single OnError
+  callback. Partial success is treated as failure: the decorator
+  never mixes transformed and raw output. Upstream errors (input
+  chunks carrying `Err != nil`) propagate directly without running
+  either transformer. Context cancellation short-circuits both the
+  primary run and the drain phase.
+- `pkg/yap/transform/transform.go` — new `Checker` interface. Both
+  the local and openai backends implement it; the daemon
+  type-asserts on it at startup and, on health-check failure,
+  raises a notification and substitutes passthrough for the rest of
+  the session. This is the graceful-degradation hook required by
+  Phase 8 in ROADMAP.md.
+- `internal/daemon/daemon.go` — new public helper
+  `NewTransformerWithFallback(tc, notifier)`. It resolves the
+  configured backend, runs the startup health probe, and wraps the
+  primary in the fallback decorator when the backend is non-trivial
+  AND a notifier is supplied. Phase 7's existing `NewTransformer`
+  helper is preserved as a thin wrapper that calls the new helper
+  with a nil notifier, keeping the public API stable for the CLI's
+  debug `yap transform` command (which intentionally bypasses
+  fallback so errors surface loudly).
+
+#### Changed
+- `internal/daemon/daemon.go` side-effect-imports the new `local`
+  and `openai` backend packages alongside `passthrough`, populating
+  the transform registry at process start. The daemon's `Run`
+  function now builds the transformer via
+  `NewTransformerWithFallback(cfg.Transform, deps.Platform.Notifier)`
+  so every daemon recording inherits the graceful-degradation path.
+- `internal/cli/record.go` uses the new helper so
+  `yap record --transform` degrades gracefully when the backend is
+  unreachable — the same toast the daemon fires, powered by the
+  same platform notifier.
+
 ### Phase 7 — CLI Rework
 
 #### Added
