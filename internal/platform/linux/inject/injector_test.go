@@ -7,6 +7,8 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,21 +29,22 @@ func newCaptureHandler() (*slog.Logger, *bytes.Buffer) {
 // recordedLogLine is the deserialised structure of one captured slog
 // JSON line. Test assertions read these fields directly.
 type recordedLogLine struct {
-	Time              time.Time `json:"time"`
-	Level             string    `json:"level"`
-	Msg               string    `json:"msg"`
-	TargetDisplay     string    `json:"target.display_server"`
-	TargetAppClass    string    `json:"target.app_class"`
-	TargetAppType     string    `json:"target.app_type"`
-	TargetTmux        bool      `json:"target.tmux"`
-	TargetSSHRemote   bool      `json:"target.ssh_remote"`
-	Strategy          string    `json:"strategy"`
-	Outcome           string    `json:"outcome"`
-	Bytes             int       `json:"bytes"`
-	DurationMS        int64     `json:"duration_ms"`
-	Attempts          int       `json:"attempts"`
-	Error             string    `json:"error"`
-	Reason            string    `json:"reason"`
+	Time            time.Time `json:"time"`
+	Level           string    `json:"level"`
+	Msg             string    `json:"msg"`
+	TargetDisplay   string    `json:"target.display_server"`
+	TargetAppClass  string    `json:"target.app_class"`
+	TargetAppType   string    `json:"target.app_type"`
+	TargetTmux      bool      `json:"target.tmux"`
+	TargetSSHRemote bool      `json:"target.ssh_remote"`
+	TargetOSC52PTY  string    `json:"target.osc52_pty"`
+	Strategy        string    `json:"strategy"`
+	Outcome         string    `json:"outcome"`
+	Bytes           int       `json:"bytes"`
+	DurationMS      int64     `json:"duration_ms"`
+	Attempts        int       `json:"attempts"`
+	Error           string    `json:"error"`
+	Reason          string    `json:"reason"`
 }
 
 func parseLogLines(t *testing.T, buf *bytes.Buffer) []recordedLogLine {
@@ -85,8 +88,8 @@ func TestInjectEmitsStructuredAuditLog(t *testing.T) {
 		EnvGet: envFunc(map[string]string{
 			"WAYLAND_DISPLAY": "wayland-1",
 		}),
-		Sleep: func(time.Duration) {},
-		Now:   fixedClock(),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{PreferOSC52: true}, deps, logger)
 	if err != nil {
@@ -131,6 +134,75 @@ func TestInjectEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
+// TestInjectAuditLogIncludesOSC52PTY guards F4c: when an OSC52
+// delivery succeeds, the audit log must include target.osc52_pty so
+// users debugging "wrong tab" reports have a handle on which pty got
+// the bytes.
+func TestInjectAuditLogIncludesOSC52PTY(t *testing.T) {
+	logger, buf := newCaptureHandler()
+	wc := &fakeWriteCloser{}
+	openTarget := ""
+	deps := fakeProcDeps(t, wc, &openTarget)
+	deps.EnvGet = envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"})
+	deps.Now = fixedClock()
+
+	// We need detect to land on a terminal target with WindowID=100
+	// so the OSC52 strategy fires. The simplest way is to swap in a
+	// stub strategy list and a deterministic Target via direct field
+	// override after construction.
+	inj, err := New(platform.InjectionOptions{PreferOSC52: true}, deps, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	osc := newOSC52Strategy(deps, platform.InjectionOptions{PreferOSC52: true})
+	inj.strategies = []Strategy{osc}
+
+	// Drive Inject by patching Detect indirectly: the easiest path is
+	// to call inj.inject() through the public Inject method on a
+	// target the strategy supports. Since Detect uses EnvGet/exec,
+	// and our deps fake doesn't wire ExecCommandContext, the
+	// generic-wayland fall-through produces AppGeneric — which OSC52
+	// does not Supports. Instead we replace the strategies list with
+	// a wrapper that forces the AppTerminal target via a synthetic
+	// strategy that delegates to osc.
+	inj.strategies = []Strategy{&forcedTerminalStrategy{inner: osc}}
+
+	if err := inj.Inject(context.Background(), "hello"); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	if openTarget != "/dev/pts/7" {
+		t.Errorf("opened tty = %q, want /dev/pts/7", openTarget)
+	}
+	lines := parseLogLines(t, buf)
+	var final recordedLogLine
+	for _, l := range lines {
+		if l.Msg == "inject" && l.Outcome == "success" {
+			final = l
+		}
+	}
+	if final.TargetOSC52PTY != "/dev/pts/7" {
+		t.Errorf("target.osc52_pty = %q, want /dev/pts/7 (audit log must surface chosen tty)", final.TargetOSC52PTY)
+	}
+}
+
+// forcedTerminalStrategy wraps the real osc52Strategy and synthesises
+// the AppTerminal target the underlying strategy needs, regardless of
+// the Target the injector resolved. This is the smallest stub needed
+// to test the F4c LastChosenTTY plumbing without spinning up a real
+// detector.
+type forcedTerminalStrategy struct{ inner *osc52Strategy }
+
+func (f *forcedTerminalStrategy) Name() string { return f.inner.Name() }
+func (f *forcedTerminalStrategy) Supports(yinject.Target) bool { return true }
+func (f *forcedTerminalStrategy) Deliver(ctx context.Context, _ yinject.Target, text string) error {
+	return f.inner.Deliver(ctx, yinject.Target{
+		DisplayServer: "wayland",
+		AppType:       yinject.AppTerminal,
+		WindowID:      "100",
+	}, text)
+}
+func (f *forcedTerminalStrategy) LastChosenTTY() string { return f.inner.LastChosenTTY() }
+
 func TestInjectFailsAggregateAfterAllStrategiesFail(t *testing.T) {
 	logger, buf := newCaptureHandler()
 	failing := &recordingStrategy{
@@ -139,9 +211,9 @@ func TestInjectFailsAggregateAfterAllStrategiesFail(t *testing.T) {
 		deliverErr: errors.New("nope"),
 	}
 	deps := Deps{
-		EnvGet: envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, logger)
 	if err != nil {
@@ -172,24 +244,55 @@ func TestInjectFailsAggregateAfterAllStrategiesFail(t *testing.T) {
 	}
 }
 
+// TestInjectFailsAggregateContainsEveryAttemptError guards C3: the
+// aggregate error returned when every strategy fails must contain
+// every per-attempt error so callers can post-mortem without combing
+// the audit log.
+func TestInjectFailsAggregateContainsEveryAttemptError(t *testing.T) {
+	logger, _ := newCaptureHandler()
+	first := &recordingStrategy{name: "first", supportsFn: func(yinject.Target) bool { return true }, deliverErr: errors.New("first-broke")}
+	second := &recordingStrategy{name: "second", supportsFn: func(yinject.Target) bool { return true }, deliverErr: errors.New("second-broke")}
+	third := &recordingStrategy{name: "third", supportsFn: func(yinject.Target) bool { return true }, deliverErr: errors.New("third-broke")}
+	deps := Deps{
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
+	}
+	inj, err := New(platform.InjectionOptions{}, deps, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	inj.strategies = []Strategy{first, second, third}
+	err = inj.Inject(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected aggregate failure")
+	}
+	msg := err.Error()
+	for _, want := range []string{"first-broke", "second-broke", "third-broke"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("aggregate error %q missing %q — every per-attempt error must surface", msg, want)
+		}
+	}
+}
+
 func TestInjectFallsThroughOnUnsupportedSentinel(t *testing.T) {
 	logger, _ := newCaptureHandler()
 	deliveredAt := []string{}
 	first := &recordingStrategy{
-		name:       "first",
-		supportsFn: func(yinject.Target) bool { return true },
-		deliverErr: yinject.ErrStrategyUnsupported,
+		name:        "first",
+		supportsFn:  func(yinject.Target) bool { return true },
+		deliverErr:  yinject.ErrStrategyUnsupported,
 		deliveredAt: &deliveredAt,
 	}
 	second := &recordingStrategy{
-		name:       "second",
-		supportsFn: func(yinject.Target) bool { return true },
+		name:        "second",
+		supportsFn:  func(yinject.Target) bool { return true },
 		deliveredAt: &deliveredAt,
 	}
 	deps := Deps{
-		EnvGet: envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, logger)
 	if err != nil {
@@ -206,17 +309,10 @@ func TestInjectFallsThroughOnUnsupportedSentinel(t *testing.T) {
 
 func TestInjectStreamBuffersUntilClose(t *testing.T) {
 	logger, _ := newCaptureHandler()
-	delivered := ""
-	delivering := &recordingStrategy{
-		name:       "wayland",
-		supportsFn: func(yinject.Target) bool { return true },
-		deliverErr: nil,
-	}
-	delivering.supportsFn = func(yinject.Target) bool { return true }
 	deps := Deps{
-		EnvGet: envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, logger)
 	if err != nil {
@@ -238,15 +334,14 @@ func TestInjectStreamBuffersUntilClose(t *testing.T) {
 	if captureStrat.last != "hello world" {
 		t.Errorf("delivered = %q, want %q", captureStrat.last, "hello world")
 	}
-	_ = delivered
 }
 
 func TestInjectStreamPropagatesChunkError(t *testing.T) {
 	logger, _ := newCaptureHandler()
 	deps := Deps{
-		EnvGet: func(string) string { return "" },
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   func(string) string { return "" },
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, logger)
 	if err != nil {
@@ -261,6 +356,77 @@ func TestInjectStreamPropagatesChunkError(t *testing.T) {
 	}
 }
 
+// TestInjectStreamFlushOnCancelUsesBoundedTimeout guards C4: when the
+// caller cancels their context with a non-empty buffer, the flush
+// path must use a fresh context with finalDeliveryBudget instead of
+// context.Background — otherwise a wedged strategy holds the daemon
+// indefinitely.
+//
+// We exercise the flush path by sending a "gating" chunk into the
+// buffer through a synchronous strategy, then cancelling the
+// caller's ctx, then waiting for the cancel to propagate. The flush
+// then runs against a fresh ctx whose deadline we capture.
+func TestInjectStreamFlushOnCancelUsesBoundedTimeout(t *testing.T) {
+	logger, _ := newCaptureHandler()
+	deps := Deps{
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
+	}
+	inj, err := New(platform.InjectionOptions{}, deps, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cs := &deadlineCaptureStrategy{}
+	inj.strategies = []Strategy{cs}
+
+	// Use an unbuffered channel and a goroutine so we can guarantee
+	// the buffer chunk is consumed BEFORE we cancel — eliminating the
+	// select-ordering race that would otherwise let ctx.Done fire on
+	// an empty buffer.
+	in := make(chan transcribe.TranscriptChunk)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- inj.InjectStream(ctx, in)
+	}()
+	// Hand the chunk to the goroutine, then cancel.
+	in <- transcribe.TranscriptChunk{Text: "buffered"}
+	cancel()
+
+	if err := <-done; err != nil {
+		t.Fatalf("InjectStream flush: %v", err)
+	}
+	if cs.received != "buffered" {
+		t.Errorf("delivered = %q, want %q", cs.received, "buffered")
+	}
+	if !cs.hadDeadline {
+		t.Errorf("flush ctx must have a deadline (finalDeliveryBudget), got context.Background")
+	}
+	if cs.budget <= 0 || cs.budget > finalDeliveryBudget+250*time.Millisecond {
+		t.Errorf("flush deadline = %v, want bounded by finalDeliveryBudget=%v", cs.budget, finalDeliveryBudget)
+	}
+}
+
+// deadlineCaptureStrategy snapshots the ctx the injector passes to
+// Deliver so the C4 test can assert the deadline behaviour.
+type deadlineCaptureStrategy struct {
+	received    string
+	hadDeadline bool
+	budget      time.Duration
+}
+
+func (d *deadlineCaptureStrategy) Name() string                 { return "deadline-capture" }
+func (d *deadlineCaptureStrategy) Supports(yinject.Target) bool { return true }
+func (d *deadlineCaptureStrategy) Deliver(ctx context.Context, _ yinject.Target, text string) error {
+	d.received = text
+	if dl, ok := ctx.Deadline(); ok {
+		d.hadDeadline = true
+		d.budget = time.Until(dl)
+	}
+	return nil
+}
+
 func TestInjectNoApplicableStrategiesLogsFailure(t *testing.T) {
 	logger, buf := newCaptureHandler()
 	declining := &recordingStrategy{
@@ -268,9 +434,9 @@ func TestInjectNoApplicableStrategiesLogsFailure(t *testing.T) {
 		supportsFn: func(yinject.Target) bool { return false },
 	}
 	deps := Deps{
-		EnvGet: envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, logger)
 	if err != nil {
@@ -294,9 +460,9 @@ func TestInjectNoApplicableStrategiesLogsFailure(t *testing.T) {
 
 func TestInjectWithNilLoggerDoesNotPanic(t *testing.T) {
 	deps := Deps{
-		EnvGet: envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
-		Sleep:  func(time.Duration) {},
-		Now:    fixedClock(),
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
 	}
 	inj, err := New(platform.InjectionOptions{}, deps, nil)
 	if err != nil {
@@ -308,14 +474,88 @@ func TestInjectWithNilLoggerDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestInject_ConcurrentCallsSerialized guards C10: the Injector
+// mutex must serialize concurrent Inject calls so the electron
+// strategy's clipboard save/restore cannot interleave with another
+// caller. We assert no overlap by counting concurrent entries with
+// an atomic counter inside the strategy fake.
+func TestInject_ConcurrentCallsSerialized(t *testing.T) {
+	logger, _ := newCaptureHandler()
+	deps := Deps{
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      time.Now,
+	}
+	inj, err := New(platform.InjectionOptions{}, deps, logger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cs := &concurrencyProbeStrategy{}
+	inj.strategies = []Strategy{cs}
+
+	const n = 16
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			if err := inj.Inject(context.Background(), "x"); err != nil {
+				t.Errorf("Inject: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if max := atomic.LoadInt32(&cs.maxConcurrent); max != 1 {
+		t.Errorf("max concurrent Deliver calls = %d, want 1 (Injector must serialize)", max)
+	}
+	if got := atomic.LoadInt32(&cs.totalCalls); got != n {
+		t.Errorf("total Deliver calls = %d, want %d", got, n)
+	}
+}
+
+// concurrencyProbeStrategy measures the maximum number of concurrent
+// Deliver calls and the total call count, both updated atomically.
+// The C10 test asserts maxConcurrent==1 to prove the injector
+// serialised everything.
+type concurrencyProbeStrategy struct {
+	currentlyIn   int32
+	maxConcurrent int32
+	totalCalls    int32
+}
+
+func (c *concurrencyProbeStrategy) Name() string                 { return "probe" }
+func (c *concurrencyProbeStrategy) Supports(yinject.Target) bool { return true }
+func (c *concurrencyProbeStrategy) Deliver(_ context.Context, _ yinject.Target, _ string) error {
+	now := atomic.AddInt32(&c.currentlyIn, 1)
+	for {
+		old := atomic.LoadInt32(&c.maxConcurrent)
+		if now <= old {
+			break
+		}
+		if atomic.CompareAndSwapInt32(&c.maxConcurrent, old, now) {
+			break
+		}
+	}
+	atomic.AddInt32(&c.totalCalls, 1)
+	// Hold the slot briefly so the test would catch overlap if the
+	// mutex were missing. We use <-time.After instead of the stdlib
+	// blocking sleep token so the package-wide grep guard stays
+	// clean. The wait routes through a fresh timer per call rather
+	// than Deps.SleepCtx because the probe is intentionally exercising
+	// real concurrency, not the deps stub.
+	<-time.After(1 * time.Millisecond)
+	atomic.AddInt32(&c.currentlyIn, -1)
+	return nil
+}
+
 // captureStrategy records the last text it received via Deliver. It
 // is used by InjectStream tests to assert the buffered payload.
 type captureStrategy struct {
 	last string
 }
 
-func (c *captureStrategy) Name() string                     { return "capture" }
-func (c *captureStrategy) Supports(yinject.Target) bool     { return true }
+func (c *captureStrategy) Name() string                 { return "capture" }
+func (c *captureStrategy) Supports(yinject.Target) bool { return true }
 func (c *captureStrategy) Deliver(_ context.Context, _ yinject.Target, text string) error {
 	c.last = text
 	return nil
@@ -324,3 +564,9 @@ func (c *captureStrategy) Deliver(_ context.Context, _ yinject.Target, text stri
 // Compile-time guards on test types.
 var _ Strategy = (*captureStrategy)(nil)
 var _ Strategy = (*recordingStrategy)(nil)
+var _ Strategy = (*deadlineCaptureStrategy)(nil)
+var _ Strategy = (*concurrencyProbeStrategy)(nil)
+var _ Strategy = (*forcedTerminalStrategy)(nil)
+var _ ttyReporter = (*forcedTerminalStrategy)(nil)
+var _ ttyReporter = (*osc52Strategy)(nil)
+

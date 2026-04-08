@@ -16,10 +16,10 @@ import (
 //
 // The flow is: save current clipboard → write text → synthesize
 // Ctrl+V via wtype/xdotool → wait briefly → restore the previous
-// clipboard. The restore wait routes through Deps.Sleep so tests
-// have a single hook for time control. The wait is the only sleep
-// permitted in the inject package, and it is documented in the
-// Phase 4 plan §1.8.
+// clipboard. The restore wait routes through Deps.SleepCtx so tests
+// have a single hook for time control and ctx cancellation unblocks
+// the wait promptly. The wait is the only bounded delay permitted in
+// the inject package, and it is documented in the Phase 4 plan §1.8.
 type electronStrategy struct {
 	deps Deps
 	opts platform.InjectionOptions
@@ -67,9 +67,9 @@ func (s *electronStrategy) Deliver(ctx context.Context, target yinject.Target, t
 	var pasteErr error
 	switch target.DisplayServer {
 	case "wayland":
-		pasteErr = s.synthesizeCtrlVWayland()
+		pasteErr = s.synthesizeCtrlVWayland(ctx)
 	case "x11":
-		pasteErr = s.synthesizeCtrlVX11()
+		pasteErr = s.synthesizeCtrlVX11(ctx)
 	default:
 		pasteErr = yinject.ErrStrategyUnsupported
 	}
@@ -82,7 +82,11 @@ func (s *electronStrategy) Deliver(ctx context.Context, target yinject.Target, t
 		return fmt.Errorf("electron: synthesize paste: %w", pasteErr)
 	}
 	if saveErr == nil {
-		s.deps.Sleep(electronRestoreDelay)
+		// SleepCtx returns ctx.Err() on cancellation. We proceed with
+		// the restore regardless so the clipboard is always returned
+		// to its saved state — the alternative (skipping restore on
+		// cancel) would leave the user with stale paste content.
+		_ = s.deps.SleepCtx(ctx, electronRestoreDelay)
 		_ = s.deps.ClipboardWrite(saved)
 	}
 	return nil
@@ -90,11 +94,11 @@ func (s *electronStrategy) Deliver(ctx context.Context, target yinject.Target, t
 
 // synthesizeCtrlVWayland sends Ctrl+V via wtype. The strategy uses the
 // pressed/released modifier syntax wtype expects.
-func (s *electronStrategy) synthesizeCtrlVWayland() error {
+func (s *electronStrategy) synthesizeCtrlVWayland(ctx context.Context) error {
 	if _, err := s.deps.LookPath("wtype"); err != nil {
 		return yinject.ErrStrategyUnsupported
 	}
-	cmd := s.deps.ExecCommand("wtype", "-M", "ctrl", "v", "-m", "ctrl")
+	cmd := s.deps.ExecCommandContext(ctx, "wtype", "-M", "ctrl", "v", "-m", "ctrl")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("wtype ctrl+v: %w", err)
 	}
@@ -102,11 +106,11 @@ func (s *electronStrategy) synthesizeCtrlVWayland() error {
 }
 
 // synthesizeCtrlVX11 sends Ctrl+V via xdotool.
-func (s *electronStrategy) synthesizeCtrlVX11() error {
+func (s *electronStrategy) synthesizeCtrlVX11(ctx context.Context) error {
 	if _, err := s.deps.LookPath("xdotool"); err != nil {
 		return yinject.ErrStrategyUnsupported
 	}
-	cmd := s.deps.ExecCommand("xdotool", "key", "--clearmodifiers", "ctrl+v")
+	cmd := s.deps.ExecCommandContext(ctx, "xdotool", "key", "--clearmodifiers", "ctrl+v")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("xdotool ctrl+v: %w", err)
 	}

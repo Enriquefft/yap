@@ -3,10 +3,12 @@ package inject
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/hybridz/yap/internal/platform"
 	yinject "github.com/hybridz/yap/pkg/yap/inject"
@@ -22,10 +24,42 @@ import (
 // dictating into an SSH session in a modern terminal (foot, kitty,
 // wezterm, ghostty, etc.) because the escape sequence travels over
 // the SSH tty as application input.
+//
+// The OSC52 payload is always the raw text bytes, base64-encoded.
+// Bracketed-paste markers are framing control sequences — terminals
+// wrap them around a paste on the wire, they are not data. Embedding
+// them inside the clipboard payload would silently corrupt every
+// multi-line dictation on paste: the markers would end up in the
+// clipboard bytes, the terminal would add its own pair on top, and
+// the shell would interpret the inner markers as paste-end-start
+// delimiters. Callers that need paste framing get it from the
+// terminal, not from yap.
+//
+// The tty is opened with O_NONBLOCK so a wedged terminal (e.g. the
+// kernel tty write buffer full) surfaces EAGAIN rather than blocking
+// the caller indefinitely. EAGAIN is treated as
+// ErrStrategyUnsupported so the orchestrator falls through to the
+// next strategy.
 type osc52Strategy struct {
 	deps Deps
 	opts platform.InjectionOptions
+	// chosenTTY captures the /dev/pts/<N> path resolved on the most
+	// recent successful Deliver call. The injector type-asserts the
+	// strategy against ttyReporter to include the value in the audit
+	// log. It is reset at the top of every Deliver call, and because
+	// Injector serialises Inject/InjectStream via its mutex the field
+	// is never read concurrently.
+	chosenTTY string
 }
+
+// maxResolveTTYNodes caps the breadth-first walk of /proc descendants
+// during OSC52 tty resolution. On a machine with many shells under a
+// single terminal server (kitty, gnome-terminal, foot, wezterm) or a
+// pathological fork tree, the walk could otherwise continue until
+// OSReadDir fails. Exceeding the cap surfaces as
+// ErrStrategyUnsupported so the selector falls through to the next
+// strategy cleanly.
+const maxResolveTTYNodes = 256
 
 // newOSC52Strategy constructs an OSC52 strategy bound to deps and
 // opts.
@@ -43,12 +77,25 @@ func (s *osc52Strategy) Supports(target yinject.Target) bool {
 	return target.AppType == yinject.AppTerminal && s.opts.PreferOSC52
 }
 
+// LastChosenTTY returns the /dev/pts/<N> path the most recent
+// successful Deliver call wrote to, or the empty string when no
+// successful delivery has happened yet or the last call failed before
+// the tty was resolved. The injector uses this to enrich the audit
+// log via a ttyReporter type assertion.
+func (s *osc52Strategy) LastChosenTTY() string { return s.chosenTTY }
+
 // Deliver writes the OSC52 escape sequence to the slave pty of a
 // descendant shell. Returns ErrStrategyUnsupported when the target
-// PID cannot be parsed, /proc cannot be walked, or no descendant
-// shell is currently bound to a /dev/pts/N — the orchestrator falls
-// through to the next strategy in those cases.
+// PID cannot be parsed, /proc cannot be walked, the BFS hits the
+// descendant cap, no descendant shell is currently bound to a
+// /dev/pts/N, or the non-blocking write returns EAGAIN — the
+// orchestrator falls through to the next strategy in those cases.
 func (s *osc52Strategy) Deliver(ctx context.Context, target yinject.Target, text string) error {
+	// Reset before every attempt so a failed call cannot leak a stale
+	// tty into the audit log of a later successful call by a different
+	// strategy.
+	s.chosenTTY = ""
+
 	if target.WindowID == "" {
 		return yinject.ErrStrategyUnsupported
 	}
@@ -62,21 +109,23 @@ func (s *osc52Strategy) Deliver(ctx context.Context, target yinject.Target, text
 		return yinject.ErrStrategyUnsupported
 	}
 
-	payload := text
-	if s.opts.BracketedPaste && strings.Contains(text, "\n") {
-		payload = wrapBracketed(text)
-	}
-	encoded := base64.StdEncoding.EncodeToString([]byte(payload))
+	// Raw text only — bracketed-paste markers are framing, not data.
+	// See the type doc block above.
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
 	seq := "\x1b]52;c;" + encoded + "\x07"
 
-	w, err := s.deps.OSOpenFile(tty, os.O_WRONLY, 0)
+	w, err := s.deps.OSOpenFile(tty, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return fmt.Errorf("osc52: open %s: %w", tty, err)
 	}
 	defer func() { _ = w.Close() }()
 	if _, err := w.Write([]byte(seq)); err != nil {
+		if errors.Is(err, syscall.EAGAIN) {
+			return yinject.ErrStrategyUnsupported
+		}
 		return fmt.Errorf("osc52: write %s: %w", tty, err)
 	}
+	s.chosenTTY = tty
 	return nil
 }
 
@@ -87,12 +136,16 @@ func (s *osc52Strategy) Deliver(ctx context.Context, target yinject.Target, text
 // keep descending until we land on a process with a pts.
 //
 // Returns an error when /proc is unreadable (sandbox, container
-// without procfs) or when no descendant pts is found.
+// without procfs), when no descendant pts is found, or when the walk
+// exceeds maxResolveTTYNodes descendants (pathological fork tree).
 func (s *osc52Strategy) resolveTTY(rootPID int) (string, error) {
 	queue := []int{rootPID}
 	visited := map[int]bool{rootPID: true}
 
 	for len(queue) > 0 {
+		if len(visited) > maxResolveTTYNodes {
+			return "", yinject.ErrStrategyUnsupported
+		}
 		pid := queue[0]
 		queue = queue[1:]
 

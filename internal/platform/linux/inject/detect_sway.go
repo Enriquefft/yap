@@ -28,7 +28,7 @@ type swayWindowProps struct {
 // detectSway runs `swaymsg -t get_tree` and walks the result for the
 // focused container. Returns a classified Target on success.
 func detectSway(ctx context.Context, deps Deps) (yinject.Target, error) {
-	cmd := deps.ExecCommand("swaymsg", "-t", "get_tree")
+	cmd := deps.ExecCommandContext(ctx, "swaymsg", "-t", "get_tree")
 	out, err := cmd.Output()
 	if err != nil {
 		return yinject.Target{}, fmt.Errorf("swaymsg get_tree: %w", err)

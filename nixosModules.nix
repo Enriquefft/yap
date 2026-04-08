@@ -43,6 +43,7 @@ api_key = ""
 prefer_osc52 = true
 bracketed_paste = true
 electron_strategy = "clipboard"
+default_strategy = ""
 app_overrides = []
 
 [tray]
@@ -200,12 +201,17 @@ in {
         bracketed_paste = lib.mkOption {
           type = lib.types.bool;
           default = true;
-          description = "Wrap multi-line text in bracketed-paste escape sequences";
+          description = "Retained for schema compatibility; the injector no longer wraps payloads, tmux paste-buffer -p and the terminal handle framing";
         };
         electron_strategy = lib.mkOption {
           type = lib.types.enum [ "clipboard" "keystroke" ];
           default = "clipboard";
           description = "How to deliver to Electron apps";
+        };
+        default_strategy = lib.mkOption {
+          type = lib.types.str;
+          default = "";
+          description = "Fallback strategy name (tmux|osc52|electron|wayland|x11) forced when no app_overrides entry matches; empty disables";
         };
         app_overrides = lib.mkOption {
           type = lib.types.listOf (lib.types.attrsOf lib.types.str);

@@ -1,11 +1,10 @@
 package inject
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
-
-	"context"
 
 	yinject "github.com/hybridz/yap/pkg/yap/inject"
 )
@@ -19,7 +18,8 @@ import (
 // at focusPollMaxAttempts * focusPollInterval (currently 100ms).
 //
 // There are no fixed sleeps in this strategy: every wait routes
-// through Deps.Sleep so tests substitute a no-op.
+// through Deps.SleepCtx so tests substitute a no-op and cancellation
+// of the caller's context unblocks the poll loop promptly.
 type x11Strategy struct {
 	deps Deps
 }
@@ -51,10 +51,14 @@ func (s *x11Strategy) Supports(target yinject.Target) bool {
 
 // Deliver waits for focus to stabilize then runs `xdotool type
 // --clearmodifiers -- <text>`. The strategy uses `--` to ensure text
-// beginning with a hyphen is not parsed as an xdotool flag.
+// beginning with a hyphen is not parsed as an xdotool flag. When ctx
+// is cancelled during focus polling, Deliver returns ctx.Err() before
+// issuing the type command.
 func (s *x11Strategy) Deliver(ctx context.Context, target yinject.Target, text string) error {
-	s.waitForStableFocus()
-	cmd := s.deps.ExecCommand("xdotool", "type", "--clearmodifiers", "--", text)
+	if err := s.waitForStableFocus(ctx); err != nil {
+		return fmt.Errorf("x11: wait for focus: %w", err)
+	}
+	cmd := s.deps.ExecCommandContext(ctx, "xdotool", "type", "--clearmodifiers", "--", text)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("x11: xdotool type: %w", err)
 	}
@@ -64,27 +68,31 @@ func (s *x11Strategy) Deliver(ctx context.Context, target yinject.Target, text s
 // waitForStableFocus polls `xdotool getactivewindow` until two
 // consecutive samples return the same window id, or until the polling
 // budget is exhausted. The function never blocks beyond
-// focusPollMaxAttempts * focusPollInterval.
-func (s *x11Strategy) waitForStableFocus() {
-	prev := s.activeWindow()
+// focusPollMaxAttempts * focusPollInterval. Returns ctx.Err() when
+// the caller's context is cancelled mid-poll.
+func (s *x11Strategy) waitForStableFocus(ctx context.Context) error {
+	prev := s.activeWindow(ctx)
 	if prev == "" {
-		return
+		return nil
 	}
 	for i := 0; i < focusPollMaxAttempts; i++ {
-		s.deps.Sleep(focusPollInterval)
-		cur := s.activeWindow()
+		if err := s.deps.SleepCtx(ctx, focusPollInterval); err != nil {
+			return err
+		}
+		cur := s.activeWindow(ctx)
 		if cur == prev {
-			return
+			return nil
 		}
 		prev = cur
 	}
+	return nil
 }
 
 // activeWindow runs `xdotool getactivewindow` and returns the trimmed
 // output. Errors return the empty string — callers treat that as
 // "no stable focus" and proceed.
-func (s *x11Strategy) activeWindow() string {
-	cmd := s.deps.ExecCommand("xdotool", "getactivewindow")
+func (s *x11Strategy) activeWindow(ctx context.Context) string {
+	cmd := s.deps.ExecCommandContext(ctx, "xdotool", "getactivewindow")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""

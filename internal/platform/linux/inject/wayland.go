@@ -47,7 +47,7 @@ func (s *waylandStrategy) Supports(target yinject.Target) bool {
 // available.
 func (s *waylandStrategy) Deliver(ctx context.Context, target yinject.Target, text string) error {
 	if _, err := s.deps.LookPath("wtype"); err == nil {
-		cmd := s.deps.ExecCommand("wtype", "-")
+		cmd := s.deps.ExecCommandContext(ctx, "wtype", "-")
 		cmd.Stdin = strings.NewReader(text)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("wayland: wtype: %w", err)
@@ -55,7 +55,7 @@ func (s *waylandStrategy) Deliver(ctx context.Context, target yinject.Target, te
 		return nil
 	}
 	if s.canUseYdotool() {
-		cmd := s.deps.ExecCommand("ydotool", "type", "--file", "-")
+		cmd := s.deps.ExecCommandContext(ctx, "ydotool", "type", "--file", "-")
 		cmd.Stdin = strings.NewReader(text)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("wayland: ydotool: %w", err)

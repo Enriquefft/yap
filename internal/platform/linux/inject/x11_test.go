@@ -43,12 +43,16 @@ func (f *fakeX11Exec) command(name string, args ...string) *exec.Cmd {
 	return exec.Command("false")
 }
 
+func (f *fakeX11Exec) commandContext(_ context.Context, name string, args ...string) *exec.Cmd {
+	return f.command(name, args...)
+}
+
 func TestX11DeliverIssuesXdotoolType(t *testing.T) {
 	fe := &fakeX11Exec{winSequence: []string{"123", "123"}}
 	sleeps := 0
 	deps := Deps{
-		ExecCommand: fe.command,
-		Sleep:       func(time.Duration) { sleeps++ },
+		ExecCommandContext: fe.commandContext,
+		SleepCtx:           func(context.Context, time.Duration) error { sleeps++; return nil },
 	}
 	s := newX11Strategy(deps)
 	tgt := yinject.Target{DisplayServer: "x11", AppType: yinject.AppGeneric}
@@ -78,8 +82,8 @@ func TestX11FocusPollStopsOnStableImmediately(t *testing.T) {
 	fe := &fakeX11Exec{winSequence: []string{"42", "42"}}
 	sleeps := 0
 	deps := Deps{
-		ExecCommand: fe.command,
-		Sleep:       func(time.Duration) { sleeps++ },
+		ExecCommandContext: fe.commandContext,
+		SleepCtx:           func(context.Context, time.Duration) error { sleeps++; return nil },
 	}
 	s := newX11Strategy(deps)
 	if err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "x11"}, "x"); err != nil {
@@ -99,8 +103,8 @@ func TestX11FocusPollGivesUpAfterMaxAttempts(t *testing.T) {
 	fe := &fakeX11Exec{winSequence: winSequence}
 	sleeps := 0
 	deps := Deps{
-		ExecCommand: fe.command,
-		Sleep:       func(time.Duration) { sleeps++ },
+		ExecCommandContext: fe.commandContext,
+		SleepCtx:           func(context.Context, time.Duration) error { sleeps++; return nil },
 	}
 	s := newX11Strategy(deps)
 	if err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "x11"}, "x"); err != nil {
@@ -116,8 +120,8 @@ func TestX11FocusPollSkipsWhenInitialQueryFails(t *testing.T) {
 	fe := &fakeX11Exec{winSequence: []string{""}}
 	sleeps := 0
 	deps := Deps{
-		ExecCommand: fe.command,
-		Sleep:       func(time.Duration) { sleeps++ },
+		ExecCommandContext: fe.commandContext,
+		SleepCtx:           func(context.Context, time.Duration) error { sleeps++; return nil },
 	}
 	s := newX11Strategy(deps)
 	if err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "x11"}, "x"); err != nil {
@@ -131,8 +135,8 @@ func TestX11FocusPollSkipsWhenInitialQueryFails(t *testing.T) {
 func TestX11PropagatesXdotoolTypeFailure(t *testing.T) {
 	fe := &fakeX11Exec{winSequence: []string{"1", "1"}, typeFail: true}
 	deps := Deps{
-		ExecCommand: fe.command,
-		Sleep:       func(time.Duration) {},
+		ExecCommandContext: fe.commandContext,
+		SleepCtx:           func(context.Context, time.Duration) error { return nil },
 	}
 	s := newX11Strategy(deps)
 	err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "x11"}, "x")

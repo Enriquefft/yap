@@ -10,6 +10,12 @@ import (
 // Match is by exact lowercased equality against the WM_CLASS first
 // segment (or the process name on Wayland where WM_CLASS may be
 // empty). Order is not significant — see classify().
+//
+// Every entry is a real WM_CLASS value. TERM environment variable
+// values like "rxvt-unicode" or "st-256color" must never appear here:
+// WM_CLASS for urxvt is "urxvt" or "URxvt", and WM_CLASS for st is
+// simply "st". Confusing the two leads to dead entries that never
+// classify anything.
 var terminalClasses = []string{
 	"foot",
 	"foot-server",
@@ -21,14 +27,13 @@ var terminalClasses = []string{
 	"com.mitchellh.ghostty",
 	"xterm",
 	"urxvt",
-	"rxvt-unicode",
 	"konsole",
 	"gnome-terminal",
 	"gnome-terminal-server",
 	"xfce4-terminal",
 	"tilix",
 	"terminator",
-	"st-256color",
+	"st",
 }
 
 // electronClasses is the allowlist of known Electron / Chromium-based

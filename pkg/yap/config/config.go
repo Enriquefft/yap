@@ -77,8 +77,9 @@ type TransformConfig struct {
 // first-match wins.
 type InjectionConfig struct {
 	PreferOSC52      bool          `toml:"prefer_osc52"      yap:"doc=Use OSC52 for terminals when supported"`
-	BracketedPaste   bool          `toml:"bracketed_paste"   yap:"doc=Wrap multi-line text in bracketed-paste escape sequences"`
+	BracketedPaste   bool          `toml:"bracketed_paste"   yap:"doc=Retained for schema compatibility; the injector no longer wraps payloads, tmux paste-buffer -p and the terminal handle framing"`
 	ElectronStrategy string        `toml:"electron_strategy" yap:"enum=clipboard,keystroke;doc=How to deliver to Electron apps"`
+	DefaultStrategy  string        `toml:"default_strategy"  yap:"doc=Fallback strategy name (tmux|osc52|electron|wayland|x11) forced when no app_overrides entry matches; empty disables"`
 	AppOverrides     []AppOverride `toml:"app_overrides"     yap:"doc=Per-app strategy overrides, first match wins"`
 }
 
@@ -139,6 +140,7 @@ func DefaultConfig() Config {
 			PreferOSC52:      true,
 			BracketedPaste:   true,
 			ElectronStrategy: "clipboard",
+			DefaultStrategy:  "",
 			AppOverrides:     nil,
 		},
 		Tray: TrayConfig{Enabled: false},

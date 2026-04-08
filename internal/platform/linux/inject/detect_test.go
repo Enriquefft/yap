@@ -46,6 +46,14 @@ func (f *fakeExec) command(name string, args ...string) *exec.Cmd {
 	return cmd
 }
 
+// commandContext lifts the (name, args) fake into the ExecCommandContext
+// shape used by Deps. The fake does not honour ctx — strategy callers
+// pass ctx through for cancellation in production, and tests rely on
+// ctx-Done in dedicated tests rather than this fake.
+func (f *fakeExec) commandContext(_ context.Context, name string, args ...string) *exec.Cmd {
+	return f.command(name, args...)
+}
+
 // TestHelperProcess is the worker side of fakeExec. It is invoked as a
 // child process via os.Args[0] -test.run=TestHelperProcess. When
 // GO_WANT_HELPER_PROCESS=1 it writes the canned stdout/stderr and
@@ -170,7 +178,7 @@ func TestDetectSwayParsesFocusedNode(t *testing.T) {
 	}`
 	fe := &fakeExec{stdout: map[string]string{"swaymsg": tree}}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		EnvGet:      envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1", "SWAYSOCK": "/run/sway"}),
 	}
 	tgt, err := Detect(context.Background(), deps)
@@ -204,7 +212,7 @@ func TestDetectSwayXWaylandWindowProperties(t *testing.T) {
 	}`
 	fe := &fakeExec{stdout: map[string]string{"swaymsg": tree}}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		EnvGet:      envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1", "SWAYSOCK": "/run/sway"}),
 	}
 	tgt, err := Detect(context.Background(), deps)
@@ -223,7 +231,7 @@ func TestDetectHyprland(t *testing.T) {
 	const json = `{"class":"Code","pid":99}`
 	fe := &fakeExec{stdout: map[string]string{"hyprctl": json}}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		EnvGet: envFunc(map[string]string{
 			"WAYLAND_DISPLAY":             "wayland-1",
 			"HYPRLAND_INSTANCE_SIGNATURE": "abc",
@@ -246,8 +254,8 @@ func TestDetectHyprland(t *testing.T) {
 
 func TestDetectGenericWaylandFallsThrough(t *testing.T) {
 	deps := Deps{
-		ExecCommand: func(string, ...string) *exec.Cmd { return exec.Command("false") },
-		EnvGet:      envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		ExecCommandContext: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") },
+		EnvGet:             envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
 	}
 	tgt, err := Detect(context.Background(), deps)
 	if err != nil {
@@ -271,7 +279,7 @@ func TestDetectX11(t *testing.T) {
 	}
 	fe := &fakeExec{stdout: stdout}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		EnvGet:      envFunc(map[string]string{"DISPLAY": ":0"}),
 	}
 	tgt, err := Detect(context.Background(), deps)
@@ -296,7 +304,7 @@ func TestDetectAnnotateTmuxOnTerminal(t *testing.T) {
 	const tree = `{"focused":true,"app_id":"alacritty","pid":1}`
 	fe := &fakeExec{stdout: map[string]string{"swaymsg": tree}}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		EnvGet: envFunc(map[string]string{
 			"WAYLAND_DISPLAY": "wayland-1",
 			"SWAYSOCK":        "/run/sway",

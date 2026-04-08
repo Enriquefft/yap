@@ -18,11 +18,11 @@ import (
 //  3. The WM_CLASS pair is `"instance", "class"` — we use the second
 //     entry (class) as the canonical AppClass for allowlist matching.
 func detectX11(ctx context.Context, deps Deps) (yinject.Target, error) {
-	winID, err := x11ActiveWindow(deps)
+	winID, err := x11ActiveWindow(ctx, deps)
 	if err != nil {
 		return yinject.Target{}, err
 	}
-	class, pid, err := x11WindowProps(deps, winID)
+	class, pid, err := x11WindowProps(ctx, deps, winID)
 	if err != nil {
 		return yinject.Target{}, err
 	}
@@ -36,8 +36,8 @@ func detectX11(ctx context.Context, deps Deps) (yinject.Target, error) {
 
 // x11ActiveWindow runs `xdotool getactivewindow` and returns the
 // trimmed window id string.
-func x11ActiveWindow(deps Deps) (string, error) {
-	out, err := deps.ExecCommand("xdotool", "getactivewindow").Output()
+func x11ActiveWindow(ctx context.Context, deps Deps) (string, error) {
+	out, err := deps.ExecCommandContext(ctx, "xdotool", "getactivewindow").Output()
 	if err != nil {
 		return "", fmt.Errorf("xdotool getactivewindow: %w", err)
 	}
@@ -56,8 +56,8 @@ func x11ActiveWindow(deps Deps) (string, error) {
 //	_NET_WM_PID(CARDINAL) = 12345
 //
 // Missing pids return 0; missing classes return the empty string.
-func x11WindowProps(deps Deps, winID string) (class string, pid int, err error) {
-	out, err := deps.ExecCommand("xprop", "-id", winID, "WM_CLASS", "_NET_WM_PID").Output()
+func x11WindowProps(ctx context.Context, deps Deps, winID string) (class string, pid int, err error) {
+	out, err := deps.ExecCommandContext(ctx, "xprop", "-id", winID, "WM_CLASS", "_NET_WM_PID").Output()
 	if err != nil {
 		return "", 0, fmt.Errorf("xprop -id %s: %w", winID, err)
 	}

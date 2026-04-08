@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hybridz/yap/internal/platform"
@@ -21,11 +22,34 @@ import (
 // Deps bag, and a logger. The strategy list is built once at
 // construction time and walked in priority order on each Inject call:
 // tmux → osc52 → electron → wayland → x11.
+//
+// Concurrency: Inject and InjectStream are serialised through mu so
+// concurrent callers cannot race on clipboard state inside the
+// electron strategy, nor interleave audit log entries on a single
+// session. The daemon serialises by hotkey anyway; the mutex is a
+// library-level belt to the daemon's braces.
 type Injector struct {
 	opts       platform.InjectionOptions
 	deps       Deps
 	logger     *slog.Logger
 	strategies []Strategy
+
+	mu sync.Mutex
+}
+
+// finalDeliveryBudget bounds the flush-on-cancel path in
+// InjectStream. When the caller cancels their context mid-stream,
+// the accumulated text still needs to reach the target — we use a
+// fresh context with this budget so a stuck strategy cannot wedge
+// the daemon indefinitely.
+const finalDeliveryBudget = 3 * time.Second
+
+// ttyReporter is satisfied by strategies (currently only osc52) that
+// want to include extra diagnostic context in the audit log after a
+// successful delivery. The injector type-asserts the winning strategy
+// against this interface in its success path.
+type ttyReporter interface {
+	LastChosenTTY() string
 }
 
 // New constructs a Linux Injector with strategies wired in the
@@ -41,7 +65,7 @@ func New(opts platform.InjectionOptions, deps Deps, logger *slog.Logger) (*Injec
 		deps:   deps,
 		logger: logger,
 		strategies: []Strategy{
-			newTmuxStrategy(deps, opts),
+			newTmuxStrategy(deps),
 			newOSC52Strategy(deps, opts),
 			newElectronStrategy(deps, opts),
 			newWaylandStrategy(deps),
@@ -53,9 +77,20 @@ func New(opts platform.InjectionOptions, deps Deps, logger *slog.Logger) (*Injec
 // Inject runs the full pipeline for one delivery: detect the active
 // target, walk the prioritized strategy list, and emit a structured
 // audit log entry on completion. Returns nil on the first successful
-// strategy; returns an aggregate error after every applicable
-// strategy has failed.
+// strategy; returns an aggregate error (via errors.Join) after every
+// applicable strategy has failed.
+//
+// Concurrency: Inject is serialised through i.mu so concurrent
+// callers cannot interleave clipboard state or audit lines.
 func (i *Injector) Inject(ctx context.Context, text string) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.inject(ctx, text)
+}
+
+// inject is the lock-free body of Inject. InjectStream calls it
+// directly while holding the same mutex.
+func (i *Injector) inject(ctx context.Context, text string) error {
 	start := i.now()
 	target, detectErr := Detect(ctx, i.deps)
 	if detectErr != nil {
@@ -71,39 +106,41 @@ func (i *Injector) Inject(ctx context.Context, text string) error {
 		target = annotate(target, i.deps)
 	}
 
-	order := selectStrategies(i.strategies, i.opts, target)
+	order := selectStrategies(ctx, i.logger, i.strategies, i.opts, target)
 	if len(order) == 0 {
-		i.logger.ErrorContext(ctx, "inject",
-			"target.display_server", target.DisplayServer,
-			"target.app_class", target.AppClass,
-			"target.app_type", target.AppType.String(),
-			"target.tmux", target.Tmux,
-			"target.ssh_remote", target.SSHRemote,
-			"outcome", "failed",
-			"reason", "no applicable strategies",
-			"bytes", len(text),
-			"duration_ms", i.elapsedMillis(start))
+		i.logOutcome(ctx, slog.LevelError, injectOutcomeFields{
+			target:     target,
+			outcome:    "failed",
+			reason:     "no applicable strategies",
+			bytes:      len(text),
+			durationMS: i.elapsedMillis(start),
+		})
 		return fmt.Errorf("inject: no applicable strategies for target %q on %s", target.AppClass, target.DisplayServer)
 	}
 
-	var attempts int
+	var (
+		attempts    int
+		attemptErrs []error
+	)
 	for _, strat := range order {
 		attempts++
 		err := strat.Deliver(ctx, target, text)
 		if err == nil {
-			i.logger.InfoContext(ctx, "inject",
-				"target.display_server", target.DisplayServer,
-				"target.app_class", target.AppClass,
-				"target.app_type", target.AppType.String(),
-				"target.tmux", target.Tmux,
-				"target.ssh_remote", target.SSHRemote,
-				"strategy", strat.Name(),
-				"outcome", "success",
-				"attempts", attempts,
-				"bytes", len(text),
-				"duration_ms", i.elapsedMillis(start))
+			fields := injectOutcomeFields{
+				target:     target,
+				strategy:   strat.Name(),
+				outcome:    "success",
+				attempts:   attempts,
+				bytes:      len(text),
+				durationMS: i.elapsedMillis(start),
+			}
+			if r, ok := strat.(ttyReporter); ok {
+				fields.osc52TTY = r.LastChosenTTY()
+			}
+			i.logOutcome(ctx, slog.LevelInfo, fields)
 			return nil
 		}
+		attemptErrs = append(attemptErrs, fmt.Errorf("%s: %w", strat.Name(), err))
 		level := slog.LevelWarn
 		if errors.Is(err, yinject.ErrStrategyUnsupported) {
 			level = slog.LevelDebug
@@ -114,17 +151,15 @@ func (i *Injector) Inject(ctx context.Context, text string) error {
 			"error", err.Error())
 	}
 
-	i.logger.ErrorContext(ctx, "inject",
-		"target.display_server", target.DisplayServer,
-		"target.app_class", target.AppClass,
-		"target.app_type", target.AppType.String(),
-		"target.tmux", target.Tmux,
-		"target.ssh_remote", target.SSHRemote,
-		"outcome", "failed",
-		"attempts", attempts,
-		"bytes", len(text),
-		"duration_ms", i.elapsedMillis(start))
-	return fmt.Errorf("inject: all %d strategies failed for %q on %s", attempts, target.AppClass, target.DisplayServer)
+	i.logOutcome(ctx, slog.LevelError, injectOutcomeFields{
+		target:     target,
+		outcome:    "failed",
+		attempts:   attempts,
+		bytes:      len(text),
+		durationMS: i.elapsedMillis(start),
+	})
+	return fmt.Errorf("inject: all %d strategies failed for %q on %s: %w",
+		attempts, target.AppClass, target.DisplayServer, errors.Join(attemptErrs...))
 }
 
 // InjectStream consumes chunks until the channel closes, accumulates
@@ -132,8 +167,12 @@ func (i *Injector) Inject(ctx context.Context, text string) error {
 // "buffer then deliver" rule for every target type — Phase 5 will
 // refine GUI targets to receive partial chunks. On context
 // cancellation we still deliver whatever we have buffered so the user
-// is not left with a half-typed sentence.
+// is not left with a half-typed sentence, but the flush uses a fresh
+// context bounded by finalDeliveryBudget so a wedged strategy cannot
+// hold the daemon indefinitely.
 func (i *Injector) InjectStream(ctx context.Context, in <-chan transcribe.TranscriptChunk) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	var buf strings.Builder
 	for {
 		select {
@@ -142,7 +181,7 @@ func (i *Injector) InjectStream(ctx context.Context, in <-chan transcribe.Transc
 				if buf.Len() == 0 {
 					return nil
 				}
-				return i.Inject(ctx, buf.String())
+				return i.inject(ctx, buf.String())
 			}
 			if chunk.Err != nil {
 				return chunk.Err
@@ -150,7 +189,9 @@ func (i *Injector) InjectStream(ctx context.Context, in <-chan transcribe.Transc
 			buf.WriteString(chunk.Text)
 		case <-ctx.Done():
 			if buf.Len() > 0 {
-				return i.Inject(context.Background(), buf.String())
+				flushCtx, cancel := context.WithTimeout(context.Background(), finalDeliveryBudget)
+				defer cancel()
+				return i.inject(flushCtx, buf.String())
 			}
 			return ctx.Err()
 		}
@@ -171,6 +212,55 @@ func (i *Injector) now() time.Time {
 // that survives a nil Deps.Now hook.
 func (i *Injector) elapsedMillis(start time.Time) int64 {
 	return i.now().Sub(start).Milliseconds()
+}
+
+// injectOutcomeFields is the canonical field set for every audit log
+// line emitted by the Injector. Using a single struct across every
+// success/failure code path guarantees consumers (Loki, Grafana, and
+// the injector_test capture buffer) can group on the same attribute
+// names without missing-key spaghetti.
+//
+// Zero-valued fields are omitted from the log line through
+// logOutcome's conditional append so a log consumer can distinguish
+// "not populated" from "populated with empty string".
+type injectOutcomeFields struct {
+	target     yinject.Target
+	strategy   string
+	outcome    string
+	reason     string
+	attempts   int
+	bytes      int
+	durationMS int64
+	osc52TTY   string
+}
+
+// logOutcome emits a single "inject" audit line with the canonical
+// field names. Every Injector log path routes through here so every
+// line has the same attribute shape.
+func (i *Injector) logOutcome(ctx context.Context, level slog.Level, f injectOutcomeFields) {
+	attrs := []slog.Attr{
+		slog.String("target.display_server", f.target.DisplayServer),
+		slog.String("target.app_class", f.target.AppClass),
+		slog.String("target.app_type", f.target.AppType.String()),
+		slog.Bool("target.tmux", f.target.Tmux),
+		slog.Bool("target.ssh_remote", f.target.SSHRemote),
+		slog.String("outcome", f.outcome),
+		slog.Int("bytes", f.bytes),
+		slog.Int64("duration_ms", f.durationMS),
+	}
+	if f.strategy != "" {
+		attrs = append(attrs, slog.String("strategy", f.strategy))
+	}
+	if f.reason != "" {
+		attrs = append(attrs, slog.String("reason", f.reason))
+	}
+	if f.attempts > 0 {
+		attrs = append(attrs, slog.Int("attempts", f.attempts))
+	}
+	if f.osc52TTY != "" {
+		attrs = append(attrs, slog.String("target.osc52_pty", f.osc52TTY))
+	}
+	i.logger.LogAttrs(ctx, level, "inject", attrs...)
 }
 
 // discardHandler is a slog.Handler that drops every record. It is the

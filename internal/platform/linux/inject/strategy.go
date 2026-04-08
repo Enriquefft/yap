@@ -2,6 +2,7 @@ package inject
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/hybridz/yap/internal/platform"
@@ -32,21 +33,69 @@ type Strategy interface {
 
 // selectStrategies returns the per-Target call order. It applies
 // app_overrides first (an override forces a named strategy to the
-// front of the list, with the natural order kept as fall-through),
-// then collects every strategy whose Supports returns true.
+// front of the list, with the natural order kept as fall-through).
+// When no app_overrides matches and opts.DefaultStrategy is non-empty,
+// the named default strategy is treated as a wildcard override and
+// prepended to the front (same Supports gate). The natural-order walk
+// follows.
 //
-// The function is exported package-level for testability — Injector's
-// method form delegates to it.
-func selectStrategies(strategies []Strategy, opts platform.InjectionOptions, target yinject.Target) []Strategy {
+// Override resolution ignores a named strategy that does not exist in
+// the registry (typo in config) and also ignores one whose Supports()
+// returns false on the current target (e.g. an x11 override applied to
+// a wayland session). Both ignore-cases emit a DEBUG-level audit line
+// so users grepping the trail can see why their config did not take
+// effect — no WARN, because a user-authored config choice that simply
+// doesn't apply is not an operational failure.
+//
+// The function takes a logger so every selection decision is
+// attributable. Tests that do not care pass a nil logger.
+func selectStrategies(ctx context.Context, logger *slog.Logger, strategies []Strategy, opts platform.InjectionOptions, target yinject.Target) []Strategy {
 	natural := naturalOrder(strategies, target)
+
 	for _, ov := range opts.AppOverrides {
-		if matchesOverride(target.AppClass, ov.Match) {
-			if forced := strategyByName(strategies, ov.Strategy); forced != nil {
-				return prependUnique(forced, natural)
-			}
+		if !matchesOverride(target.AppClass, ov.Match) {
+			continue
+		}
+		forced := strategyByName(strategies, ov.Strategy)
+		if forced == nil {
+			logOverrideIgnored(ctx, logger, target, ov.Strategy, "unknown strategy name")
+			continue
+		}
+		if !forced.Supports(target) {
+			logOverrideIgnored(ctx, logger, target, ov.Strategy, "strategy does not apply to target")
+			continue
+		}
+		return prependUnique(forced, natural)
+	}
+
+	if opts.DefaultStrategy != "" {
+		forced := strategyByName(strategies, opts.DefaultStrategy)
+		if forced == nil {
+			logOverrideIgnored(ctx, logger, target, opts.DefaultStrategy, "unknown default strategy name")
+		} else if !forced.Supports(target) {
+			logOverrideIgnored(ctx, logger, target, opts.DefaultStrategy, "default strategy does not apply to target")
+		} else {
+			return prependUnique(forced, natural)
 		}
 	}
+
 	return natural
+}
+
+// logOverrideIgnored emits a DEBUG-level structured log line when an
+// override or a default_strategy entry cannot be honoured. The line
+// is deliberately DEBUG — an inapplicable user config choice is not
+// an operational warning, just an explanation for the audit trail.
+func logOverrideIgnored(ctx context.Context, logger *slog.Logger, target yinject.Target, name, reason string) {
+	if logger == nil {
+		return
+	}
+	logger.LogAttrs(ctx, slog.LevelDebug, "inject override ignored",
+		slog.String("override_strategy", name),
+		slog.String("target.app_class", target.AppClass),
+		slog.String("target.display_server", target.DisplayServer),
+		slog.String("target.app_type", target.AppType.String()),
+		slog.String("reason", reason))
 }
 
 // naturalOrder filters the strategy list to those that Supports the

@@ -250,6 +250,7 @@ func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptio
 		PreferOSC52:      ic.PreferOSC52,
 		BracketedPaste:   ic.BracketedPaste,
 		ElectronStrategy: ic.ElectronStrategy,
+		DefaultStrategy:  ic.DefaultStrategy,
 	}
 	if len(ic.AppOverrides) > 0 {
 		out.AppOverrides = make([]platform.AppOverride, 0, len(ic.AppOverrides))

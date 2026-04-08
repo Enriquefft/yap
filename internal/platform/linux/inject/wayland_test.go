@@ -42,6 +42,10 @@ func (f *fakeWaylandExec) command(name string, args ...string) *exec.Cmd {
 	return exec.Command("false")
 }
 
+func (f *fakeWaylandExec) commandContext(_ context.Context, name string, args ...string) *exec.Cmd {
+	return f.command(name, args...)
+}
+
 // fakeFileInfo is the minimal os.FileInfo needed by OSStat fakes.
 type fakeFileInfo struct{ name string }
 
@@ -55,7 +59,7 @@ func (f fakeFileInfo) Sys() any           { return nil }
 func TestWaylandPrefersWtype(t *testing.T) {
 	fe := &fakeWaylandExec{}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		LookPath: func(name string) (string, error) {
 			if name == "wtype" {
 				return "/usr/bin/wtype", nil
@@ -81,7 +85,7 @@ func TestWaylandPrefersWtype(t *testing.T) {
 func TestWaylandFallsBackToYdotoolWhenWtypeMissing(t *testing.T) {
 	fe := &fakeWaylandExec{}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		LookPath: func(name string) (string, error) {
 			if name == "ydotool" {
 				return "/usr/bin/ydotool", nil
@@ -108,10 +112,10 @@ func TestWaylandFallsBackToYdotoolWhenWtypeMissing(t *testing.T) {
 
 func TestWaylandReturnsUnsupportedWhenNeitherToolPresent(t *testing.T) {
 	deps := Deps{
-		ExecCommand: func(string, ...string) *exec.Cmd { return exec.Command("false") },
-		LookPath:    func(string) (string, error) { return "", os.ErrNotExist },
-		OSStat:      func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
-		EnvGet:      func(string) string { return "" },
+		ExecCommandContext: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") },
+		LookPath:           func(string) (string, error) { return "", os.ErrNotExist },
+		OSStat:             func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
+		EnvGet:             func(string) string { return "" },
 	}
 	s := newWaylandStrategy(deps)
 	err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "wayland"}, "x")
@@ -160,7 +164,7 @@ func TestWaylandSupportsOnlyWayland(t *testing.T) {
 func TestWaylandPropagatesWtypeFailure(t *testing.T) {
 	fe := &fakeWaylandExec{wtypeFail: true}
 	deps := Deps{
-		ExecCommand: fe.command,
+		ExecCommandContext: fe.commandContext,
 		LookPath: func(name string) (string, error) {
 			if name == "wtype" {
 				return "/usr/bin/wtype", nil

@@ -1,6 +1,7 @@
 package inject
 
 import (
+	"context"
 	"io"
 	"net"
 	"os"
@@ -34,11 +35,17 @@ type WaylandConn interface {
 // injection happens for this package, which means there are no hidden
 // hooks elsewhere. Production code constructs the bag via NewDeps();
 // tests build a bag literal field-by-field.
+//
+// Every exec hook is ctx-aware so cancellation propagates into
+// in-flight subprocesses, and every blocking wait routes through
+// SleepCtx so tests can substitute an instant return and production
+// cancels promptly.
 type Deps struct {
-	// ExecCommand mirrors exec.Command. Strategies build the *exec.Cmd
-	// and call .Run(), .Output(), or wire .Stdin themselves so the
-	// dependency surface stays narrow.
-	ExecCommand func(name string, args ...string) *exec.Cmd
+	// ExecCommandContext mirrors exec.CommandContext. Strategies build
+	// the *exec.Cmd and call .Run(), .Output(), or wire .Stdin
+	// themselves so the dependency surface stays narrow. Cancellation
+	// of ctx kills the spawned process.
+	ExecCommandContext func(ctx context.Context, name string, args ...string) *exec.Cmd
 
 	// ClipboardRead returns the current clipboard contents.
 	ClipboardRead func() (string, error)
@@ -82,10 +89,14 @@ type Deps struct {
 	// not have to re-implement the path discovery logic.
 	WaylandDial func(socketPath string) (WaylandConn, error)
 
-	// Sleep is the only sleep primitive permitted in the inject
-	// package. Strategies that need bounded waits route through this
-	// hook so tests can replace it with a no-op.
-	Sleep func(d time.Duration)
+	// SleepCtx is the only sleep primitive permitted in the inject
+	// package. Every bounded wait routes through this hook so tests
+	// can replace it with a no-op and cancellation propagates cleanly
+	// through polling loops and clipboard-restore delays.
+	//
+	// Implementations return ctx.Err() on cancel, nil on expiry of d,
+	// and nil immediately when d <= 0.
+	SleepCtx func(ctx context.Context, d time.Duration) error
 
 	// Now returns the current time. Used for audit log timestamps and
 	// duration measurement.
@@ -95,19 +106,19 @@ type Deps struct {
 // NewDeps returns a Deps populated with production defaults.
 func NewDeps() Deps {
 	return Deps{
-		ExecCommand:    exec.Command,
-		ClipboardRead:  clipboard.ReadAll,
-		ClipboardWrite: clipboard.WriteAll,
-		LookPath:       exec.LookPath,
-		OSStat:         os.Stat,
-		OSOpenFile:     defaultOpenFile,
-		OSReadFile:     os.ReadFile,
-		OSReadlink:     os.Readlink,
-		OSReadDir:      os.ReadDir,
-		EnvGet:         os.Getenv,
-		WaylandDial:    defaultWaylandDial,
-		Sleep:          defaultSleep,
-		Now:            time.Now,
+		ExecCommandContext: exec.CommandContext,
+		ClipboardRead:      clipboard.ReadAll,
+		ClipboardWrite:     clipboard.WriteAll,
+		LookPath:           exec.LookPath,
+		OSStat:             os.Stat,
+		OSOpenFile:         defaultOpenFile,
+		OSReadFile:         os.ReadFile,
+		OSReadlink:         os.Readlink,
+		OSReadDir:          os.ReadDir,
+		EnvGet:             os.Getenv,
+		WaylandDial:        defaultWaylandDial,
+		SleepCtx:           defaultSleepCtx,
+		Now:                time.Now,
 	}
 }
 
@@ -130,14 +141,21 @@ func defaultOpenFile(name string, flag int, perm os.FileMode) (io.WriteCloser, e
 	return f, nil
 }
 
-// defaultSleep is the single production sleep primitive used by the
-// inject package. Implementation uses time.After so the package as a
-// whole stays clean of literal sleep-stdlib references — every
-// blocking wait routes through this hook so tests can substitute a
-// no-op.
-func defaultSleep(d time.Duration) {
+// defaultSleepCtx is the single production sleep primitive used by the
+// inject package. It respects ctx cancellation so an in-flight poll or
+// clipboard-restore delay unblocks promptly when the caller cancels.
+// The package as a whole stays clean of literal stdlib blocking-sleep
+// references — every wait routes through this hook.
+func defaultSleepCtx(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
-		return
+		return nil
 	}
-	<-time.After(d)
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

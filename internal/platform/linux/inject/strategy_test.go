@@ -1,7 +1,9 @@
 package inject
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -71,8 +73,14 @@ func names(ss []Strategy) []string {
 	return out
 }
 
+// selectFor is a thin helper for tests that don't care about ctx or
+// logger capture. Tests that do care call selectStrategies directly.
+func selectFor(strategies []Strategy, opts platform.InjectionOptions, target yinject.Target) []Strategy {
+	return selectStrategies(context.Background(), nil, strategies, opts, target)
+}
+
 func TestSelect_TerminalNoTmux(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppTerminal,
 	})
@@ -83,7 +91,7 @@ func TestSelect_TerminalNoTmux(t *testing.T) {
 }
 
 func TestSelect_TerminalWithTmux(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppTerminal,
 		Tmux:          true,
@@ -95,7 +103,7 @@ func TestSelect_TerminalWithTmux(t *testing.T) {
 }
 
 func TestSelect_Electron(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppElectron,
 	})
@@ -106,7 +114,7 @@ func TestSelect_Electron(t *testing.T) {
 }
 
 func TestSelect_Browser(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "x11",
 		AppType:       yinject.AppBrowser,
 	})
@@ -117,7 +125,7 @@ func TestSelect_Browser(t *testing.T) {
 }
 
 func TestSelect_GenericWayland(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppGeneric,
 	})
@@ -128,7 +136,7 @@ func TestSelect_GenericWayland(t *testing.T) {
 }
 
 func TestSelect_GenericX11(t *testing.T) {
-	got := selectStrategies(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
+	got := selectFor(makeStrategies(nil), platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "x11",
 		AppType:       yinject.AppGeneric,
 	})
@@ -144,7 +152,7 @@ func TestSelect_AppOverrideForcesNamedStrategyFirst(t *testing.T) {
 			{Match: "kitty", Strategy: "wayland"},
 		},
 	}
-	got := selectStrategies(makeStrategies(nil), opts, yinject.Target{
+	got := selectFor(makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppClass:      "kitty",
 		AppType:       yinject.AppTerminal,
@@ -164,7 +172,7 @@ func TestSelect_OverrideAgainstUnknownStrategyIgnored(t *testing.T) {
 			{Match: "kitty", Strategy: "nonexistent"},
 		},
 	}
-	got := selectStrategies(makeStrategies(nil), opts, yinject.Target{
+	got := selectFor(makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppClass:      "kitty",
 		AppType:       yinject.AppTerminal,
@@ -183,13 +191,152 @@ func TestSelect_OverrideForcesUniqueAtFront(t *testing.T) {
 			{Match: "rofi", Strategy: "wayland"},
 		},
 	}
-	got := selectStrategies(makeStrategies(nil), opts, yinject.Target{
+	got := selectFor(makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppClass:      "rofi",
 		AppType:       yinject.AppGeneric,
 	})
 	if !equalStrings(names(got), []string{"wayland"}) {
 		t.Errorf("got %v, want [wayland]", names(got))
+	}
+}
+
+// TestSelectStrategies_UnsupportedOverrideFallsThrough guards F3:
+// when a user override names a strategy whose Supports() returns
+// false on the current target (e.g. an x11 strategy on a wayland
+// session), the override must be ignored, the natural order must be
+// returned, and the audit trail must record a DEBUG-level "override
+// ignored" entry — never WARN.
+func TestSelectStrategies_UnsupportedOverrideFallsThrough(t *testing.T) {
+	logger, buf := newCaptureHandler()
+	opts := platform.InjectionOptions{
+		AppOverrides: []platform.AppOverride{
+			// x11 strategy applied to a wayland session — unsupported.
+			{Match: "kitty", Strategy: "x11"},
+		},
+	}
+	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+		DisplayServer: "wayland",
+		AppClass:      "kitty",
+		AppType:       yinject.AppTerminal,
+	})
+	want := []string{"osc52", "wayland"}
+	if !equalStrings(names(got), want) {
+		t.Errorf("got %v, want %v (unsupported override must fall through)", names(got), want)
+	}
+	lines := parseRawLogLines(t, buf)
+	sawDebug := false
+	for _, l := range lines {
+		if l["level"] == "WARN" || l["level"] == "ERROR" {
+			t.Errorf("unsupported override surfaced as %s, want DEBUG only: %v", l["level"], l)
+		}
+		if l["msg"] == "inject override ignored" && l["level"] == "DEBUG" {
+			sawDebug = true
+			if l["override_strategy"] != "x11" {
+				t.Errorf("override_strategy = %v, want x11", l["override_strategy"])
+			}
+			if l["reason"] != "strategy does not apply to target" {
+				t.Errorf("reason = %v, want apply-to-target message", l["reason"])
+			}
+		}
+	}
+	if !sawDebug {
+		t.Errorf("expected DEBUG override-ignored line, got %v", lines)
+	}
+}
+
+// TestSelectStrategies_DefaultStrategyPrependedWhenSupported guards C7:
+// when no app_overrides matches and DefaultStrategy is set, the named
+// strategy is treated as a wildcard override.
+func TestSelectStrategies_DefaultStrategyPrependedWhenSupported(t *testing.T) {
+	opts := platform.InjectionOptions{
+		DefaultStrategy: "wayland",
+	}
+	got := selectFor(makeStrategies(nil), opts, yinject.Target{
+		DisplayServer: "wayland",
+		AppType:       yinject.AppGeneric,
+	})
+	if len(got) == 0 || got[0].Name() != "wayland" {
+		t.Errorf("expected wayland prepended via default, got %v", names(got))
+	}
+}
+
+// TestSelectStrategies_DefaultStrategyAppliedToEmptyAppClass guards
+// the C7 motivation: a generic-wlroots target with empty AppClass
+// can never match any substring app_overrides entry, but a
+// DefaultStrategy fills the gap.
+func TestSelectStrategies_DefaultStrategyAppliedToEmptyAppClass(t *testing.T) {
+	opts := platform.InjectionOptions{
+		AppOverrides: []platform.AppOverride{
+			{Match: "kitty", Strategy: "x11"},
+		},
+		DefaultStrategy: "wayland",
+	}
+	got := selectFor(makeStrategies(nil), opts, yinject.Target{
+		DisplayServer: "wayland",
+		AppClass:      "",
+		AppType:       yinject.AppGeneric,
+	})
+	if len(got) == 0 || got[0].Name() != "wayland" {
+		t.Errorf("expected wayland prepended via default for empty AppClass, got %v", names(got))
+	}
+}
+
+// TestSelectStrategies_DefaultStrategyIgnoredWhenUnsupported guards
+// the C7 fall-through path: a default strategy that does not Supports
+// the target must not be prepended, and a DEBUG line must record the
+// reason.
+func TestSelectStrategies_DefaultStrategyIgnoredWhenUnsupported(t *testing.T) {
+	logger, buf := newCaptureHandler()
+	opts := platform.InjectionOptions{
+		DefaultStrategy: "x11",
+	}
+	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+		DisplayServer: "wayland",
+		AppType:       yinject.AppGeneric,
+	})
+	if !equalStrings(names(got), []string{"wayland"}) {
+		t.Errorf("got %v, want [wayland] (default must fall through)", names(got))
+	}
+	lines := parseRawLogLines(t, buf)
+	sawDebug := false
+	for _, l := range lines {
+		if l["level"] == "WARN" || l["level"] == "ERROR" {
+			t.Errorf("unsupported default surfaced as %s, want DEBUG only: %v", l["level"], l)
+		}
+		if l["msg"] == "inject override ignored" && l["level"] == "DEBUG" {
+			sawDebug = true
+		}
+	}
+	if !sawDebug {
+		t.Errorf("expected DEBUG override-ignored line, got %v", lines)
+	}
+}
+
+// TestSelectStrategies_DefaultStrategyIgnoredWhenUnknown guards the
+// C7 typo-tolerance path: an unknown default strategy name must not
+// crash and must surface as a DEBUG line, not a WARN.
+func TestSelectStrategies_DefaultStrategyIgnoredWhenUnknown(t *testing.T) {
+	logger, buf := newCaptureHandler()
+	opts := platform.InjectionOptions{
+		DefaultStrategy: "banana",
+	}
+	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+		DisplayServer: "wayland",
+		AppType:       yinject.AppGeneric,
+	})
+	if !equalStrings(names(got), []string{"wayland"}) {
+		t.Errorf("got %v, want [wayland]", names(got))
+	}
+	lines := parseRawLogLines(t, buf)
+	sawDebug := false
+	for _, l := range lines {
+		if l["msg"] == "inject override ignored" && l["level"] == "DEBUG" {
+			sawDebug = true
+		}
+	}
+	if !sawDebug {
+		t.Errorf("expected DEBUG override-ignored line, got %v", lines)
 	}
 }
 
@@ -228,7 +375,7 @@ func TestSelect_DeliverErrorIsNotInterceptedByOrder(t *testing.T) {
 	for _, s := range strategies {
 		s.(*recordingStrategy).deliverErr = errSentinel
 	}
-	_ = selectStrategies(strategies, platform.InjectionOptions{}, yinject.Target{
+	_ = selectFor(strategies, platform.InjectionOptions{}, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppTerminal,
 	})
@@ -256,4 +403,23 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// parseRawLogLines decodes a JSONHandler buffer into a slice of
+// generic maps so individual tests can assert on whichever fields
+// matter without sharing a typed shape with injector_test.go.
+func parseRawLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	out := []map[string]any{}
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("parse log line: %v: %s", err, string(line))
+		}
+		out = append(out, rec)
+	}
+	return out
 }

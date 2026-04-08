@@ -32,6 +32,7 @@
   prefer_osc52 = true
   bracketed_paste = true
   electron_strategy = "clipboard"
+  default_strategy = ""
 
 [tray]
   enabled = false

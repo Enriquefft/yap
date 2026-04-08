@@ -15,12 +15,13 @@ import (
 //
 //   - terminalClasses, electronClasses, browserClasses — the three
 //     allowlists driving classify().
-//   - bracketedPasteStart, bracketedPasteEnd — bytes constants for
-//     the bracketed-paste escape sequences.
 //   - electronRestoreDelay — the bounded clipboard-restore wait used
-//     by the electron strategy through Deps.Sleep.
+//     by the electron strategy through Deps.SleepCtx.
 //   - focusPollInterval, focusPollMaxAttempts — the X11 focus poll
 //     loop tuning constants.
+//   - maxResolveTTYNodes — the BFS cap in OSC52 tty resolution.
+//   - finalDeliveryBudget — the InjectStream flush-on-cancel
+//     deadline.
 //   - ErrNoDisplay — sentinel error returned when no display server
 //     is detected.
 //   - errWlrootsProtocolUnsupported, errWlrootsNoFocusedWindow —
@@ -43,11 +44,11 @@ func TestNoPackageLevelMutableState(t *testing.T) {
 		"terminalClasses":               {},
 		"electronClasses":               {},
 		"browserClasses":                {},
-		"bracketedPasteStart":           {},
-		"bracketedPasteEnd":             {},
 		"electronRestoreDelay":          {},
 		"focusPollInterval":             {},
 		"focusPollMaxAttempts":          {},
+		"maxResolveTTYNodes":            {},
+		"finalDeliveryBudget":           {},
 		"ErrNoDisplay":                  {},
 		"errWlrootsProtocolUnsupported": {},
 		"errWlrootsNoFocusedWindow":     {},

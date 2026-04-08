@@ -86,14 +86,30 @@ type HotkeyConfig interface {
 type InjectionOptions struct {
 	// PreferOSC52 enables the OSC52 strategy for terminal targets.
 	PreferOSC52 bool
-	// BracketedPaste wraps multi-line text in
-	// \x1b[200~ ... \x1b[201~ when delivering to terminal targets.
+	// BracketedPaste is retained for config schema compatibility.
+	// The injector no longer wraps payloads in bracketed-paste
+	// markers — tmux's `paste-buffer -p` handles framing natively
+	// and OSC52 payloads must be raw data — but the field remains
+	// so existing user configs load without a validation error.
 	BracketedPaste bool
 	// ElectronStrategy is one of "clipboard" or "keystroke" — the
 	// preferred delivery mode for Electron apps. Phase 4 implements
 	// "clipboard"; "keystroke" routes through the wayland/x11
 	// generic strategies.
 	ElectronStrategy string
+	// DefaultStrategy, when non-empty, is treated as an implicit
+	// wildcard override: if no app_overrides entry matches the
+	// focused AppClass, the named strategy is forced to the front of
+	// the walk (subject to the same Supports gate as an explicit
+	// override). Empty string disables the default.
+	//
+	// This exists because detection on generic-wlroots compositors
+	// or unclassified targets produces an empty AppClass, which no
+	// substring match can ever satisfy — users on those sessions
+	// previously had no way to force a default strategy. Named
+	// values mirror the strategy registry: "tmux", "osc52",
+	// "electron", "wayland", "x11".
+	DefaultStrategy string
 	// AppOverrides forces a specific strategy when the focused
 	// AppClass contains the override Match substring. Evaluated in
 	// declaration order; first match wins.

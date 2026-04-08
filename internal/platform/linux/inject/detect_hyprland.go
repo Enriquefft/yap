@@ -19,7 +19,7 @@ type hyprlandActiveWindow struct {
 
 // detectHyprland runs `hyprctl activewindow -j` and parses the result.
 func detectHyprland(ctx context.Context, deps Deps) (yinject.Target, error) {
-	cmd := deps.ExecCommand("hyprctl", "activewindow", "-j")
+	cmd := deps.ExecCommandContext(ctx, "hyprctl", "activewindow", "-j")
 	out, err := cmd.Output()
 	if err != nil {
 		return yinject.Target{}, fmt.Errorf("hyprctl activewindow: %w", err)

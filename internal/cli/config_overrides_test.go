@@ -24,7 +24,7 @@ func TestConfigOverrides_AddListRemoveClear(t *testing.T) {
 	}
 
 	// Add two entries.
-	if _, _, err := runCLI(t, "config", "overrides", "add", "firefox", "clipboard"); err != nil {
+	if _, _, err := runCLI(t, "config", "overrides", "add", "firefox", "electron"); err != nil {
 		t.Fatalf("add 1: %v", err)
 	}
 	if _, _, err := runCLI(t, "config", "overrides", "add", "kitty", "osc52"); err != nil {

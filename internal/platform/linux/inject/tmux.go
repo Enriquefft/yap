@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hybridz/yap/internal/platform"
 	yinject "github.com/hybridz/yap/pkg/yap/inject"
 )
 
@@ -15,15 +14,22 @@ import (
 // single block instead of executing line-by-line.
 //
 // The strategy is gated on AppTerminal + Tmux additive bit.
+//
+// Paste framing: the strategy runs `tmux paste-buffer -p`, which
+// tells tmux to wrap the paste in the pane's bracketed-paste markers
+// when the destination pane has bracketed paste enabled. This is
+// the idiomatic tmux mechanism — it respects the pane's state and
+// does not double-wrap. yap never inserts bracketed-paste bytes into
+// the buffer payload itself; doing so would cause double-wrapping
+// (tmux would wrap the already-wrapped payload again) and corrupt
+// the shell input.
 type tmuxStrategy struct {
 	deps Deps
-	opts platform.InjectionOptions
 }
 
-// newTmuxStrategy constructs a tmux strategy bound to deps and opts.
-// The opts argument is used for BracketedPaste configuration.
-func newTmuxStrategy(deps Deps, opts platform.InjectionOptions) *tmuxStrategy {
-	return &tmuxStrategy{deps: deps, opts: opts}
+// newTmuxStrategy constructs a tmux strategy bound to deps.
+func newTmuxStrategy(deps Deps) *tmuxStrategy {
+	return &tmuxStrategy{deps: deps}
 }
 
 // Name returns the strategy identifier used in audit logs and
@@ -37,21 +43,19 @@ func (s *tmuxStrategy) Supports(target yinject.Target) bool {
 }
 
 // Deliver pipes text into `tmux load-buffer -` then runs `tmux
-// paste-buffer`. Both commands fail with a non-nil error when tmux is
-// not running or when the current pane is invalid.
+// paste-buffer -p`. The `-p` flag tells tmux to wrap the paste in
+// bracketed-paste markers when the destination pane has them
+// enabled — yap does not inject the markers itself. Both commands
+// fail with a non-nil error when tmux is not running or when the
+// current pane is invalid.
 func (s *tmuxStrategy) Deliver(ctx context.Context, target yinject.Target, text string) error {
-	payload := text
-	if s.opts.BracketedPaste && strings.Contains(text, "\n") {
-		payload = wrapBracketed(text)
-	}
-
-	load := s.deps.ExecCommand("tmux", "load-buffer", "-")
-	load.Stdin = strings.NewReader(payload)
+	load := s.deps.ExecCommandContext(ctx, "tmux", "load-buffer", "-")
+	load.Stdin = strings.NewReader(text)
 	if err := load.Run(); err != nil {
 		return fmt.Errorf("tmux: load-buffer: %w", err)
 	}
 
-	paste := s.deps.ExecCommand("tmux", "paste-buffer")
+	paste := s.deps.ExecCommandContext(ctx, "tmux", "paste-buffer", "-p")
 	if err := paste.Run(); err != nil {
 		return fmt.Errorf("tmux: paste-buffer: %w", err)
 	}

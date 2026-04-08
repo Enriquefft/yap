@@ -46,11 +46,11 @@ func TestElectronDeliverSavesWritesPastesRestores(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		},
-		ExecCommand: func(name string, args ...string) *exec.Cmd {
+		ExecCommandContext: func(_ context.Context, name string, args ...string) *exec.Cmd {
 			calls++
 			return exec.Command("true")
 		},
-		Sleep: func(time.Duration) {},
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
 	}
 	s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
 	tgt := yinject.Target{DisplayServer: "wayland", AppType: yinject.AppElectron}
@@ -78,11 +78,11 @@ func TestElectronDeliverX11(t *testing.T) {
 			}
 			return "", os.ErrNotExist
 		},
-		ExecCommand: func(name string, args ...string) *exec.Cmd {
+		ExecCommandContext: func(_ context.Context, name string, args ...string) *exec.Cmd {
 			ranName = name
 			return exec.Command("true")
 		},
-		Sleep: func(time.Duration) {},
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
 	}
 	s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
 	tgt := yinject.Target{DisplayServer: "x11", AppType: yinject.AppBrowser}
@@ -102,8 +102,8 @@ func TestElectronDeliverRestoresOnPasteFailure(t *testing.T) {
 		LookPath: func(string) (string, error) {
 			return "/usr/bin/wtype", nil
 		},
-		ExecCommand: func(string, ...string) *exec.Cmd { return exec.Command("false") },
-		Sleep:       func(time.Duration) {},
+		ExecCommandContext: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("false") },
+		SleepCtx:           func(context.Context, time.Duration) error { return nil },
 	}
 	s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
 	tgt := yinject.Target{DisplayServer: "wayland", AppType: yinject.AppElectron}
@@ -135,11 +135,11 @@ func TestElectronDeliverPropagatesClipboardWriteError(t *testing.T) {
 func TestElectronDeliverDoesNotRestoreWhenSaveFailed(t *testing.T) {
 	writes := []string{}
 	deps := Deps{
-		ClipboardRead:  func() (string, error) { return "", errors.New("blocked") },
-		ClipboardWrite: func(s string) error { writes = append(writes, s); return nil },
-		LookPath:       func(string) (string, error) { return "/usr/bin/wtype", nil },
-		ExecCommand:    func(string, ...string) *exec.Cmd { return exec.Command("true") },
-		Sleep:          func(time.Duration) {},
+		ClipboardRead:      func() (string, error) { return "", errors.New("blocked") },
+		ClipboardWrite:     func(s string) error { writes = append(writes, s); return nil },
+		LookPath:           func(string) (string, error) { return "/usr/bin/wtype", nil },
+		ExecCommandContext: func(context.Context, string, ...string) *exec.Cmd { return exec.Command("true") },
+		SleepCtx:           func(context.Context, time.Duration) error { return nil },
 	}
 	s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
 	if err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "wayland", AppType: yinject.AppElectron}, "new"); err != nil {
@@ -177,7 +177,7 @@ func TestElectronUnsupportedDisplayServer(t *testing.T) {
 	deps := Deps{
 		ClipboardRead:  func() (string, error) { return "", nil },
 		ClipboardWrite: func(string) error { return nil },
-		Sleep:          func(time.Duration) {},
+		SleepCtx:       func(context.Context, time.Duration) error { return nil },
 	}
 	s := newElectronStrategy(deps, platform.InjectionOptions{ElectronStrategy: "clipboard"})
 	err := s.Deliver(context.Background(), yinject.Target{DisplayServer: "macos", AppType: yinject.AppElectron}, "x")

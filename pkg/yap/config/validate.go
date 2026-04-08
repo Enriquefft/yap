@@ -40,11 +40,14 @@ func ValidElectronStrategies() []string {
 }
 
 // ValidInjectionStrategies returns the allowed values for
-// injection.app_overrides[].strategy. The list mirrors the doc tag on
-// AppOverride.Strategy and the per-app strategies documented in
-// ARCHITECTURE.md Pillar 2.
+// injection.app_overrides[].strategy and injection.default_strategy.
+// The list MUST match the Name() values returned by the registered
+// Linux strategies in internal/platform/linux/inject. Keeping one
+// list is the single-source-of-truth rule: if a new strategy is
+// added (or removed) on the platform side, this list has to move
+// in lockstep.
 func ValidInjectionStrategies() []string {
-	return []string{"osc52", "clipboard", "keystroke", "tmux", "wtype", "xdotool"}
+	return []string{"tmux", "osc52", "electron", "wayland", "x11"}
 }
 
 // Validate returns nil if cfg is internally consistent, or a joined
@@ -107,6 +110,12 @@ func (c Config) Validate(keyValidator KeyValidator) error {
 	// injection
 	if !contains(electronStrategies, c.Injection.ElectronStrategy) {
 		errs = append(errs, fmt.Errorf("injection.electron_strategy: must be one of %v, got %q", electronStrategies, c.Injection.ElectronStrategy))
+	}
+	// injection.default_strategy: empty string disables the wildcard
+	// fallback; otherwise must name a known strategy so selection can
+	// prepend it for unclassified targets.
+	if c.Injection.DefaultStrategy != "" && !contains(injectionStrategies, c.Injection.DefaultStrategy) {
+		errs = append(errs, fmt.Errorf("injection.default_strategy: must be empty or one of %v, got %q", injectionStrategies, c.Injection.DefaultStrategy))
 	}
 	for i, ov := range c.Injection.AppOverrides {
 		if strings.TrimSpace(ov.Match) == "" {

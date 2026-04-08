@@ -261,14 +261,15 @@ func TestValidate_TableDriven(t *testing.T) {
 			name: "app override valid",
 			mutate: func(c *config.Config) {
 				c.Injection.AppOverrides = []config.AppOverride{
-					{Match: "firefox", Strategy: "clipboard"},
+					{Match: "firefox", Strategy: "electron"},
 				}
 			},
 			validator: knownKeys,
 		},
-		// F8: app_overrides[].strategy must be one of the documented
-		// strategies. Each valid value goes through the validator;
-		// each typo is rejected.
+		// F8: app_overrides[].strategy must be one of the registered
+		// Linux strategies (matching the Name() values in
+		// internal/platform/linux/inject). Each valid value goes
+		// through the validator; each typo is rejected.
 		{
 			name: "app override strategy osc52",
 			mutate: func(c *config.Config) {
@@ -277,9 +278,9 @@ func TestValidate_TableDriven(t *testing.T) {
 			validator: knownKeys,
 		},
 		{
-			name: "app override strategy keystroke",
+			name: "app override strategy electron",
 			mutate: func(c *config.Config) {
-				c.Injection.AppOverrides = []config.AppOverride{{Match: "code", Strategy: "keystroke"}}
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "code", Strategy: "electron"}}
 			},
 			validator: knownKeys,
 		},
@@ -291,16 +292,16 @@ func TestValidate_TableDriven(t *testing.T) {
 			validator: knownKeys,
 		},
 		{
-			name: "app override strategy wtype",
+			name: "app override strategy wayland",
 			mutate: func(c *config.Config) {
-				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "wtype"}}
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "wayland"}}
 			},
 			validator: knownKeys,
 		},
 		{
-			name: "app override strategy xdotool",
+			name: "app override strategy x11",
 			mutate: func(c *config.Config) {
-				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "xdotool"}}
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "x11"}}
 			},
 			validator: knownKeys,
 		},
@@ -359,5 +360,42 @@ func TestValidate_AggregatesErrors(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("aggregated error missing %q. full error: %v", want, err)
 		}
+	}
+}
+
+// TestValidate_InjectionDefaultStrategy guards C7: empty disables,
+// any of the known strategy names is accepted, and an unknown name
+// is rejected with a clear error.
+func TestValidate_InjectionDefaultStrategy(t *testing.T) {
+	kv := newStubValidator("KEY_RIGHTCTRL")
+	cases := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"empty disables", "", false},
+		{"tmux", "tmux", false},
+		{"osc52", "osc52", false},
+		{"electron", "electron", false},
+		{"wayland", "wayland", false},
+		{"x11", "x11", false},
+		{"unknown rejected", "banana", true},
+		{"typo rejected", "wayland2", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultConfig()
+			cfg.Injection.DefaultStrategy = tc.value
+			err := cfg.Validate(kv)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error for default_strategy=%q, got nil", tc.value)
+				} else if !strings.Contains(err.Error(), "injection.default_strategy") {
+					t.Errorf("error %v does not mention injection.default_strategy", err)
+				}
+			} else if err != nil {
+				t.Errorf("unexpected error for default_strategy=%q: %v", tc.value, err)
+			}
+		})
 	}
 }
