@@ -19,14 +19,18 @@ var ErrNoDisplay = errors.New("inject: no display server (WAYLAND_DISPLAY / DISP
 //
 //  1. Sway via swaymsg, when SWAYSOCK is set.
 //  2. Hyprland via hyprctl, when HYPRLAND_INSTANCE_SIGNATURE is set.
-//  3. X11 via xdotool + xprop, when DISPLAY is set.
-//
-// Generic wlroots compositors (those that expose neither SWAYSOCK nor
-// HYPRLAND_INSTANCE_SIGNATURE) return a generic-GUI Target without
-// AppClass; the orchestrator falls through to the wtype strategy.
+//  3. Generic wlroots via the wlr-foreign-toplevel-management
+//     unstable-v1 protocol, applied to any Wayland compositor that
+//     advertises zwlr_foreign_toplevel_manager_v1 (river, niri,
+//     Wayfire, Cosmic, Sway forks, …).
+//  4. X11 via xdotool + xprop, when DISPLAY is set.
 //
 // On every successful detection, annotate() is called to layer the
-// additive Tmux / SSHRemote bits onto the Target.
+// additive Tmux / SSHRemote bits onto the Target. When no Wayland
+// detector recognizes the focused window — for example, the
+// compositor does not expose the wlr foreign-toplevel manager, or
+// nothing is currently focused — Detect returns a generic-GUI Target
+// and the orchestrator falls through to the wtype strategy.
 func Detect(ctx context.Context, deps Deps) (yinject.Target, error) {
 	server := detectDisplayServer(deps)
 	switch server {
@@ -43,9 +47,14 @@ func Detect(ctx context.Context, deps Deps) (yinject.Target, error) {
 				return annotate(t, deps), nil
 			}
 		}
-		// Generic wlroots / unknown Wayland compositor — no
-		// active-window detection. Phase 4.5 will add a generic
-		// wlroots backend via ext-foreign-toplevel-list-v1.
+		t, err := detectWlroots(ctx, deps)
+		if err == nil {
+			return annotate(t, deps), nil
+		}
+		// Compositor does not expose wlr-foreign-toplevel-management,
+		// no toplevel is focused, or the wayland connection failed
+		// outright. Fall through to a generic-GUI Target without
+		// AppClass; the orchestrator dispatches to the wtype strategy.
 		return annotate(yinject.Target{
 			DisplayServer: "wayland",
 			AppType:       yinject.AppGeneric,

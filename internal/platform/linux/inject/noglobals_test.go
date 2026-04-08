@@ -23,6 +23,11 @@ import (
 //     loop tuning constants.
 //   - ErrNoDisplay — sentinel error returned when no display server
 //     is detected.
+//   - errWlrootsProtocolUnsupported, errWlrootsNoFocusedWindow —
+//     sentinel errors returned by the wlroots foreign-toplevel
+//     detector to drive fall-through.
+//   - detectWlrootsLatencyBudget — the hard 500 ms ceiling on a
+//     single wlroots detection roundtrip.
 //
 // Anything else (var or const) at package scope must be moved into a
 // Deps field, an InjectionOptions field, or a function-local
@@ -35,15 +40,18 @@ func TestNoPackageLevelMutableState(t *testing.T) {
 	}
 
 	allowed := map[string]struct{}{
-		"terminalClasses":      {},
-		"electronClasses":      {},
-		"browserClasses":       {},
-		"bracketedPasteStart":  {},
-		"bracketedPasteEnd":    {},
-		"electronRestoreDelay": {},
-		"focusPollInterval":    {},
-		"focusPollMaxAttempts": {},
-		"ErrNoDisplay":         {},
+		"terminalClasses":               {},
+		"electronClasses":               {},
+		"browserClasses":                {},
+		"bracketedPasteStart":           {},
+		"bracketedPasteEnd":             {},
+		"electronRestoreDelay":          {},
+		"focusPollInterval":             {},
+		"focusPollMaxAttempts":          {},
+		"ErrNoDisplay":                  {},
+		"errWlrootsProtocolUnsupported": {},
+		"errWlrootsNoFocusedWindow":     {},
+		"detectWlrootsLatencyBudget":    {},
 	}
 
 	entries, err := os.ReadDir(wd)

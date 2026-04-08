@@ -2,12 +2,28 @@ package inject
 
 import (
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"time"
 
 	"github.com/atotto/clipboard"
 )
+
+// WaylandConn is the narrow interface the wlroots detector uses to
+// talk to a wayland compositor. It is satisfied by *net.UnixConn in
+// production and by an in-memory fake in tests, so the detector can
+// be exercised end-to-end without a real socket.
+//
+// Read and Write must observe the deadline set by SetDeadline; the
+// detector relies on the deadline to enforce the per-call latency
+// budget without leaking goroutines.
+type WaylandConn interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	SetDeadline(t time.Time) error
+}
 
 // Deps is the dependency bag for the inject package. Every external
 // effect (process exec, clipboard I/O, filesystem reads, environment
@@ -55,8 +71,16 @@ type Deps struct {
 
 	// EnvGet mirrors os.Getenv. Used for SWAYSOCK / HYPRLAND_INSTANCE_SIGNATURE
 	// / WAYLAND_DISPLAY / DISPLAY / TMUX / SSH_TTY / SSH_CONNECTION /
-	// YDOTOOL_SOCKET detection.
+	// YDOTOOL_SOCKET / XDG_RUNTIME_DIR detection.
 	EnvGet func(key string) string
+
+	// WaylandDial opens a connection to the wayland compositor at the
+	// resolved socket path. Production wires net.DialUnix; tests
+	// inject an in-memory WaylandConn carrying canned protocol
+	// frames. The dialer is given the absolute socket path (already
+	// resolved from $XDG_RUNTIME_DIR + $WAYLAND_DISPLAY) so it does
+	// not have to re-implement the path discovery logic.
+	WaylandDial func(socketPath string) (WaylandConn, error)
 
 	// Sleep is the only sleep primitive permitted in the inject
 	// package. Strategies that need bounded waits route through this
@@ -81,9 +105,18 @@ func NewDeps() Deps {
 		OSReadlink:     os.Readlink,
 		OSReadDir:      os.ReadDir,
 		EnvGet:         os.Getenv,
+		WaylandDial:    defaultWaylandDial,
 		Sleep:          defaultSleep,
 		Now:            time.Now,
 	}
+}
+
+// defaultWaylandDial is the production WaylandDial implementation. It
+// opens an AF_UNIX SOCK_STREAM connection to the compositor's socket
+// at the resolved path. The detector handles all path resolution from
+// environment variables, so this hook stays a thin syscall wrapper.
+func defaultWaylandDial(socketPath string) (WaylandConn, error) {
+	return net.DialUnix("unix", nil, &net.UnixAddr{Name: socketPath, Net: "unix"})
 }
 
 // defaultOpenFile is the production OSOpenFile implementation. Wrapped
