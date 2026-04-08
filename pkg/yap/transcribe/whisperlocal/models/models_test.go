@@ -17,7 +17,8 @@ import (
 // withTempCache redirects XDG_CACHE_HOME to a fresh temp directory and
 // returns a cleanup function. Models tests must always run in a
 // scratch cache so they cannot pollute the developer's real model
-// cache (~/.cache/yap/models is 142+ MB once base.en is installed).
+// cache (a fully-populated cache is ~2.1 GB across all four pinned
+// English-only models).
 func withTempCache(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -91,17 +92,26 @@ func TestPath_UnknownModel(t *testing.T) {
 	}
 }
 
-func TestErrUnknownModel_AlternatesAreHelpful(t *testing.T) {
-	err := ErrUnknownModel("small.en")
+func TestErrUnknownModel_ListsPinnedModels(t *testing.T) {
+	err := ErrUnknownModel("large-v3")
 	if err == nil {
-		t.Fatal("expected error for small.en")
+		t.Fatal("expected error for unknown model")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "not currently pinned") {
-		t.Errorf("expected helpful message about pinning, got %q", msg)
+	if !strings.Contains(msg, "unknown model") {
+		t.Errorf("expected message to start with 'unknown model', got %q", msg)
 	}
-	if !strings.Contains(msg, "base.en") {
-		t.Errorf("expected message to mention base.en, got %q", msg)
+	// Every pinned model name must appear in the error so the user can
+	// see exactly what they can pick from without consulting docs.
+	for _, name := range []string{"tiny.en", "base.en", "small.en", "medium.en"} {
+		if !strings.Contains(msg, name) {
+			t.Errorf("expected message to mention %q, got %q", name, msg)
+		}
+	}
+	// The hint about transcription.model_path is the documented
+	// escape hatch for models outside the manifest.
+	if !strings.Contains(msg, "transcription.model_path") {
+		t.Errorf("expected message to point at transcription.model_path, got %q", msg)
 	}
 }
 
@@ -134,21 +144,36 @@ func TestInstalled_PresentFile(t *testing.T) {
 	}
 }
 
-func TestList_OnlyBaseEn(t *testing.T) {
+func TestList_PinnedEnglishModels(t *testing.T) {
 	withTempCache(t)
-	models, err := List()
+	got, err := List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(models) != 1 {
-		t.Fatalf("Phase 6 manifest should pin exactly one model, got %d: %+v",
-			len(models), models)
+	// The manifest pins exactly the four English-only whisper.cpp
+	// models. If you add or remove a model from the manifest, update
+	// this expected list — it is the canonical assertion of which
+	// models a fresh `yap models list` will surface.
+	wantNames := []string{"tiny.en", "base.en", "small.en", "medium.en"}
+	if len(got) != len(wantNames) {
+		t.Fatalf("expected %d pinned models, got %d: %+v",
+			len(wantNames), len(got), got)
 	}
-	if models[0].Name != "base.en" {
-		t.Fatalf("expected base.en, got %q", models[0].Name)
-	}
-	if models[0].Installed {
-		t.Fatalf("model should not be installed in fresh cache")
+	for i, want := range wantNames {
+		if got[i].Name != want {
+			t.Errorf("model[%d]: want name %q, got %q", i, want, got[i].Name)
+		}
+		if got[i].Installed {
+			t.Errorf("model[%d] (%s): should not be installed in fresh cache",
+				i, got[i].Name)
+		}
+		if got[i].SHA256 == "" {
+			t.Errorf("model[%d] (%s): SHA256 is empty", i, got[i].Name)
+		}
+		if got[i].SizeMB <= 0 {
+			t.Errorf("model[%d] (%s): SizeMB must be positive, got %d",
+				i, got[i].Name, got[i].SizeMB)
+		}
 	}
 }
 

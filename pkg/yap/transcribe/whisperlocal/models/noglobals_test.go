@@ -18,9 +18,8 @@ import (
 // constants — they are append-only at init time and never mutated at
 // runtime.
 var allowedGlobals = map[string]struct{}{
-	"downloadClient":   {}, // HTTP client; whitelisted by name
-	"known":            {}, // pinned manifest list (init-only)
-	"pinnedAlternates": {}, // helpful-error name list (init-only)
+	"downloadClient": {}, // HTTP client; whitelisted by name
+	"known":          {}, // pinned manifest list (init-only)
 }
 
 // TestNoUnexpectedGlobals walks every production .go file under the

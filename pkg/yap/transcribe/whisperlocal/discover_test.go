@@ -214,12 +214,18 @@ func TestResolveModel_NotDownloaded_PointsAtCommand(t *testing.T) {
 func TestResolveModel_UnknownModel(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
-	_, err := resolveModel(transcribe.Config{Model: "small.en"})
+	// "large-v3" is not in the manifest — only the four English-only
+	// models (tiny.en, base.en, small.en, medium.en) are pinned.
+	_, err := resolveModel(transcribe.Config{Model: "large-v3"})
 	if err == nil {
 		t.Fatal("expected error for non-pinned model name")
 	}
-	if !strings.Contains(err.Error(), "not currently pinned") {
-		t.Errorf("expected helpful error about pinning, got %q", err.Error())
+	if !strings.Contains(err.Error(), "unknown model") {
+		t.Errorf("expected error to call out unknown model, got %q", err.Error())
+	}
+	// The user must learn about the model_path escape hatch.
+	if !strings.Contains(err.Error(), "transcription.model_path") {
+		t.Errorf("expected error to mention transcription.model_path, got %q", err.Error())
 	}
 }
 

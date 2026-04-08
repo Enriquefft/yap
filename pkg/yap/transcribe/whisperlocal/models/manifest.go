@@ -25,41 +25,53 @@ type Manifest struct {
 // resolve.
 func (m Manifest) Filename() string { return "ggml-" + m.Name + ".bin" }
 
-// known is the pinned model list. Phase 6 ships exactly one entry —
-// `base.en` — because that is the model the default config points at
-// and the only file whose SHA256 we have verified live during the
-// Phase 6 implementation run. Adding tiny.en / small.en / medium.en is
-// a follow-up change that re-downloads each file, computes the hash,
-// and appends an entry here. Until then those names return a clear
-// "not currently pinned" error from lookupManifest so users see a
-// helpful message instead of "unknown".
+// known is the pinned manifest of every English-only whisper.cpp model
+// yap supports out of the box. Each entry's SHA256 was computed live
+// against the canonical Hugging Face download; mismatches are rejected
+// at install time. Users who want a model not on this list — for
+// example a multilingual variant or a custom fine-tune — can point
+// transcription.model_path at a hand-downloaded ggml-*.bin file and
+// bypass the manifest entirely.
 //
-// SHA256 sourced from a live download performed during Phase 6
-// implementation:
+// Reproduction recipe (run from any throwaway directory):
 //
-//	curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin -o /tmp/ggml-base.en.bin
-//	sha256sum /tmp/ggml-base.en.bin
-//	a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002  /tmp/ggml-base.en.bin
+//	for name in tiny.en base.en small.en medium.en; do
+//	  curl -fL -o "ggml-${name}.bin" \
+//	    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${name}.bin"
+//	  sha256sum "ggml-${name}.bin"
+//	done
 //
-// See ROADMAP.md Phase 6 Findings.
+// The four hashes below are the lowercase hex SHA256 of those files
+// and the SizeMB values are round(bytes / 1024 / 1024).
 var known = []Manifest{
+	{
+		Name:   "tiny.en",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+		SHA256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+		SizeMB: 74,
+	},
 	{
 		Name:   "base.en",
 		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
 		SHA256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
 		SizeMB: 142,
 	},
+	{
+		Name:   "small.en",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+		SHA256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+		SizeMB: 465,
+	},
+	{
+		Name:   "medium.en",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+		SHA256: "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+		SizeMB: 1463,
+	},
 }
 
-// pinnedModelNames is the list of model names that the manifest does
-// NOT currently pin but that users might reasonably ask for. The error
-// path uses this list to give a helpful "not currently pinned" message.
-var pinnedAlternates = []string{"tiny.en", "small.en", "medium.en"}
-
 // lookupManifest returns the pinned manifest for name. The second
-// return value is a boolean for "found"; the third is a sentinel error
-// describing why a known-but-not-pinned name was rejected. Callers
-// usually want one of:
+// return value is a boolean for "found"; callers usually do:
 //
 //	m, ok := lookupManifest(name)
 //	if !ok { return ErrUnknownModel(name) }
@@ -74,33 +86,19 @@ func lookupManifest(name string) (Manifest, bool) {
 	return Manifest{}, false
 }
 
-// isAlternateName reports whether name is one of the well-known
-// whisper.cpp models that the Phase 6 manifest deliberately omits. The
-// caller uses this to give a tailored error message.
-func isAlternateName(name string) bool {
-	for _, alt := range pinnedAlternates {
-		if alt == name {
-			return true
-		}
-	}
-	return false
-}
-
 // ErrUnknownModel returns the error for an unrecognised model name. It
 // is a function rather than a sentinel because the message embeds the
-// requested name and a hint about which models are currently pinned.
+// requested name and the list of currently-pinned models so the user
+// sees an actionable hint instead of a bare "unknown".
 func ErrUnknownModel(name string) error {
-	if isAlternateName(name) {
-		return fmt.Errorf(
-			"models: model %q is not currently pinned in the Phase 6 manifest "+
-				"(only %q is). Set transcription.model_path to a hand-downloaded "+
-				"file or stay on base.en", name, known[0].Name)
-	}
 	pinned := make([]string, 0, len(known))
 	for _, m := range known {
 		pinned = append(pinned, m.Name)
 	}
-	return fmt.Errorf("models: unknown model %q (pinned: %v)", name, pinned)
+	return fmt.Errorf(
+		"models: unknown model %q (pinned: %v). Set transcription.model_path "+
+			"to a hand-downloaded ggml-*.bin file to use a model outside the manifest",
+		name, pinned)
 }
 
 // LookupByName returns the manifest entry for name and a found bool.

@@ -25,7 +25,9 @@ func newModelsCmd() *cobra.Command {
 
 Models are stored under $XDG_CACHE_HOME/yap/models/ on Linux,
 ~/Library/Caches/yap/models/ on macOS, and %LOCALAPPDATA%/yap/Cache/models/
-on Windows. Phase 6 ships exactly one pinned model (base.en); the cache
+on Windows. The pinned manifest covers the four English-only whisper.cpp
+models (tiny.en, base.en, small.en, medium.en); each is downloaded from
+Hugging Face and verified against a compile-time SHA256. The cache
 directory may also contain hand-downloaded files referenced via
 transcription.model_path.`,
 		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
