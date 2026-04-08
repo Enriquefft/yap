@@ -13,6 +13,7 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/ipc"
+	"github.com/hybridz/yap/internal/pidfile"
 )
 
 func withScratchXDG(t *testing.T) string {
@@ -46,7 +47,7 @@ func TestStop_NothingRunning(t *testing.T) {
 func TestStop_DaemonOnly(t *testing.T) {
 	withScratchXDG(t)
 
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		t.Fatalf("resolve sock: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestStop_RecordOnly(t *testing.T) {
 	defer child.Process.Kill()
 
 	// Write the child's PID into the record PID file.
-	pidPath, err := xdg.DataFile("yap/yap-record.pid")
+	pidPath, err := pidfile.RecordPath()
 	if err != nil {
 		t.Fatalf("resolve pid path: %v", err)
 	}
@@ -126,7 +127,7 @@ func TestStop_BothPaths(t *testing.T) {
 	withScratchXDG(t)
 
 	// Daemon side.
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		t.Fatalf("sock path: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestStop_BothPaths(t *testing.T) {
 		t.Fatalf("spawn sleep: %v", err)
 	}
 	defer child.Process.Kill()
-	pidPath, err := xdg.DataFile("yap/yap-record.pid")
+	pidPath, err := pidfile.RecordPath()
 	if err != nil {
 		t.Fatalf("pid path: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestStop_BothPaths(t *testing.T) {
 func TestStop_StalePIDFile(t *testing.T) {
 	withScratchXDG(t)
 
-	pidPath, err := xdg.DataFile("yap/yap-record.pid")
+	pidPath, err := pidfile.RecordPath()
 	if err != nil {
 		t.Fatalf("pid path: %v", err)
 	}

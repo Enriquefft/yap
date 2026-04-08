@@ -21,7 +21,7 @@ import (
 func newConfigSetCmd(_ *config.Config, p platform.Platform) *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
-		Short: "Set a configuration value",
+		Short: "set a configuration value",
 		Long: `Set a configuration value by dot-notation path.
 
 Examples:
@@ -39,19 +39,19 @@ Mutations to injection.app_overrides are handled by
 
 			loaded, err := config.Load()
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				return fmt.Errorf("config: set: load: %w", err)
 			}
 
 			if err := pcfg.Set(&loaded, key, value); err != nil {
-				return err
+				return fmt.Errorf("config: set %s: %w", key, err)
 			}
 
 			if err := loaded.Validate(p.HotkeyCfg); err != nil {
-				return fmt.Errorf("config would be invalid after set: %w", err)
+				return fmt.Errorf("config: set: validate: %w", err)
 			}
 
 			if err := config.Save(loaded); err != nil {
-				return fmt.Errorf("save config: %w", err)
+				return fmt.Errorf("config: set: save: %w", err)
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Set %s to %s\n", key, value)

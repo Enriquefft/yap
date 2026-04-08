@@ -73,13 +73,13 @@ func TestDevices_NilDeviceLister(t *testing.T) {
 func TestDevices_ListDevicesError(t *testing.T) {
 	withCleanConfig(t)
 	p := platform.Platform{
-		DeviceLister: fakeDeviceLister{err: errors.New("portaudio is sleeping")},
+		DeviceLister: fakeDeviceLister{err: errors.New("audio enumeration failed")},
 	}
 	_, _, err := runCLIWithPlatform(t, p, "devices")
 	if err == nil {
 		t.Fatal("expected error from device lister")
 	}
-	if !strings.Contains(err.Error(), "portaudio is sleeping") {
+	if !strings.Contains(err.Error(), "audio enumeration failed") {
 		t.Errorf("expected lister error to surface, got %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/daemon"
@@ -58,7 +59,7 @@ flipping the global setting.`,
 }
 
 func runTransform(cmd *cobra.Command, cfg *config.Config, args []string, backend, prompt string, readStdin bool) error {
-	text, err := readTextInput(args, readStdin)
+	text, err := readTextInput(args, readStdin, os.Stdin, stdinIsTerminal)
 	if err != nil {
 		return fmt.Errorf("transform: %w", err)
 	}
@@ -81,7 +82,7 @@ func runTransform(cmd *cobra.Command, cfg *config.Config, args []string, backend
 	if err != nil {
 		return fmt.Errorf("transform: build transformer: %w", err)
 	}
-	defer closeIfCloser(tr)
+	defer closeIfCloser(tr, "transformer")
 
 	in := make(chan transcribe.TranscriptChunk, 1)
 	in <- transcribe.TranscriptChunk{Text: text, IsFinal: true}
@@ -89,14 +90,14 @@ func runTransform(cmd *cobra.Command, cfg *config.Config, args []string, backend
 
 	out, err := tr.Transform(cmd.Context(), in)
 	if err != nil {
-		return fmt.Errorf("transform: %w", err)
+		return fmt.Errorf("transform: run: %w", err)
 	}
 
 	w := cmd.OutOrStdout()
 	wroteAny := false
 	for chunk := range out {
 		if chunk.Err != nil {
-			return fmt.Errorf("transform: %w", chunk.Err)
+			return fmt.Errorf("transform: chunk: %w", chunk.Err)
 		}
 		if chunk.Text != "" {
 			if _, err := io.WriteString(w, chunk.Text); err != nil {

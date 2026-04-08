@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/ipc"
+	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/spf13/cobra"
 )
 
@@ -37,9 +37,9 @@ Exit code: 0 when the daemon is running, 1 when it is not.`,
 // identify the installation; the function still exits with status 1
 // in that case so scripts treat it as "not running".
 func runStatus(cmd *cobra.Command, cfg *config.Config) error {
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
-		return fmt.Errorf("resolve socket path: %w", err)
+		return fmt.Errorf("status: %w", err)
 	}
 
 	out := cmd.OutOrStdout()
@@ -47,17 +47,24 @@ func runStatus(cmd *cobra.Command, cfg *config.Config) error {
 	resp, err := ipc.Send(sockPath, ipc.CmdStatus, 1*time.Second)
 	if err != nil {
 		// Daemon not reachable — return the local fallback shape.
+		// Pull Mode/Backend/Model from the on-disk config so the
+		// operator still sees the configuration that *would* be
+		// active if the daemon were running. PID stays empty: there
+		// is no live process to report.
 		fallback := ipc.Response{
 			Ok:      false,
 			Error:   "not running",
 			Version: config.Version,
+			Mode:    cfg.General.Mode,
+			Backend: cfg.Transcription.Backend,
+			Model:   cfg.Transcription.Model,
 		}
 		if path, perr := config.ConfigPath(); perr == nil {
 			fallback.ConfigPath = path
 		}
 		data, _ := json.Marshal(fallback)
 		fmt.Fprintf(out, "%s\n", string(data))
-		return fmt.Errorf("daemon not running")
+		return fmt.Errorf("status: daemon not running")
 	}
 
 	data, mErr := json.Marshal(resp)

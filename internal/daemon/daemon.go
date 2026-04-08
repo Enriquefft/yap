@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/assets"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/engine"
@@ -39,9 +38,15 @@ import (
 
 // Deps holds all injectable dependencies for the daemon.
 // Use DefaultDeps for production; substitute fields in tests.
+//
+// Path resolution is intentionally not pluggable: the daemon, the
+// CLI, and tests all go through internal/pidfile's path helpers,
+// which honor XDG environment variables (XDG_DATA_HOME) tests
+// already set via t.Setenv. Routing every path through one helper
+// package is the project's single-source-of-truth rule for runtime
+// file layout.
 type Deps struct {
 	Platform     platform.Platform
-	XDGDataFile  func(string) (string, error)
 	PIDWrite     func(string) error
 	PIDRemove    func(string)
 	NewIPCServer func(string) (*ipc.Server, error)
@@ -51,7 +56,6 @@ type Deps struct {
 func DefaultDeps(p platform.Platform) Deps {
 	return Deps{
 		Platform:     p,
-		XDGDataFile:  xdg.DataFile,
 		PIDWrite:     pidfile.Write,
 		PIDRemove:    pidfile.Remove,
 		NewIPCServer: ipc.NewServer,
@@ -320,7 +324,7 @@ func New(cfg *config.Config) *Daemon {
 // Run starts the daemon event loop and blocks until SIGTERM/SIGINT.
 // All cleanup (audio, PID file removal) is deferred and guaranteed to execute.
 func Run(cfg *config.Config, deps Deps) error {
-	pidPath, err := deps.XDGDataFile("yap/yap.pid")
+	pidPath, err := pidfile.DaemonPath()
 	if err != nil {
 		return fmt.Errorf("resolve pid path: %w", err)
 	}
@@ -359,7 +363,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	defer listener.Close()
 
 	// Start IPC server.
-	sockPath, err := deps.XDGDataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		return fmt.Errorf("resolve socket path: %w", err)
 	}

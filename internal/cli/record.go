@@ -72,7 +72,7 @@ injecting it at the cursor.`,
 // and exit cleanly.
 func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, opts recordOptions, stdout io.Writer) error {
 	if opts.out != "" && opts.out != "text" {
-		return fmt.Errorf("record: invalid --out value %q (expected \"\" or \"text\")", opts.out)
+		return fmt.Errorf("record: validate: invalid --out value %q (expected \"\" or \"text\")", opts.out)
 	}
 
 	// Resolve effective config from flag overrides. We copy the
@@ -91,7 +91,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 
 	rec, err := p.NewRecorder(eff.General.AudioDevice)
 	if err != nil {
-		return fmt.Errorf("record: init audio: %w", err)
+		return fmt.Errorf("record: audio init: %w", err)
 	}
 	defer rec.Close()
 
@@ -99,15 +99,16 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	if err != nil {
 		return fmt.Errorf("record: build transcriber: %w", err)
 	}
-	defer closeIfCloser(transcriber)
+	defer closeIfCloser(transcriber, "transcriber")
 
 	// Phase 8: wrap the configured transform backend in a fallback
 	// decorator so `yap record --transform` degrades gracefully when
 	// the backend is unreachable. The platform notifier is the same
-	// one the daemon uses, so the user sees the same toast. When the
-	// user opted into stream_partials the wrapping is skipped — the
-	// buffered fallback decorator would defeat the partial-injection
-	// promise.
+	// one the daemon uses, so the user sees the same toast. The
+	// streamPartials flag gates the fallback wrapping: when the
+	// user opted into partial injection, the buffered fallback
+	// decorator would defeat that promise, so wrapping is skipped
+	// (see pkg/yap/transform/fallback/doc.go).
 	transformer, err := daemon.NewTransformerWithFallback(
 		eff.Transform,
 		p.Notifier,
@@ -116,7 +117,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	if err != nil {
 		return fmt.Errorf("record: build transformer: %w", err)
 	}
-	defer closeIfCloser(transformer)
+	defer closeIfCloser(transformer, "transformer")
 
 	// The injector depends on output mode. text mode prints to the
 	// caller-supplied stdout instead of touching the focused window.
@@ -139,7 +140,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	// and `yap toggle` can target it without going through the
 	// daemon's IPC socket.
 	if err := writeRecordPID(); err != nil {
-		return fmt.Errorf("record: %w", err)
+		return fmt.Errorf("record: pid: %w", err)
 	}
 	defer removeRecordPID()
 

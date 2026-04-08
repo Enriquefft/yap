@@ -32,11 +32,11 @@ want to pin a specific device.`,
 
 func runDevices(cmd *cobra.Command, p platform.Platform) error {
 	if p.DeviceLister == nil {
-		return errors.New("devices: platform does not support enumeration")
+		return errors.New("devices: list: platform does not support enumeration")
 	}
 	devices, err := p.DeviceLister.ListDevices()
 	if err != nil {
-		return fmt.Errorf("devices: %w", err)
+		return fmt.Errorf("devices: list: %w", err)
 	}
 	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "DEFAULT\tNAME\tDESCRIPTION")

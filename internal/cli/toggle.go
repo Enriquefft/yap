@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/ipc"
+	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/spf13/cobra"
 )
 
@@ -42,29 +42,29 @@ with status 1 so scripts can detect the no-op state.`,
 // Status messages are written to out so tests can capture them via
 // the cobra command's writer; runToggle never touches os.Stdout.
 func runToggle(out io.Writer) error {
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
-		return fmt.Errorf("resolve socket path: %w", err)
+		return fmt.Errorf("toggle: %w", err)
 	}
 	if _, err := os.Stat(sockPath); err == nil {
 		// Daemon socket exists — use IPC.
 		resp, err := ipc.Send(sockPath, ipc.CmdToggle, 5*time.Second)
 		if err != nil {
-			return fmt.Errorf("toggle: %w", err)
+			return fmt.Errorf("toggle: ipc: %w", err)
 		}
 		if !resp.Ok {
-			return fmt.Errorf("toggle: %s", resp.Error)
+			return fmt.Errorf("toggle: daemon: %s", resp.Error)
 		}
 		fmt.Fprintf(out, "Toggle successful (state: %s)\n", resp.State)
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat socket: %w", err)
+		return fmt.Errorf("toggle: stat socket: %w", err)
 	}
 
 	// No daemon — try the standalone record process.
 	pid, err := readRecordPID()
 	if err != nil {
-		return fmt.Errorf("toggle: %w", err)
+		return fmt.Errorf("toggle: record pid: %w", err)
 	}
 	if pid == 0 {
 		return fmt.Errorf("toggle: no daemon and no `yap record` process running")

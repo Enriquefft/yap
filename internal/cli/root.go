@@ -33,7 +33,7 @@ func newRootCmd(p platform.Platform, modelMgr *models.Manager) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "yap",
-		Short: "Hold-to-talk voice dictation daemon",
+		Short: "hold-to-talk voice dictation daemon",
 		Long:  "yap — record speech, transcribe locally or via a remote backend, inject text at the cursor.",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Name() == "help" || cmd.Name() == "completion" {

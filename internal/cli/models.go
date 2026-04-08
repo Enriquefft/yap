@@ -25,8 +25,8 @@ import (
 func newModelsCmd(mgr *models.Manager) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Manage local whisper.cpp models",
-		Long: `Manage the model cache used by the local whisper.cpp transcription backend.
+		Short: "manage local whisper.cpp models",
+		Long: `manage the model cache used by the local whisper.cpp transcription backend.
 
 Models are stored under $XDG_CACHE_HOME/yap/models/ on Linux,
 ~/Library/Caches/yap/models/ on macOS, and %LOCALAPPDATA%/yap/Cache/models/
@@ -46,12 +46,18 @@ transcription.model_path.`,
 func newModelsListCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List known models and their install state",
-		Args:  cobra.NoArgs,
+		Short: "list known models and their install state",
+		Long: `list prints every model in the pinned manifest along with
+whether it is currently in the cache, its on-disk size in MB, and
+the absolute path it would resolve to.
+
+Use this to check before running 'models download' or to confirm a
+hand-downloaded file landed in the right place.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			entries, err := mgr.List()
 			if err != nil {
-				return fmt.Errorf("list models: %w", err)
+				return fmt.Errorf("models: list: %w", err)
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "%-12s %-12s %-8s %s\n", "NAME", "INSTALLED", "SIZE", "PATH")
@@ -71,8 +77,19 @@ func newModelsListCmd(mgr *models.Manager) *cobra.Command {
 func newModelsDownloadCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "download <name>",
-		Short: "Download a model into the cache, verifying SHA256",
-		Args:  cobra.ExactArgs(1),
+		Short: "download a model into the cache, verifying SHA256",
+		Long: `download fetches a model from the pinned manifest into the
+local cache and verifies its SHA256 against the compile-time hash
+before swapping the temp file into place. SHA mismatch aborts the
+install and leaves the cache untouched.
+
+Ctrl-C is honored during the download — the temp file is cleaned
+up on every error path including context cancellation.
+
+Example:
+
+  yap models download base.en`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			// Honor SIGINT/SIGTERM during the download so the user
@@ -83,11 +100,11 @@ func newModelsDownloadCmd(mgr *models.Manager) *cobra.Command {
 				syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 			if err := mgr.Download(ctx, name, cmd.OutOrStdout()); err != nil {
-				return fmt.Errorf("download %s: %w", name, err)
+				return fmt.Errorf("models: download %s: %w", name, err)
 			}
 			path, err := mgr.Path(name)
 			if err != nil {
-				return fmt.Errorf("resolve %s: %w", name, err)
+				return fmt.Errorf("models: download %s: resolve: %w", name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "installed %s -> %s\n", name, path)
 			return nil
@@ -98,20 +115,29 @@ func newModelsDownloadCmd(mgr *models.Manager) *cobra.Command {
 func newModelsPathCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "path [name]",
-		Short: "Print the cache directory, or the path to a specific model",
-		Args:  cobra.MaximumNArgs(1),
+		Short: "print the cache directory, or the path to a specific model",
+		Long: `path with no argument prints the cache directory yap reads
+its models from. With a model name argument it prints the absolute
+path that 'models download <name>' would write to (without
+checking whether the file actually exists yet).
+
+Example:
+
+  yap models path
+  yap models path base.en`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
 				dir, err := models.CacheDir()
 				if err != nil {
-					return fmt.Errorf("cache dir: %w", err)
+					return fmt.Errorf("models: path: cache dir: %w", err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), dir)
 				return nil
 			}
 			path, err := mgr.Path(args[0])
 			if err != nil {
-				return fmt.Errorf("path %s: %w", args[0], err)
+				return fmt.Errorf("models: path %s: %w", args[0], err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), path)
 			return nil

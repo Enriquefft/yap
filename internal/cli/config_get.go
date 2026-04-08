@@ -19,7 +19,7 @@ import (
 func newConfigGetCmd(_ *config.Config) *cobra.Command {
 	return &cobra.Command{
 		Use:   "get <key>",
-		Short: "Get a configuration value",
+		Short: "get a configuration value",
 		Long: `Get a configuration value by dot-notation path.
 
 Examples:
@@ -37,12 +37,12 @@ down to a leaf to get the exact value.`,
 
 			loaded, err := config.Load()
 			if err != nil {
-				return fmt.Errorf("load config: %w", err)
+				return fmt.Errorf("config: get: load: %w", err)
 			}
 
 			value, err := pcfg.Get(&loaded, key)
 			if err != nil {
-				return err
+				return fmt.Errorf("config: get %s: %w", key, err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), value)
 			return nil

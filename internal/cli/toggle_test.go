@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/ipc"
+	"github.com/hybridz/yap/internal/pidfile"
 )
 
 // TestToggle_DaemonPath uses the IPC socket and asserts the toggle
@@ -19,7 +19,7 @@ import (
 func TestToggle_DaemonPath(t *testing.T) {
 	withScratchXDG(t)
 
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		t.Fatalf("sock path: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestToggle_RecordSignalPath(t *testing.T) {
 	}
 	defer child.Process.Kill()
 
-	pidPath, err := xdg.DataFile("yap/yap-record.pid")
+	pidPath, err := pidfile.RecordPath()
 	if err != nil {
 		t.Fatalf("pid path: %v", err)
 	}

@@ -49,7 +49,7 @@ func runTranscribe(cmd *cobra.Command, cfg *config.Config, path string, jsonOut 
 	if err != nil {
 		return fmt.Errorf("transcribe: build transcriber: %w", err)
 	}
-	defer closeIfCloser(tx)
+	defer closeIfCloser(tx, "transcriber")
 
 	chunks, err := tx.Transcribe(cmd.Context(), f)
 	if err != nil {

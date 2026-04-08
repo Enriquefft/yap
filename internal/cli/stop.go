@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/ipc"
 	"github.com/hybridz/yap/internal/pidfile"
@@ -36,6 +35,11 @@ stop exits 0 if anything was stopped.`,
 //
 // Status messages are written to out so tests can capture them via
 // the cobra command's writer; runStop never touches os.Stdout.
+//
+// Errors from the two paths are combined via errors.Join so callers
+// see every real failure (not just the first one) without losing the
+// original error chain — this matches the "fail loudly, fail
+// completely" rule from the project quality bar.
 func runStop(out io.Writer) error {
 	daemonStopped, dErr := stopDaemon(out)
 	recordStopped, rErr := stopRecord(out)
@@ -45,27 +49,20 @@ func runStop(out io.Writer) error {
 		// don't break on repeated invocation.
 		fmt.Fprintln(out, "No yap daemon or record process running")
 	}
-	// Surface the first real error, not the "not running" ones.
-	if dErr != nil {
-		return dErr
-	}
-	if rErr != nil {
-		return rErr
-	}
-	return nil
+	return errors.Join(dErr, rErr)
 }
 
 // stopDaemon runs the daemon-shutdown path. Returns (stopped, err)
 // where stopped is true if the daemon was present and the stop
 // request was acknowledged (IPC or fallback cleanup).
 func stopDaemon(out io.Writer) (bool, error) {
-	pidPath, err := xdg.DataFile("yap/yap.pid")
+	pidPath, err := pidfile.DaemonPath()
 	if err != nil {
-		return false, fmt.Errorf("resolve pid path: %w", err)
+		return false, fmt.Errorf("stop: daemon: %w", err)
 	}
-	sockPath, err := xdg.DataFile("yap/yap.sock")
+	sockPath, err := pidfile.SocketPath()
 	if err != nil {
-		return false, fmt.Errorf("resolve socket path: %w", err)
+		return false, fmt.Errorf("stop: daemon: %w", err)
 	}
 
 	if _, err := os.Stat(sockPath); errors.Is(err, os.ErrNotExist) {
@@ -82,7 +79,7 @@ func stopDaemon(out io.Writer) (bool, error) {
 		return true, nil
 	}
 	if !resp.Ok {
-		return true, fmt.Errorf("daemon rejected stop command: %s", resp.Error)
+		return true, fmt.Errorf("stop: daemon rejected stop command: %s", resp.Error)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -103,7 +100,7 @@ func stopDaemon(out io.Writer) (bool, error) {
 func stopRecord(out io.Writer) (bool, error) {
 	pid, err := readRecordPID()
 	if err != nil {
-		return false, fmt.Errorf("record pid: %w", err)
+		return false, fmt.Errorf("stop: record pid: %w", err)
 	}
 	if pid == 0 {
 		return false, nil
@@ -119,13 +116,12 @@ func stopRecord(out io.Writer) (bool, error) {
 			removeRecordPID()
 			return false, nil
 		}
-		return false, fmt.Errorf("signal record pid %d: %w", pid, err)
+		return false, fmt.Errorf("stop: signal record pid %d: %w", pid, err)
 	}
-	// The signal was delivered to a real, signalable process. The
-	// PID file is no longer authoritative — the child will exit and
-	// the file becomes stale. Remove it now so a follow-up `yap stop`
-	// reports correctly.
-	removeRecordPID()
+	// The signal was delivered. The record child's defer in runRecord
+	// is the canonical owner of the PID file lifecycle and will remove
+	// it as the process exits — mirroring the daemon path, where
+	// stopDaemon waits for the daemon to clean up its own PID file.
 	fmt.Fprintln(out, "Record process signalled (SIGTERM)")
 	return true, nil
 }

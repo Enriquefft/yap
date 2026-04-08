@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/daemon"
@@ -40,7 +41,7 @@ browser without having to record audio first.`,
 }
 
 func runPaste(cmd *cobra.Command, cfg *config.Config, p platform.Platform, args []string, readStdin bool) error {
-	text, err := readTextInput(args, readStdin)
+	text, err := readTextInput(args, readStdin, os.Stdin, stdinIsTerminal)
 	if err != nil {
 		return fmt.Errorf("paste: %w", err)
 	}
@@ -52,7 +53,7 @@ func runPaste(cmd *cobra.Command, cfg *config.Config, p platform.Platform, args 
 		return fmt.Errorf("paste: build injector: %w", err)
 	}
 	if err := inj.Inject(cmd.Context(), text); err != nil {
-		return fmt.Errorf("paste: %w", err)
+		return fmt.Errorf("paste: inject: %w", err)
 	}
 	return nil
 }
