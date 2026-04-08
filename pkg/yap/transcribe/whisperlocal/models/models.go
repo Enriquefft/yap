@@ -10,41 +10,99 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/adrg/xdg"
 )
 
-// downloadClient is the HTTP client used by Download. It is the only
-// package-level mutable state in the models package and is whitelisted
-// by name in noglobals_test.go. Tests substitute it via
-// SetDownloadClientForTest before exercising the download path.
-//
-// The default timeout is generous (15 minutes) because medium.en is
-// 1.5 GB and a slow connection is still a working connection.
-var downloadClient = &http.Client{Timeout: 15 * time.Minute}
+// defaultDownloadTimeout is the per-request HTTP timeout used by the
+// production Manager. The default is generous (15 minutes) because
+// medium.en is 1.5 GB and a slow connection is still a working
+// connection.
+const defaultDownloadTimeout = 15 * time.Minute
 
-// SetDownloadClientForTest replaces the package's HTTP client. Only
-// _test.go files should call this. The function returns the previous
-// client so the test can defer-restore it.
-func SetDownloadClientForTest(c *http.Client) *http.Client {
-	prev := downloadClient
-	downloadClient = c
-	return prev
+// lockFileName is the sentinel file used by the inter-process advisory
+// lock that serializes concurrent Download calls against the same
+// cache directory.
+const lockFileName = ".lock"
+
+// Manager owns the whisper.cpp model cache for a single yap process.
+//
+// All methods are safe for concurrent use within a process; the
+// inter-process safety of Download is provided by an advisory file
+// lock on the cache directory's .lock sentinel.
+//
+// Tests construct their own Manager (via NewManager) with an httptest
+// client and a fixture manifest. Production callers use Default(),
+// which returns a lazily-built singleton wired to the real Hugging
+// Face URLs and the user's XDG cache.
+type Manager struct {
+	client   *http.Client
+	manifest []Manifest
 }
 
-// OverrideManifestForTest replaces the pinned manifest with override
-// for the duration of a test. It returns a restore function the test
-// must defer to put the production manifest back. Only _test.go files
-// should call this; production code never mutates the manifest.
+// ManagerOption configures a Manager at construction time.
+type ManagerOption func(*Manager)
+
+// WithHTTPClient overrides the default HTTP client used by Download.
+// Tests use this to inject an httptest server's client.
+func WithHTTPClient(c *http.Client) ManagerOption {
+	return func(m *Manager) { m.client = c }
+}
+
+// WithManifest overrides the pinned manifest. Tests use this to
+// construct a Manager that knows about a fixture model rather than
+// the production English-only models.
+func WithManifest(manifest []Manifest) ManagerOption {
+	return func(m *Manager) {
+		m.manifest = make([]Manifest, len(manifest))
+		copy(m.manifest, manifest)
+	}
+}
+
+// NewManager constructs a Manager with the given options applied on
+// top of production defaults.
+func NewManager(opts ...ManagerOption) *Manager {
+	m := &Manager{
+		client:   &http.Client{Timeout: defaultDownloadTimeout},
+		manifest: knownCopy(),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// defaultManager is the lazily-built production singleton. It is
+// guarded by defaultOnce so the construction happens exactly once.
 //
-// The function lives in production code (not _test.go) so packages
-// outside `models` — for example internal/cli's models_test.go — can
-// import it via the public API.
-func OverrideManifestForTest(override []Manifest) func() {
-	prev := known
-	known = override
-	return func() { known = prev }
+// The free functions (Path, Installed, Download, List, CacheDir)
+// delegate to defaultManager so existing call sites in internal/cli
+// and pkg/yap/transcribe/whisperlocal/discover.go continue to work
+// without code changes.
+//
+// cacheDirMu serializes calls to xdg.Reload + CacheFile inside
+// CacheDir. The adrg/xdg vendor library writes to its package-level
+// globals without synchronisation, so concurrent callers (two
+// parallel Download calls, for instance) would race it. The mutex
+// lives at the models package level because the races are on xdg's
+// globals and every CacheDir path — whether via a Manager or a
+// free function wrapper — must funnel through the same lock.
+var (
+	defaultOnce    sync.Once
+	defaultManager *Manager
+	cacheDirMu     sync.Mutex
+)
+
+// Default returns the package-level singleton Manager wired to the
+// real Hugging Face URLs and the production HTTP client. It is
+// constructed exactly once on first call.
+func Default() *Manager {
+	defaultOnce.Do(func() {
+		defaultManager = NewManager()
+	})
+	return defaultManager
 }
 
 // Model is the surface returned by List. It pairs a manifest entry
@@ -67,7 +125,15 @@ type Model struct {
 // XDG_CACHE_HOME changes made after process start. The adrg/xdg
 // library caches resolved directories at init time, which is the wrong
 // shape for tests (each subtest installs a fresh temp cache).
+//
+// cacheDirMu protects the xdg.Reload + CacheFile sequence because
+// the adrg/xdg library mutates its own package globals without any
+// synchronisation of its own. Two parallel Download calls would
+// otherwise race the xdg library; holding the mutex for the duration
+// of the two calls funnels them through a single writer.
 func CacheDir() (string, error) {
+	cacheDirMu.Lock()
+	defer cacheDirMu.Unlock()
 	xdg.Reload()
 	// xdg.CacheFile returns the absolute path of a file under the
 	// XDG cache directory and creates the parent directory chain.
@@ -87,24 +153,26 @@ func CacheDir() (string, error) {
 // Path returns the absolute path where the named model would live in
 // the cache. The file may or may not exist; use Installed to check.
 // Returns an error if name is not a pinned model.
-func Path(name string) (string, error) {
-	m, ok := lookupManifest(name)
+//
+// Names are matched case-insensitively against the manifest.
+func (m *Manager) Path(name string) (string, error) {
+	manifest, ok := m.lookup(name)
 	if !ok {
-		return "", ErrUnknownModel(name)
+		return "", ErrUnknownModelFromManifest(name, m.manifest)
 	}
 	dir, err := CacheDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, m.Filename()), nil
+	return filepath.Join(dir, manifest.Filename()), nil
 }
 
 // Installed reports whether the named model file exists in the cache.
 // A non-nil error is returned only if the cache directory cannot be
 // resolved or stat fails for a reason other than "file does not
 // exist".
-func Installed(name string) (bool, error) {
-	p, err := Path(name)
+func (m *Manager) Installed(name string) (bool, error) {
+	p, err := m.Path(name)
 	if err != nil {
 		return false, err
 	}
@@ -123,20 +191,20 @@ func Installed(name string) (bool, error) {
 
 // List returns every pinned model with its current install state. The
 // returned slice is freshly allocated each call.
-func List() ([]Model, error) {
+func (m *Manager) List() ([]Model, error) {
 	dir, err := CacheDir()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Model, 0, len(known))
-	for _, m := range known {
-		full := filepath.Join(dir, m.Filename())
+	out := make([]Model, 0, len(m.manifest))
+	for _, entry := range m.manifest {
+		full := filepath.Join(dir, entry.Filename())
 		installed := false
 		if info, statErr := os.Stat(full); statErr == nil && !info.IsDir() {
 			installed = true
 		}
 		out = append(out, Model{
-			Manifest:  m,
+			Manifest:  entry,
 			Installed: installed,
 			Path:      full,
 		})
@@ -145,11 +213,17 @@ func List() ([]Model, error) {
 }
 
 // Download fetches the named model into the cache directory and
-// verifies the SHA256 against the manifest. The download is atomic:
-// bytes are streamed to a sibling temp file, fsync'd, the SHA256 is
-// validated, then the file is renamed into place. A failed verification
-// removes the temp file so the cache is never left with a half-written
-// or wrong-hash file.
+// verifies the SHA256 against the manifest.
+//
+// The download is atomic: bytes are streamed to a sibling temp file,
+// fsync'd, the SHA256 is validated, then the file is renamed into
+// place. A failed verification removes the temp file so the cache is
+// never left with a half-written or wrong-hash file.
+//
+// Concurrent downloads from multiple yap processes are serialized via
+// an advisory file lock on <cache>/.lock. The second process blocks
+// until the first finishes, then notices the file already exists and
+// returns immediately without re-downloading.
 //
 // progress is an optional writer that receives one human-readable line
 // per ~1% step (or per chunk for tiny files). Pass nil for silent
@@ -157,81 +231,180 @@ func List() ([]Model, error) {
 //
 // Download returns nil on success. The model file is then resolvable
 // via Path(name).
-func Download(ctx context.Context, name string, progress io.Writer) error {
-	m, ok := lookupManifest(name)
+func (m *Manager) Download(ctx context.Context, name string, progress io.Writer) error {
+	manifest, ok := m.lookup(name)
 	if !ok {
-		return ErrUnknownModel(name)
+		return ErrUnknownModelFromManifest(name, m.manifest)
 	}
 	dir, err := CacheDir()
 	if err != nil {
 		return err
 	}
-	finalPath := filepath.Join(dir, m.Filename())
+	finalPath := filepath.Join(dir, manifest.Filename())
 
+	// Acquire the inter-process advisory lock before doing any work.
+	// LOCK_EX blocks until any concurrent downloader finishes; once
+	// we hold the lock we re-check whether the file already exists
+	// (the other downloader may have finished it for us) and skip
+	// the network round-trip in that case.
+	unlock, err := acquireCacheLock(dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if info, statErr := os.Stat(finalPath); statErr == nil && !info.IsDir() {
+		// Another process finished the download while we waited
+		// on the lock. Verify the existing file's hash to confirm
+		// it matches the pinned manifest before declaring success.
+		if hashErr := verifyFileSHA256(finalPath, manifest.SHA256); hashErr != nil {
+			return fmt.Errorf("models: existing %s failed verification: %w", finalPath, hashErr)
+		}
+		return nil
+	}
+
+	return m.downloadLocked(ctx, manifest, dir, finalPath, progress)
+}
+
+// downloadLocked performs the actual download with the cache lock
+// already held. It is split out so the lock-acquire path stays
+// readable.
+func (m *Manager) downloadLocked(
+	ctx context.Context,
+	manifest Manifest,
+	dir, finalPath string,
+	progress io.Writer,
+) error {
 	// Atomic temp-file in the same directory so the rename is
 	// guaranteed to be on the same filesystem.
-	tmp, err := os.CreateTemp(dir, "."+m.Filename()+".*.part")
+	tmp, err := os.CreateTemp(dir, "."+manifest.Filename()+".*.part")
 	if err != nil {
 		return fmt.Errorf("models: create temp file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	// Cleanup on every failure path. Success removes tmpPath via
-	// rename, after which os.Remove is a no-op.
-	defer func() {
-		_ = os.Remove(tmpPath)
-	}()
+	// Single-source close + cleanup. The defer-close is a no-op if
+	// we already closed before rename (the typical happy path); the
+	// defer-remove is a no-op if rename succeeded. Both are safe to
+	// run regardless of success or failure path, which makes future
+	// early-return additions trivially correct.
+	closed := false
+	closeOnce := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return tmp.Close()
+	}
+	defer func() { _ = closeOnce() }()
+	defer func() { _ = os.Remove(tmpPath) }()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifest.URL, nil)
 	if err != nil {
-		tmp.Close()
 		return fmt.Errorf("models: build request: %w", err)
 	}
-	resp, err := downloadClient.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
-		tmp.Close()
-		return fmt.Errorf("models: GET %s: %w", m.URL, err)
+		return fmt.Errorf("models: GET %s: %w", manifest.URL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		tmp.Close()
-		return fmt.Errorf("models: GET %s: HTTP %d", m.URL, resp.StatusCode)
+		return fmt.Errorf("models: GET %s: HTTP %d", manifest.URL, resp.StatusCode)
 	}
 
 	hasher := sha256.New()
-	expected := int64(m.SizeMB) * 1024 * 1024
+	expected := int64(manifest.SizeMB) * 1024 * 1024
 	if resp.ContentLength > 0 {
 		expected = resp.ContentLength
 	}
 
-	pw := newProgressWriter(progress, m.Name, expected)
+	pw := newProgressWriter(progress, manifest.Name, expected)
 	written, err := io.Copy(io.MultiWriter(tmp, hasher, pw), resp.Body)
 	if err != nil {
-		tmp.Close()
-		return fmt.Errorf("models: stream %s: %w", m.URL, err)
+		return fmt.Errorf("models: stream %s: %w", manifest.URL, err)
 	}
 	pw.finish(written)
 
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
 		return fmt.Errorf("models: sync %s: %w", tmpPath, err)
 	}
-	if err := tmp.Close(); err != nil {
+	// Some filesystems require the file to be closed before rename.
+	// closeOnce makes the deferred close above a no-op so we can
+	// surface a meaningful error here without double-close panics.
+	if err := closeOnce(); err != nil {
 		return fmt.Errorf("models: close %s: %w", tmpPath, err)
 	}
 
 	gotHash := hex.EncodeToString(hasher.Sum(nil))
-	if gotHash != m.SHA256 {
+	if gotHash != manifest.SHA256 {
 		return fmt.Errorf(
 			"models: SHA256 mismatch for %s: got %s, expected %s "+
 				"(file rejected; cache is unchanged)",
-			m.Name, gotHash, m.SHA256)
+			manifest.Name, gotHash, manifest.SHA256)
 	}
 
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("models: rename %s -> %s: %w", tmpPath, finalPath, err)
+		return fmt.Errorf(
+			"models: download verified, rename %s -> %s failed: %w",
+			tmpPath, finalPath, err)
 	}
 	return nil
+}
+
+// lookup is the case-insensitive manifest match against the
+// Manager's pinned slice.
+func (m *Manager) lookup(name string) (Manifest, bool) {
+	return lookupManifestIn(m.manifest, name)
+}
+
+// Manifest returns a copy of the Manager's pinned manifest. The
+// returned slice is freshly allocated so callers cannot mutate the
+// Manager's state.
+func (m *Manager) Manifest() []Manifest {
+	out := make([]Manifest, len(m.manifest))
+	copy(out, m.manifest)
+	return out
+}
+
+// acquireCacheLock is defined in lock_unix.go / lock_windows.go so
+// Download can use an advisory file lock without pulling in
+// platform-specific syscall code at the call site.
+
+// verifyFileSHA256 streams a file through SHA256 and compares the
+// hex digest to expected. Used to validate that an
+// already-on-disk file (downloaded by a sibling process) really
+// matches the pinned hash before reporting success.
+func verifyFileSHA256(path, expected string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return fmt.Errorf("hash %s: %w", path, err)
+	}
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if got != expected {
+		return fmt.Errorf("SHA256 mismatch for %s: got %s, expected %s", path, got, expected)
+	}
+	return nil
+}
+
+// Path is the package-level wrapper for Manager.Path that delegates
+// to the production singleton. Existing call sites in the CLI and
+// the discover layer continue to work unchanged.
+func Path(name string) (string, error) { return Default().Path(name) }
+
+// Installed is the package-level wrapper for Manager.Installed.
+func Installed(name string) (bool, error) { return Default().Installed(name) }
+
+// List is the package-level wrapper for Manager.List.
+func List() ([]Model, error) { return Default().List() }
+
+// Download is the package-level wrapper for Manager.Download.
+func Download(ctx context.Context, name string, progress io.Writer) error {
+	return Default().Download(ctx, name, progress)
 }
 
 // progressWriter writes percent-step progress lines to a sink. It is

@@ -155,12 +155,25 @@ func TestDiscoverServer_NotFoundIsHelpful(t *testing.T) {
 	}
 }
 
+// writeFakeModel writes a tiny file with the ggml magic prefix so
+// resolveModel accepts it. The magic check is part of the public
+// contract (S8) — every test that wants a valid model must emit
+// real bytes.
+func writeFakeModel(t *testing.T, path string) {
+	t.Helper()
+	// "lmgg" is the little-endian representation of the uint32
+	// ggml magic. Padding with a few extra bytes keeps the file
+	// recognisable as non-empty without adding a meaningful
+	// structure whisper-server would try to parse.
+	if err := os.WriteFile(path, []byte("lmggpadding"), 0o644); err != nil {
+		t.Fatalf("write fake model: %v", err)
+	}
+}
+
 func TestResolveModel_FromModelPath(t *testing.T) {
 	dir := t.TempDir()
 	modelFile := filepath.Join(dir, "ggml-base.en.bin")
-	if err := os.WriteFile(modelFile, []byte("fake"), 0o644); err != nil {
-		t.Fatalf("write fake model: %v", err)
-	}
+	writeFakeModel(t, modelFile)
 	got, err := resolveModel(transcribe.Config{ModelPath: modelFile})
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)
@@ -180,6 +193,46 @@ func TestResolveModel_FromModelPath_Missing(t *testing.T) {
 	}
 }
 
+// TestResolveModel_RejectsWrongMagic asserts the ggml magic check
+// (S8): a file whose first 4 bytes are not "lmgg" must be rejected
+// with a clear error pointing at `yap models download`.
+func TestResolveModel_RejectsWrongMagic(t *testing.T) {
+	dir := t.TempDir()
+	modelFile := filepath.Join(dir, "ggml-base.en.bin")
+	// A 4-byte HTML body prefix stands in for the "user saved a
+	// 404 page as ggml-base.en.bin" failure mode that triggered
+	// S8 in the first place.
+	if err := os.WriteFile(modelFile, []byte("<htm"), 0o644); err != nil {
+		t.Fatalf("write bad model: %v", err)
+	}
+	_, err := resolveModel(transcribe.Config{ModelPath: modelFile})
+	if err == nil {
+		t.Fatal("expected error for non-ggml model file")
+	}
+	if !strings.Contains(err.Error(), "not a whisper.cpp model file") {
+		t.Errorf("expected 'not a whisper.cpp model file' in error, got %q", err.Error())
+	}
+}
+
+// TestResolveModel_RejectsShortFile covers the truncation edge
+// case: a file shorter than 4 bytes should also be rejected with
+// the "not a whisper.cpp model file" error rather than a cryptic
+// EOF.
+func TestResolveModel_RejectsShortFile(t *testing.T) {
+	dir := t.TempDir()
+	modelFile := filepath.Join(dir, "ggml-base.en.bin")
+	if err := os.WriteFile(modelFile, []byte("ab"), 0o644); err != nil {
+		t.Fatalf("write short model: %v", err)
+	}
+	_, err := resolveModel(transcribe.Config{ModelPath: modelFile})
+	if err == nil {
+		t.Fatal("expected error for short file")
+	}
+	if !strings.Contains(err.Error(), "not a whisper.cpp model file") {
+		t.Errorf("expected 'not a whisper.cpp model file' in error, got %q", err.Error())
+	}
+}
+
 func TestResolveModel_FromCache(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dir)
@@ -187,9 +240,7 @@ func TestResolveModel_FromCache(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(modelFile), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(modelFile, []byte("fake"), 0o644); err != nil {
-		t.Fatalf("write fake model: %v", err)
-	}
+	writeFakeModel(t, modelFile)
 	got, err := resolveModel(transcribe.Config{Model: "base.en"})
 	if err != nil {
 		t.Fatalf("resolveModel: %v", err)

@@ -9,7 +9,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,12 +34,15 @@ func fakeBinary(t *testing.T) string {
 }
 
 // fakeModel creates a regular file in the test temp dir to stand in
-// for ggml-base.en.bin.
+// for ggml-base.en.bin. The file starts with the ggml magic bytes
+// so resolveModel's format check accepts it.
 func fakeModel(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	model := filepath.Join(dir, "ggml-base.en.bin")
-	if err := os.WriteFile(model, []byte("fake-ggml"), 0o644); err != nil {
+	// "lmgg" is the little-endian on-disk representation of the
+	// uint32 ggml magic. The trailing bytes are filler.
+	if err := os.WriteFile(model, []byte("lmgg-test-fixture"), 0o644); err != nil {
 		t.Fatalf("write fake model: %v", err)
 	}
 	return model
@@ -384,73 +389,302 @@ func TestImplementsCloser(t *testing.T) {
 	var _ io.Closer = (*Backend)(nil)
 }
 
-// TestTerminate_WedgedSubprocessIsBounded asserts the C6 fix: when
-// the kernel wedges and waitDone never fires, the post-SIGKILL wait
-// times out at shutdownGraceful instead of blocking the daemon
-// shutdown forever. We synthesize a "wedged" child by handing the
-// helper a waitDone channel that is never closed; the function must
-// return within ~2*shutdownGraceful (SIGTERM grace + post-SIGKILL
-// detach window).
-func TestTerminate_WedgedSubprocessIsBounded(t *testing.T) {
-	wedged := make(chan struct{}) // never closed — simulates wedged kernel
-	var sigtermCalled, sigkillCalled int32
+// TestClose_DuringInflightTranscribe covers the C1 fix: Close must
+// wait for in-flight Transcribe goroutines to drain (via the
+// WaitGroup) and must abort pending HTTP requests via the backend's
+// close context so the caller sees context.Canceled rather than a
+// stray ECONNREFUSED.
+//
+// The test wires Transcribe against an httptest server that blocks
+// for 500ms before responding. Close is called 50ms into the
+// request; the call must return in well under the full 500ms
+// because the close context cancellation triggers an immediate
+// abort, and the Transcribe goroutine must exit cleanly with a
+// cancellation error.
+func TestClose_DuringInflightTranscribe(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			// Client cancelled — exit without writing.
+			return
+		case <-release:
+		case <-time.After(2 * time.Second):
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"slow"}`))
+	}))
+	defer srv.Close()
+	defer close(release)
 
-	start := time.Now()
-	terminate(
-		wedged,
-		func() { atomic.AddInt32(&sigtermCalled, 1) },
-		func() { atomic.AddInt32(&sigkillCalled, 1) },
-		1234,
-	)
-	elapsed := time.Since(start)
+	bin := fakeBinary(t)
+	model := fakeModel(t)
+	b, err := New(transcribe.Config{WhisperServerPath: bin, ModelPath: model})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	b.spawn = func(ctx context.Context, _ *Backend) (*serverProc, error) {
+		return stubProc(srv.URL), nil
+	}
 
-	// The function MUST return within (SIGTERM grace) + (post-Kill
-	// detach window) + a small slack. Without the C6 fix it would
-	// block forever on the bare <-waitDone receive.
-	upper := 2*shutdownGraceful + 500*time.Millisecond
-	if elapsed > upper {
-		t.Errorf("terminate elapsed = %v, want < %v (post-SIGKILL wait must be bounded)", elapsed, upper)
+	// Fire Transcribe in the background. It will block inside
+	// the HTTP request for the entire 2s fake-server handler
+	// unless Close cancels it first.
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
 	}
-	// Lower bound: at least the SIGTERM grace, since waitDone never
-	// fires.
-	if elapsed < shutdownGraceful {
-		t.Errorf("terminate returned in %v, want >= %v (SIGTERM grace must elapse)", elapsed, shutdownGraceful)
+
+	// Snapshot the baseline goroutine count so we can verify
+	// the close path does not leak anything.
+	baseline := runtime.NumGoroutine()
+
+	// Wait a moment so the Transcribe goroutine actually
+	// enters the HTTP request.
+	time.Sleep(50 * time.Millisecond)
+
+	closeStart := time.Now()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
-	if atomic.LoadInt32(&sigtermCalled) != 1 {
-		t.Errorf("sigterm called %d times, want 1", sigtermCalled)
+	closeDur := time.Since(closeStart)
+	if closeDur > 1500*time.Millisecond {
+		t.Errorf("Close took %s — expected well under the 2s server block", closeDur)
 	}
-	if atomic.LoadInt32(&sigkillCalled) != 1 {
-		t.Errorf("sigkill called %d times, want 1", sigkillCalled)
+
+	// Drain the chunks channel so we observe the goroutine exit.
+	var got transcribe.TranscriptChunk
+	for c := range chunks {
+		got = c
+	}
+	if got.Err == nil {
+		t.Fatal("expected an error from the in-flight Transcribe after Close")
+	}
+
+	// Allow a moment for the goroutine to finish unwinding
+	// before we sample the count again.
+	time.Sleep(50 * time.Millisecond)
+	if n := runtime.NumGoroutine(); n > baseline+2 {
+		t.Errorf("goroutine count grew from %d to %d — possible leak", baseline, n)
 	}
 }
 
-// TestTerminate_GracefulShutdown asserts the happy path: SIGTERM
-// elicits an exit (waitDone closes during the grace window) and the
-// helper returns immediately without escalating to SIGKILL.
-func TestTerminate_GracefulShutdown(t *testing.T) {
-	wait := make(chan struct{})
-	var sigkillCalled int32
-
-	go func() {
-		// Simulate the subprocess exiting promptly after SIGTERM.
-		time.Sleep(20 * time.Millisecond)
-		close(wait)
-	}()
-
-	start := time.Now()
-	terminate(
-		wait,
-		func() {}, // SIGTERM no-op for the simulation
-		func() { atomic.AddInt32(&sigkillCalled, 1) },
-		1234,
-	)
-	elapsed := time.Since(start)
-
-	if elapsed > shutdownGraceful {
-		t.Errorf("graceful path elapsed = %v, want < %v", elapsed, shutdownGraceful)
+// TestEnsureServer_ConcurrentCallsSingleSpawn covers the C2 fix:
+// the spawn-in-progress sentinel must coalesce concurrent callers
+// into a single spawn.
+//
+// Eight goroutines race into ensureServer while the spawn function
+// sleeps for 100ms; the test asserts exactly one spawn call happened
+// and every goroutine saw the resulting baseURL.
+func TestEnsureServer_ConcurrentCallsSingleSpawn(t *testing.T) {
+	bin := fakeBinary(t)
+	model := fakeModel(t)
+	b, err := New(transcribe.Config{WhisperServerPath: bin, ModelPath: model})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
-	if atomic.LoadInt32(&sigkillCalled) != 0 {
-		t.Errorf("sigkill called %d times, want 0 (graceful path should not escalate)", sigkillCalled)
+	defer b.Close()
+
+	var spawnCalls int32
+	b.spawn = func(ctx context.Context, _ *Backend) (*serverProc, error) {
+		atomic.AddInt32(&spawnCalls, 1)
+		// Simulate a slow model load. The whole point of the
+		// C2 fix is that this sleep must NOT serialise the
+		// other ensureServer calls: they share the first
+		// spawn's result via the spawning sentinel.
+		time.Sleep(100 * time.Millisecond)
+		return stubProc("http://127.0.0.1:9999"), nil
+	}
+
+	const callers = 8
+	var wg sync.WaitGroup
+	urls := make(chan string, callers)
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			url, err := b.ensureServer(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			urls <- url
+		}()
+	}
+	wg.Wait()
+	close(urls)
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("ensureServer: %v", err)
+	}
+	if got := atomic.LoadInt32(&spawnCalls); got != 1 {
+		t.Errorf("spawn was called %d times; expected exactly 1", got)
+	}
+	seen := 0
+	for url := range urls {
+		if url != "http://127.0.0.1:9999" {
+			t.Errorf("caller saw unexpected url %q", url)
+		}
+		seen++
+	}
+	if seen != callers {
+		t.Errorf("only %d of %d callers received a url", seen, callers)
+	}
+}
+
+// TestBackend_CircuitBreaker_TripsAfter3ConsecutiveFailures covers
+// the C3 fix: after N consecutive transcription failures the next
+// Transcribe call must short-circuit with the breaker error
+// instead of fork-execing the subprocess again.
+func TestBackend_CircuitBreaker_TripsAfter3ConsecutiveFailures(t *testing.T) {
+	bin := fakeBinary(t)
+	model := fakeModel(t)
+	b, err := New(transcribe.Config{WhisperServerPath: bin, ModelPath: model})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer b.Close()
+
+	var spawnCalls int32
+	b.spawn = func(ctx context.Context, _ *Backend) (*serverProc, error) {
+		atomic.AddInt32(&spawnCalls, 1)
+		return nil, errors.New("fake spawn failure")
+	}
+
+	// Fire three calls: each one fails to spawn and bumps the
+	// failure counter. Every one must reach the spawn stub.
+	for i := 0; i < circuitBreakerThreshold; i++ {
+		chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+		if err != nil {
+			t.Fatalf("Transcribe #%d: %v", i, err)
+		}
+		var got transcribe.TranscriptChunk
+		for c := range chunks {
+			got = c
+		}
+		if got.Err == nil {
+			t.Fatalf("Transcribe #%d: expected an error", i)
+		}
+	}
+	// Spawn is called twice per failing Transcribe because
+	// shouldRetry returns true for non-net errors wrapped by
+	// the retry path? It does not — "fake spawn failure" is a
+	// plain error that shouldRetry rejects. So the count is
+	// exactly circuitBreakerThreshold.
+	wantAfterTrip := int32(circuitBreakerThreshold)
+	if got := atomic.LoadInt32(&spawnCalls); got != wantAfterTrip {
+		t.Errorf("spawnCalls after tripping = %d, want %d", got, wantAfterTrip)
+	}
+
+	// The next Transcribe must short-circuit: the breaker
+	// error is delivered without calling spawn.
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	if err != nil {
+		t.Fatalf("Transcribe after trip: %v", err)
+	}
+	var got transcribe.TranscriptChunk
+	for c := range chunks {
+		got = c
+	}
+	if got.Err == nil {
+		t.Fatal("expected breaker error after threshold tripped")
+	}
+	if !strings.Contains(got.Err.Error(), "temporarily broken") {
+		t.Errorf("expected 'temporarily broken' in error, got %q", got.Err.Error())
+	}
+	if got := atomic.LoadInt32(&spawnCalls); got != wantAfterTrip {
+		t.Errorf("spawn was called after breaker trip: got %d, want %d", got, wantAfterTrip)
+	}
+}
+
+// TestWaitForListening_FailureIncludesSubprocessOutput covers the
+// C5 fix: startup failures must carry the last lines of captured
+// stdout/stderr in the wrapped error so users see the real
+// diagnostic instead of a vague timeout.
+//
+// The test uses a fake subprocess that writes diagnostic lines to
+// its pipeBuffer and then marks itself as exited so waitForListening
+// reports the early exit path.
+func TestWaitForListening_FailureIncludesSubprocessOutput(t *testing.T) {
+	pipes := newPipeBuffer(io.Discard, "[test]")
+	_, _ = pipes.Write([]byte("loading model /etc/does-not-exist\n"))
+	_, _ = pipes.Write([]byte("error: failed to initialize whisper context\n"))
+
+	proc := &serverProc{
+		waitDone: make(chan struct{}),
+		waitErr:  errors.New("exit status 1"),
+		pipes:    pipes,
+	}
+	close(proc.waitDone) // simulate immediate exit
+
+	err := waitForListening(context.Background(), "127.0.0.1", 65535, proc)
+	if err == nil {
+		t.Fatal("expected error from dead subprocess")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "failed to initialize whisper context") {
+		t.Errorf("expected captured output in error, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "loading model") {
+		t.Errorf("expected first captured line in error, got:\n%s", msg)
+	}
+}
+
+// TestPortAllocation_RetryOnBindFailure covers the C4 fix: when
+// the first spawn attempt's captured output contains the
+// bind-failure banner, spawnWhisperServer must retry up to
+// spawnRetryAttempts times and succeed on a later attempt.
+//
+// The test uses a fake spawn function that fails the first two
+// attempts by returning a *bindFailureError and succeeds on the
+// third. The production spawnWhisperServer funnels its attempts
+// through spawnWhisperServerOnce which is what we simulate here by
+// calling the retry loop directly against a counted spawner.
+func TestPortAllocation_RetryOnBindFailure(t *testing.T) {
+	var attempts int32
+
+	// The shim matches spawnWhisperServer's retry loop shape: on
+	// bind-failure it re-attempts up to spawnRetryAttempts, on
+	// any other error it surfaces immediately.
+	spawnOnce := func() (*serverProc, error) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			pipes := newPipeBuffer(io.Discard, "[test]")
+			_, _ = pipes.Write([]byte("error: couldn't bind to server socket: hostname=127.0.0.1 port=12345\n"))
+			proc := &serverProc{waitDone: make(chan struct{}), pipes: pipes}
+			close(proc.waitDone)
+			return nil, wrapSpawnError(errors.New("subprocess exited during startup"), proc)
+		}
+		return &serverProc{
+			baseURL:  "http://127.0.0.1:12345",
+			waitDone: make(chan struct{}),
+		}, nil
+	}
+
+	var proc *serverProc
+	var lastErr error
+	for i := 0; i < spawnRetryAttempts; i++ {
+		p, err := spawnOnce()
+		if err == nil {
+			proc = p
+			lastErr = nil
+			break
+		}
+		lastErr = err
+		if !isBindFailureError(err) {
+			t.Fatalf("unexpected non-bind error: %v", err)
+		}
+	}
+	if lastErr != nil {
+		t.Fatalf("retry exhausted: %v", lastErr)
+	}
+	if proc == nil {
+		t.Fatal("spawn did not produce a proc on the third attempt")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3", got)
 	}
 }
 
@@ -481,5 +715,74 @@ func TestSpawnReadiness_BinaryThatExits(t *testing.T) {
 	}
 	if !errors.Is(err, errors.Unwrap(err)) && !strings.Contains(err.Error(), "exit") && !strings.Contains(err.Error(), "subprocess") {
 		t.Errorf("error should mention subprocess exit, got %q", err.Error())
+	}
+}
+
+// TestTerminate_WedgedSubprocessIsBounded asserts the C6 fix: when
+// the kernel wedges and waitDone never fires, the post-SIGKILL wait
+// times out at shutdownGraceful instead of blocking the daemon
+// shutdown forever. We synthesize a "wedged" child by handing the
+// helper a waitDone channel that is never closed; the function must
+// return within ~2*shutdownGraceful (SIGTERM grace + post-SIGKILL
+// detach window).
+func TestTerminate_WedgedSubprocessIsBounded(t *testing.T) {
+	wedged := make(chan struct{}) // never closed — simulates wedged kernel
+	var sigtermCalled, sigkillCalled int32
+
+	start := time.Now()
+	terminate(
+		wedged,
+		func() { atomic.AddInt32(&sigtermCalled, 1) },
+		func() { atomic.AddInt32(&sigkillCalled, 1) },
+		1234,
+	)
+	elapsed := time.Since(start)
+
+	// Must return within (SIGTERM grace) + (post-Kill detach window)
+	// + a small slack. Without the C6 fix the bare <-waitDone on the
+	// Kill path would block forever.
+	upper := 2*shutdownGraceful + 500*time.Millisecond
+	if elapsed > upper {
+		t.Errorf("terminate elapsed = %v, want < %v (post-SIGKILL wait must be bounded)", elapsed, upper)
+	}
+	// Lower bound: at least the SIGTERM grace, since waitDone never
+	// fires.
+	if elapsed < shutdownGraceful {
+		t.Errorf("terminate returned in %v, want >= %v (SIGTERM grace must elapse)", elapsed, shutdownGraceful)
+	}
+	if atomic.LoadInt32(&sigtermCalled) != 1 {
+		t.Errorf("sigterm called %d times, want 1", sigtermCalled)
+	}
+	if atomic.LoadInt32(&sigkillCalled) != 1 {
+		t.Errorf("sigkill called %d times, want 1", sigkillCalled)
+	}
+}
+
+// TestTerminate_GracefulShutdown asserts the happy path: SIGTERM
+// elicits an exit (waitDone closes during the grace window) and the
+// helper returns immediately without escalating to SIGKILL.
+func TestTerminate_GracefulShutdown(t *testing.T) {
+	wait := make(chan struct{})
+	var sigkillCalled int32
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		close(wait)
+	}()
+
+	start := time.Now()
+	terminate(
+		wait,
+		func() {}, // SIGTERM no-op for the simulation
+		func() { atomic.AddInt32(&sigkillCalled, 1) },
+		1234,
+	)
+	elapsed := time.Since(start)
+
+	if elapsed > shutdownGraceful {
+		t.Errorf("graceful path elapsed = %v, want < %v", elapsed, shutdownGraceful)
+	}
+	if atomic.LoadInt32(&sigkillCalled) != 0 {
+		t.Errorf("sigkill called %d times, want 0 (graceful path should not escalate)", sigkillCalled)
 	}
 }

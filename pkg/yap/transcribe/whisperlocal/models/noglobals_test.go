@@ -11,15 +11,18 @@ import (
 )
 
 // allowedGlobals is the whitelist of package-level vars in the models
-// package. Anything else is a regression: the only mutable global the
-// package needs is the HTTP client used for downloads (so tests can
-// swap it for an httptest server). The pinned manifest entries are
-// var declarations because Go does not allow composite literals as
-// constants — they are append-only at init time and never mutated at
-// runtime.
+// package. The Manager refactor eliminated the per-test mutation
+// pattern; the remaining package-level vars are the production
+// manifest (init-only, never mutated at runtime), the lazily-built
+// production singleton, its sync.Once guard, and the sync.Mutex
+// that serializes CacheDir calls against the adrg/xdg vendor
+// library (which races its own package globals on concurrent
+// Reload calls).
 var allowedGlobals = map[string]struct{}{
-	"downloadClient": {}, // HTTP client; whitelisted by name
 	"known":          {}, // pinned manifest list (init-only)
+	"defaultManager": {}, // lazily-built production singleton
+	"defaultOnce":    {}, // sync.Once guard for defaultManager
+	"cacheDirMu":     {}, // serializes CacheDir against adrg/xdg races
 }
 
 // TestNoUnexpectedGlobals walks every production .go file under the

@@ -11,14 +11,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
 // withTempCache redirects XDG_CACHE_HOME to a fresh temp directory and
-// returns a cleanup function. Models tests must always run in a
-// scratch cache so they cannot pollute the developer's real model
-// cache (a fully-populated cache is ~2.1 GB across all four pinned
-// English-only models).
+// returns its path. Models tests must always run in a scratch cache so
+// they cannot pollute the developer's real model cache (a fully-
+// populated cache is ~2.1 GB across all four pinned English-only
+// models).
 func withTempCache(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -26,38 +28,29 @@ func withTempCache(t *testing.T) string {
 	return dir
 }
 
-// withTestManifest swaps the package-level manifest and download
-// client for a test fixture and returns a cleanup function. The
-// fixture serves a fixed byte payload over httptest, computes the
-// SHA256 once, and updates the in-memory manifest entry to match.
-//
-// The test runs are isolated from each other because each Setenv call
-// resets via t.Cleanup automatically. The manifest swap is restored
-// in the returned closure.
-func withTestManifest(t *testing.T, payload []byte, hash string) (url string) {
+// newFixtureManager constructs a Manager wired to an httptest server
+// and a one-entry fixture manifest. The server serves payload, and
+// the manifest's SHA256 matches the payload so a Download succeeds.
+// Tests pass a different hash to exercise the rejection path.
+func newFixtureManager(t *testing.T, payload []byte, hash string) (*Manager, string) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", "")
-		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
 	t.Cleanup(server.Close)
 
-	prevKnown := known
-	known = []Manifest{
-		{
-			Name:   "test.en",
-			URL:    server.URL + "/ggml-test.en.bin",
-			SHA256: hash,
-			SizeMB: 1,
-		},
-	}
-	t.Cleanup(func() { known = prevKnown })
-
-	prevClient := SetDownloadClientForTest(server.Client())
-	t.Cleanup(func() { SetDownloadClientForTest(prevClient) })
-
-	return server.URL
+	mgr := NewManager(
+		WithHTTPClient(server.Client()),
+		WithManifest([]Manifest{
+			{
+				Name:   "test.en",
+				URL:    server.URL + "/ggml-test.en.bin",
+				SHA256: hash,
+				SizeMB: 1,
+			},
+		}),
+	)
+	return mgr, server.URL
 }
 
 // hashOf returns the lowercase hex SHA256 of b.
@@ -87,7 +80,8 @@ func TestCacheDir_CreatesDirectory(t *testing.T) {
 
 func TestPath_UnknownModel(t *testing.T) {
 	withTempCache(t)
-	if _, err := Path("nope.en"); err == nil {
+	mgr := NewManager()
+	if _, err := mgr.Path("nope.en"); err == nil {
 		t.Fatal("Path(\"nope.en\") returned nil error")
 	}
 }
@@ -117,7 +111,8 @@ func TestErrUnknownModel_ListsPinnedModels(t *testing.T) {
 
 func TestInstalled_MissingFile(t *testing.T) {
 	withTempCache(t)
-	got, err := Installed("base.en")
+	mgr := NewManager()
+	got, err := mgr.Installed("base.en")
 	if err != nil {
 		t.Fatalf("Installed: %v", err)
 	}
@@ -128,14 +123,15 @@ func TestInstalled_MissingFile(t *testing.T) {
 
 func TestInstalled_PresentFile(t *testing.T) {
 	withTempCache(t)
-	p, err := Path("base.en")
+	mgr := NewManager()
+	p, err := mgr.Path("base.en")
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
 	if err := os.WriteFile(p, []byte("dummy"), 0o644); err != nil {
 		t.Fatalf("write dummy: %v", err)
 	}
-	got, err := Installed("base.en")
+	got, err := mgr.Installed("base.en")
 	if err != nil {
 		t.Fatalf("Installed: %v", err)
 	}
@@ -146,7 +142,8 @@ func TestInstalled_PresentFile(t *testing.T) {
 
 func TestList_PinnedEnglishModels(t *testing.T) {
 	withTempCache(t)
-	got, err := List()
+	mgr := NewManager()
+	got, err := mgr.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -194,16 +191,32 @@ func TestKnown_ReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestLookupByName_CaseInsensitive(t *testing.T) {
+	// Mixed case must resolve to the canonical lowercase entry. The
+	// case normalization is the single source of truth in
+	// lookupManifestIn.
+	for _, input := range []string{"base.en", "Base.EN", "BASE.EN", "Base.en"} {
+		m, ok := LookupByName(input)
+		if !ok {
+			t.Errorf("LookupByName(%q) = !ok, want resolved", input)
+			continue
+		}
+		if m.Name != "base.en" {
+			t.Errorf("LookupByName(%q) resolved to %q, want %q", input, m.Name, "base.en")
+		}
+	}
+}
+
 func TestDownload_Success(t *testing.T) {
 	withTempCache(t)
 	payload := []byte("hello whisper test fixture")
-	withTestManifest(t, payload, hashOf(payload))
+	mgr, _ := newFixtureManager(t, payload, hashOf(payload))
 
-	if err := Download(context.Background(), "test.en", nil); err != nil {
+	if err := mgr.Download(context.Background(), "test.en", nil); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 
-	p, err := Path("test.en")
+	p, err := mgr.Path("test.en")
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
@@ -220,9 +233,9 @@ func TestDownload_WrongSHARejected(t *testing.T) {
 	withTempCache(t)
 	payload := []byte("body the server actually returns")
 	// Pin a hash that does NOT match payload.
-	withTestManifest(t, payload, hashOf([]byte("totally different")))
+	mgr, _ := newFixtureManager(t, payload, hashOf([]byte("totally different")))
 
-	err := Download(context.Background(), "test.en", nil)
+	err := mgr.Download(context.Background(), "test.en", nil)
 	if err == nil {
 		t.Fatal("Download succeeded with wrong hash")
 	}
@@ -232,7 +245,7 @@ func TestDownload_WrongSHARejected(t *testing.T) {
 
 	// The cache must be unchanged: no file at the final path, no
 	// leftover temp file in the cache directory.
-	p, err := Path("test.en")
+	p, err := mgr.Path("test.en")
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
@@ -259,18 +272,17 @@ func TestDownload_HTTPErrorPropagates(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	prevKnown := known
-	known = []Manifest{{
-		Name:   "test.en",
-		URL:    server.URL + "/x",
-		SHA256: "ignored",
-		SizeMB: 1,
-	}}
-	t.Cleanup(func() { known = prevKnown })
-	prevClient := SetDownloadClientForTest(server.Client())
-	t.Cleanup(func() { SetDownloadClientForTest(prevClient) })
+	mgr := NewManager(
+		WithHTTPClient(server.Client()),
+		WithManifest([]Manifest{{
+			Name:   "test.en",
+			URL:    server.URL + "/x",
+			SHA256: "ignored",
+			SizeMB: 1,
+		}}),
+	)
 
-	err := Download(context.Background(), "test.en", nil)
+	err := mgr.Download(context.Background(), "test.en", nil)
 	if err == nil {
 		t.Fatal("expected HTTP error")
 	}
@@ -282,20 +294,68 @@ func TestDownload_HTTPErrorPropagates(t *testing.T) {
 func TestDownload_ContextCancelled(t *testing.T) {
 	withTempCache(t)
 	payload := []byte("doesn't matter")
-	withTestManifest(t, payload, hashOf(payload))
+	mgr, _ := newFixtureManager(t, payload, hashOf(payload))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before the call so the request never starts.
 
-	err := Download(ctx, "test.en", nil)
+	err := mgr.Download(ctx, "test.en", nil)
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
 
 	// No leftover model file.
-	p, _ := Path("test.en")
+	p, _ := mgr.Path("test.en")
 	if _, statErr := os.Stat(p); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("model file exists after cancelled download: %v", statErr)
+	}
+}
+
+// TestDownload_ConcurrentSerializedByFlock fires two Download calls
+// against the same Manager with the same upstream URL and asserts the
+// upstream server received exactly one request — the inter-process
+// advisory lock serialised them, and the second call observed the
+// finished file and skipped the network round-trip.
+func TestDownload_ConcurrentSerializedByFlock(t *testing.T) {
+	withTempCache(t)
+	payload := []byte("payload that must download exactly once")
+	hash := hashOf(payload)
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+
+	mgr := NewManager(
+		WithHTTPClient(server.Client()),
+		WithManifest([]Manifest{{
+			Name:   "test.en",
+			URL:    server.URL + "/once",
+			SHA256: hash,
+			SizeMB: 1,
+		}}),
+	)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- mgr.Download(context.Background(), "test.en", nil)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Download: %v", err)
+		}
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("upstream hits = %d, want 1 (the lock should serialize and the second call should skip)", got)
 	}
 }
 

@@ -17,7 +17,12 @@ import (
 //
 // Every command is a thin wrapper over pkg/yap/transcribe/whisperlocal/models.
 // No transcription pipeline logic lives here.
-func newModelsCmd() *cobra.Command {
+//
+// mgr is the model Manager the subcommands operate against. The
+// production wiring in newRootCmd passes models.Default(); tests
+// inject a fixture Manager wired to an httptest server so they can
+// exercise the download path without going to Hugging Face.
+func newModelsCmd(mgr *models.Manager) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
 		Short: "Manage local whisper.cpp models",
@@ -32,19 +37,19 @@ directory may also contain hand-downloaded files referenced via
 transcription.model_path.`,
 		RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 	}
-	cmd.AddCommand(newModelsListCmd())
-	cmd.AddCommand(newModelsDownloadCmd())
-	cmd.AddCommand(newModelsPathCmd())
+	cmd.AddCommand(newModelsListCmd(mgr))
+	cmd.AddCommand(newModelsDownloadCmd(mgr))
+	cmd.AddCommand(newModelsPathCmd(mgr))
 	return cmd
 }
 
-func newModelsListCmd() *cobra.Command {
+func newModelsListCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List known models and their install state",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			entries, err := models.List()
+			entries, err := mgr.List()
 			if err != nil {
 				return fmt.Errorf("list models: %w", err)
 			}
@@ -63,7 +68,7 @@ func newModelsListCmd() *cobra.Command {
 	}
 }
 
-func newModelsDownloadCmd() *cobra.Command {
+func newModelsDownloadCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "download <name>",
 		Short: "Download a model into the cache, verifying SHA256",
@@ -77,10 +82,10 @@ func newModelsDownloadCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(),
 				syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
-			if err := models.Download(ctx, name, cmd.OutOrStdout()); err != nil {
+			if err := mgr.Download(ctx, name, cmd.OutOrStdout()); err != nil {
 				return fmt.Errorf("download %s: %w", name, err)
 			}
-			path, err := models.Path(name)
+			path, err := mgr.Path(name)
 			if err != nil {
 				return fmt.Errorf("resolve %s: %w", name, err)
 			}
@@ -90,7 +95,7 @@ func newModelsDownloadCmd() *cobra.Command {
 	}
 }
 
-func newModelsPathCmd() *cobra.Command {
+func newModelsPathCmd(mgr *models.Manager) *cobra.Command {
 	return &cobra.Command{
 		Use:   "path [name]",
 		Short: "Print the cache directory, or the path to a specific model",
@@ -104,7 +109,7 @@ func newModelsPathCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), dir)
 				return nil
 			}
-			path, err := models.Path(args[0])
+			path, err := mgr.Path(args[0])
 			if err != nil {
 				return fmt.Errorf("path %s: %w", args[0], err)
 			}

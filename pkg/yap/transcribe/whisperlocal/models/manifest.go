@@ -1,6 +1,9 @@
 package models
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Manifest is the pinned description of a known whisper.cpp model. The
 // fields are the minimum information needed to reproduce a verified
@@ -43,6 +46,9 @@ func (m Manifest) Filename() string { return "ggml-" + m.Name + ".bin" }
 //
 // The four hashes below are the lowercase hex SHA256 of those files
 // and the SizeMB values are round(bytes / 1024 / 1024).
+//
+// known is the production manifest. Tests construct their own Manager
+// via NewManager(WithManifest(...)) and never touch this slice.
 var known = []Manifest{
 	{
 		Name:   "tiny.en",
@@ -70,29 +76,48 @@ var known = []Manifest{
 	},
 }
 
-// lookupManifest returns the pinned manifest for name. The second
-// return value is a boolean for "found"; callers usually do:
-//
-//	m, ok := lookupManifest(name)
-//	if !ok { return ErrUnknownModel(name) }
-//
-// where ErrUnknownModel composes the error from this package.
-func lookupManifest(name string) (Manifest, bool) {
-	for _, m := range known {
-		if m.Name == name {
+// knownCopy returns a fresh copy of the production manifest. The
+// Manager constructor uses it so per-process Manager instances do not
+// share the underlying slice with each other or with the package
+// global.
+func knownCopy() []Manifest {
+	out := make([]Manifest, len(known))
+	copy(out, known)
+	return out
+}
+
+// lookupManifestIn does the case-insensitive name match against the
+// supplied manifest slice. The case normalization (lowercase) is the
+// single source of truth: every lookup path goes through this
+// function so users can write "Base.EN" in their config and have it
+// resolve to "base.en".
+func lookupManifestIn(manifest []Manifest, name string) (Manifest, bool) {
+	want := strings.ToLower(name)
+	for _, m := range manifest {
+		if strings.ToLower(m.Name) == want {
 			return m, true
 		}
 	}
 	return Manifest{}, false
 }
 
-// ErrUnknownModel returns the error for an unrecognised model name. It
-// is a function rather than a sentinel because the message embeds the
-// requested name and the list of currently-pinned models so the user
-// sees an actionable hint instead of a bare "unknown".
+// ErrUnknownModel returns the error for an unrecognised model name
+// against the production manifest. It is a function rather than a
+// sentinel because the message embeds the requested name and the list
+// of currently-pinned models so the user sees an actionable hint
+// instead of a bare "unknown".
 func ErrUnknownModel(name string) error {
-	pinned := make([]string, 0, len(known))
-	for _, m := range known {
+	return ErrUnknownModelFromManifest(name, known)
+}
+
+// ErrUnknownModelFromManifest is the Manager-aware variant. It returns
+// an actionable error message embedding the names from the supplied
+// manifest, so a Manager constructed with a fixture manifest produces
+// an error that lists its own pinned models rather than the package
+// defaults.
+func ErrUnknownModelFromManifest(name string, manifest []Manifest) error {
+	pinned := make([]string, 0, len(manifest))
+	for _, m := range manifest {
 		pinned = append(pinned, m.Name)
 	}
 	return fmt.Errorf(
@@ -101,17 +126,18 @@ func ErrUnknownModel(name string) error {
 		name, pinned)
 }
 
-// LookupByName returns the manifest entry for name and a found bool.
-// Exported for callers (CLI, tests) that need the manifest metadata
-// without going through Path/Installed.
+// LookupByName returns the manifest entry for name and a found bool
+// against the production manifest. Exported for callers (CLI, tests)
+// that need the manifest metadata without going through Path/Installed.
+//
+// The match is case-insensitive.
 func LookupByName(name string) (Manifest, bool) {
-	return lookupManifest(name)
+	return lookupManifestIn(known, name)
 }
 
-// Known returns a copy of the pinned manifest list. The returned slice
-// is freshly allocated so callers cannot mutate the package state.
+// Known returns a copy of the production manifest list. The returned
+// slice is freshly allocated so callers cannot mutate the package
+// state.
 func Known() []Manifest {
-	out := make([]Manifest, len(known))
-	copy(out, known)
-	return out
+	return knownCopy()
 }

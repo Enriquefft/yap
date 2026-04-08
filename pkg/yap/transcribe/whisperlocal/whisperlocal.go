@@ -11,7 +11,6 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
 	"strconv"
 	"sync"
@@ -45,14 +44,83 @@ const (
 	// subprocess flushes very little state (no on-disk writes), so a
 	// short grace period is correct.
 	shutdownGraceful = 2 * time.Second
+
+	// closeDrainTimeout caps how long Close waits for in-flight
+	// Transcribe goroutines to drain before forcibly tearing down
+	// the subprocess. The bound prevents a hung HTTP request from
+	// pinning daemon shutdown forever.
+	closeDrainTimeout = 5 * time.Second
+
+	// circuitBreakerThreshold is the number of consecutive
+	// transcription failures that trip the breaker. After the
+	// threshold is reached the breaker stays open for
+	// circuitBreakerCooldown so we do not fork-exec a broken
+	// subprocess on every recording.
+	circuitBreakerThreshold = 3
+
+	// circuitBreakerCooldown is how long the breaker stays open
+	// after tripping. The next Transcribe call after the cooldown
+	// elapses retries the spawn; on success the breaker resets, on
+	// failure the cycle repeats.
+	circuitBreakerCooldown = 30 * time.Second
+
+	// pipeBufferLines is the number of lines retained from the
+	// subprocess stdout/stderr ring buffer. 32 lines is enough to
+	// surface a model load failure or a bind error in the
+	// waitForListening error message without unbounded memory use.
+	pipeBufferLines = 32
+
+	// pipeBufferLineBytes is the per-line byte cap on the ring
+	// buffer. Whisper-server's banners are short; chatty debug
+	// builds get truncated lines rather than unbounded growth.
+	pipeBufferLineBytes = 512
+
+	// spawnRetryAttempts is the number of times spawnWhisperServer
+	// retries on a recoverable bind failure ("address already in
+	// use") before surfacing a structured error. Higher values
+	// hide real misconfigurations; lower values are flaky on busy
+	// CI hosts.
+	spawnRetryAttempts = 3
 )
+
+// backendClosedMsg is the sticky error message returned by every
+// public entry point after Close has been called. It is a const so
+// the whisperlocal package contains zero package-level vars (the
+// noglobals AST guard rejects any var declaration). Callers wrap it
+// in errors.New at return time via newBackendClosedError.
+const backendClosedMsg = "whisperlocal: backend is closed"
+
+// newBackendClosedError constructs the sticky error returned when
+// the backend has been closed. Every callsite that wants to return
+// "backend is closed" goes through this helper so the wording is
+// single-sourced.
+func newBackendClosedError() error {
+	return errors.New(backendClosedMsg)
+}
+
+// spawnFn is the seam tests use to substitute a fake subprocess
+// spawner. The production wiring assigns defaultSpawnFunc() (which
+// is platform-specific — see whisperlocal_unix.go and
+// whisperlocal_windows.go).
+type spawnFn func(ctx context.Context, b *Backend) (*serverProc, error)
 
 // Backend is the whisperlocal implementation of transcribe.Transcriber.
 // It owns the lifecycle of one whisper-server child process across the
 // lifetime of the parent yap process.
 //
-// The struct is safe for concurrent use: every public method that
-// touches subprocess state acquires mu first.
+// The struct is safe for concurrent use. Synchronisation is split
+// across three primitives so concurrent Transcribe / Close calls do
+// not pessimise the critical path:
+//
+//   - mu guards the spawn-vs-reuse decision and the closed flag. It
+//     is held only for short non-blocking sections; the expensive
+//     subprocess startup happens without the lock via the spawning
+//     channel sentinel.
+//   - wg counts in-flight Transcribe goroutines so Close can drain
+//     them before tearing the subprocess down.
+//   - closeCtx is cancelled by Close so an in-flight HTTP POST
+//     surfaces context.Canceled instead of ECONNREFUSED when the
+//     subprocess is killed underneath it.
 type Backend struct {
 	cfg        transcribe.Config
 	serverPath string
@@ -62,22 +130,63 @@ type Backend struct {
 
 	// spawn is the function that actually starts the subprocess.
 	// Tests inject a fake that returns an httptest server URL and a
-	// no-op cmd. The default in production is spawnWhisperServer.
-	spawn func(ctx context.Context, b *Backend) (*serverProc, error)
+	// no-op cmd. Production wires platform-specific defaultSpawn.
+	spawn spawnFn
 
-	mu     sync.Mutex
-	proc   *serverProc
+	// closeCtx is cancelled by Close so a pending postInference
+	// request aborts as context.Canceled rather than seeing the
+	// subprocess vanish underneath it (ECONNREFUSED). closeCancel
+	// is the matching CancelFunc.
+	closeCtx    context.Context
+	closeCancel context.CancelFunc
+
+	// wg counts in-flight Transcribe goroutines. Close waits on
+	// it (with a bounded timeout) before terminating the
+	// subprocess so callers cannot rug-pull a request mid-flight.
+	wg sync.WaitGroup
+
+	mu sync.Mutex
+	// proc is the live subprocess record. nil if no subprocess
+	// is running. Replaced wholesale on respawn.
+	proc *serverProc
+	// closed is the sticky one-way flag toggled by Close.
 	closed bool
+	// spawning is the spawn-in-progress sentinel: when non-nil it
+	// is the channel currently-spawning concurrent callers wait
+	// on. The mutex is released while waiting so Close and other
+	// fast-path operations are not blocked behind a 30s startup.
+	spawning chan struct{}
+
+	// Circuit breaker state. failCount is incremented on every
+	// terminal Transcribe failure and reset on success. brokenUntil
+	// is the wall-clock time before which Transcribe returns the
+	// breaker error without forking the subprocess.
+	failCount   int
+	brokenUntil time.Time
 }
 
-// serverProc holds the live subprocess handles. The waitDone channel
-// is closed by a goroutine watching cmd.Wait so other goroutines can
-// observe an early death without racing on cmd.ProcessState.
+// serverProc holds the live subprocess handles.
 type serverProc struct {
-	cmd      *exec.Cmd
-	baseURL  string
+	cmd     *exec.Cmd
+	baseURL string
+	// waitDone is closed by the spawn function's wait goroutine
+	// when cmd.Wait returns. Custom spawn implementations MUST
+	// close this channel when the underlying process dies,
+	// otherwise terminateProc will block forever waiting for the
+	// final receive at the end of the SIGKILL grace period.
+	//
+	// The wait goroutine is the single source of truth for the
+	// process exit status: it stores the cmd.Wait error in
+	// waitErr before closing the channel, so other goroutines can
+	// observe the exit (and read the error) via a non-blocking
+	// receive on waitDone.
 	waitDone chan struct{}
 	waitErr  error
+	// pipes is the captured stdout/stderr ring of the subprocess.
+	// nil for stub subprocesses substituted by tests; populated
+	// by the production spawn so waitForListening can include the
+	// last few lines of subprocess output in startup errors.
+	pipes *pipeBuffer
 }
 
 // New constructs a Backend from cfg without spawning the subprocess.
@@ -85,41 +194,49 @@ type serverProc struct {
 // resolution, language) and returns a non-nil error if anything is
 // missing. Runtime failures (subprocess crash, network) surface from
 // Transcribe.
+//
+// New is implemented per-platform: the unix variant wires
+// spawnWhisperServer; the Windows variant returns an explicit "not
+// supported" error so side-effect imports of this package do not
+// break the Windows build.
 func New(cfg transcribe.Config) (*Backend, error) {
-	serverPath, err := discoverServer(cfg)
-	if err != nil {
-		return nil, err
-	}
-	modelPath, err := resolveModel(cfg)
-	if err != nil {
-		return nil, err
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		// Compute the default timeout only when we are about to
-		// build a default client; doing it earlier looks like a
-		// bug because the value would be unused on the
-		// HTTPClient-supplied path.
-		timeout := cfg.Timeout
-		if timeout <= 0 {
-			timeout = defaultRequestTimeout
-		}
-		client = &http.Client{Timeout: timeout}
-	}
-	return &Backend{
-		cfg:        cfg,
-		serverPath: serverPath,
-		modelPath:  modelPath,
-		language:   cfg.Language,
-		client:     client,
-		spawn:      spawnWhisperServer,
-	}, nil
+	return newPlatformBackend(cfg)
 }
 
 // NewFactory adapts New into the transcribe.Factory signature for the
 // registry.
 func NewFactory(cfg transcribe.Config) (transcribe.Transcriber, error) {
 	return New(cfg)
+}
+
+// newBackendCommon is the platform-agnostic Backend constructor used
+// by both the unix and the windows New variants. The unix variant
+// passes a real spawnFn; the windows variant never reaches this
+// helper because it errors out before constructing anything.
+func newBackendCommon(cfg transcribe.Config, serverPath, modelPath string, spawn spawnFn) *Backend {
+	client := cfg.HTTPClient
+	if client == nil {
+		// cfg.Timeout is only relevant on the nil-client path: we're
+		// constructing the default HTTP client. When the caller
+		// supplies a ready-made client, it already owns its own
+		// timeout policy and cfg.Timeout is documented as ignored.
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = defaultRequestTimeout
+		}
+		client = &http.Client{Timeout: timeout}
+	}
+	closeCtx, closeCancel := context.WithCancel(context.Background())
+	return &Backend{
+		cfg:         cfg,
+		serverPath:  serverPath,
+		modelPath:   modelPath,
+		language:    cfg.Language,
+		client:      client,
+		spawn:       spawn,
+		closeCtx:    closeCtx,
+		closeCancel: closeCancel,
+	}
 }
 
 // Transcribe spawns the subprocess on first use, POSTs the audio at
@@ -129,6 +246,12 @@ func NewFactory(cfg transcribe.Config) (transcribe.Transcriber, error) {
 // On a subprocess crash detected before the request, Transcribe
 // respawns once and retries. A second failure is returned as the
 // chunk's Err.
+//
+// Repeated terminal failures trip a circuit breaker: after
+// circuitBreakerThreshold consecutive failures the next Transcribe
+// call returns the breaker error immediately for circuitBreakerCooldown
+// without fork-execing the subprocess. A successful transcription
+// resets the breaker.
 func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
 	if audio == nil {
 		return nil, errors.New("whisperlocal: audio reader is nil")
@@ -163,14 +286,45 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 		return out, nil
 	}
 
+	// Circuit-breaker fast path: a recently-broken backend short-
+	// circuits before any subprocess interaction so a wedged
+	// install does not fork-exec on every recording.
+	if breakerErr := b.checkBreaker(); breakerErr != nil {
+		go func() {
+			defer close(out)
+			emit(ctx, out, transcribe.TranscriptChunk{
+				IsFinal:  true,
+				Language: b.language,
+				Err:      breakerErr,
+			})
+		}()
+		return out, nil
+	}
+
+	// Track this in-flight call so Close can drain it before
+	// tearing the subprocess down.
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		defer close(out)
 
-		text, err := b.transcribeOnce(ctx, wavData)
+		// reqCtx links the caller's ctx to the backend's
+		// closeCtx so a Close mid-flight aborts the HTTP POST
+		// as context.Canceled instead of leaking ECONNREFUSED
+		// from the torn-down subprocess.
+		reqCtx, cancel := mergeContexts(ctx, b.closeCtx)
+		defer cancel()
+
+		text, err := b.transcribeOnce(reqCtx, wavData)
 		if err != nil && b.shouldRetry(err) {
 			// One retry: respawn the subprocess and try again.
 			b.killProc()
-			text, err = b.transcribeOnce(ctx, wavData)
+			text, err = b.transcribeOnce(reqCtx, wavData)
+		}
+		if err != nil {
+			b.recordFailure()
+		} else {
+			b.recordSuccess()
 		}
 		emit(ctx, out, transcribe.TranscriptChunk{
 			Text:     text,
@@ -196,8 +350,14 @@ func (b *Backend) transcribeOnce(ctx context.Context, wavData []byte) (string, e
 // shouldRetry decides whether an error from the subprocess is worth a
 // single retry. Connection failures (subprocess crashed between calls)
 // and 5xx HTTP responses qualify; 4xx and validation errors do not.
+//
+// Context cancellation (caller-initiated or close-initiated) does
+// not retry — that would mask the user's intent.
 func (b *Backend) shouldRetry(err error) bool {
 	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	// Network-level failure to the localhost subprocess: respawn.
@@ -217,38 +377,129 @@ func (b *Backend) shouldRetry(err error) bool {
 	return false
 }
 
-// ensureServer returns the base URL of a running whisper-server,
-// spawning one if needed. It is safe to call concurrently — the mutex
-// guards both the spawn decision and the dead-process detection.
-func (b *Backend) ensureServer(ctx context.Context) (string, error) {
+// checkBreaker is the circuit-breaker fast path. It returns a non-nil
+// error if Transcribe should short-circuit without touching the
+// subprocess.
+func (b *Backend) checkBreaker() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
 	if b.closed {
-		return "", errors.New("whisperlocal: backend is closed")
+		return newBackendClosedError()
 	}
+	if !b.brokenUntil.IsZero() && time.Now().Before(b.brokenUntil) {
+		return fmt.Errorf(
+			"whisperlocal: backend temporarily broken due to repeated failures; retry after %s",
+			b.brokenUntil.Format(time.RFC3339))
+	}
+	return nil
+}
 
-	// Detect a dead subprocess and clear the slot so the spawn-or-
-	// reuse decision below sees nil.
-	if b.proc != nil {
-		select {
-		case <-b.proc.waitDone:
-			// Already dead — drop and respawn.
-			b.proc = nil
-		default:
+// recordFailure is called from Transcribe after the retry path has
+// also failed. It increments the consecutive-failure counter and
+// trips the breaker if the threshold is reached.
+func (b *Backend) recordFailure() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.failCount++
+	if b.failCount >= circuitBreakerThreshold {
+		b.brokenUntil = time.Now().Add(circuitBreakerCooldown)
+		b.failCount = 0
+	}
+}
+
+// recordSuccess is called from Transcribe after a successful
+// transcription. It resets the breaker so the next failure starts
+// counting from zero.
+func (b *Backend) recordSuccess() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.failCount = 0
+	b.brokenUntil = time.Time{}
+}
+
+// ensureServer returns the base URL of a running whisper-server,
+// spawning one if needed. It is safe to call concurrently.
+//
+// The mutex is held only for the spawn-vs-reuse decision; the
+// expensive subprocess startup happens without the lock so a 30s
+// model load does not serialise every other Transcribe call. The
+// in-progress sentinel (b.spawning) coordinates concurrent callers:
+// the first goroutine creates the channel, runs the spawn, then
+// closes the channel; the rest wait on it without holding the
+// mutex.
+func (b *Backend) ensureServer(ctx context.Context) (string, error) {
+	for {
+		b.mu.Lock()
+		if b.closed {
+			b.mu.Unlock()
+			return "", newBackendClosedError()
 		}
-	}
 
-	if b.proc != nil {
-		return b.proc.baseURL, nil
-	}
+		// Detect a dead subprocess and clear the slot so the
+		// spawn-or-reuse decision below sees nil.
+		if b.proc != nil {
+			select {
+			case <-b.proc.waitDone:
+				b.proc = nil
+			default:
+			}
+		}
 
-	proc, err := b.spawn(ctx, b)
-	if err != nil {
-		return "", err
+		if b.proc != nil {
+			url := b.proc.baseURL
+			b.mu.Unlock()
+			return url, nil
+		}
+
+		// Another goroutine is mid-spawn — wait for it without
+		// holding the mutex, then loop and re-check.
+		if b.spawning != nil {
+			ch := b.spawning
+			b.mu.Unlock()
+			select {
+			case <-ch:
+				// Loop and re-evaluate. The spawner may
+				// have published a proc, in which case
+				// we reuse; or it may have failed, in
+				// which case we attempt our own spawn.
+				continue
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+
+		// We are the spawner. Publish the sentinel and release
+		// the mutex before doing the expensive work.
+		b.spawning = make(chan struct{})
+		b.mu.Unlock()
+
+		proc, spawnErr := b.spawn(ctx, b)
+
+		b.mu.Lock()
+		// Always close + clear the sentinel so waiting
+		// goroutines unblock regardless of success or failure.
+		close(b.spawning)
+		b.spawning = nil
+
+		// If Close raced us, throw away the freshly-spawned
+		// proc so we honor the close intent.
+		if b.closed {
+			b.mu.Unlock()
+			if spawnErr == nil && proc != nil {
+				terminateProc(proc)
+			}
+			return "", newBackendClosedError()
+		}
+
+		if spawnErr != nil {
+			b.mu.Unlock()
+			return "", spawnErr
+		}
+		b.proc = proc
+		url := proc.baseURL
+		b.mu.Unlock()
+		return url, nil
 	}
-	b.proc = proc
-	return proc.baseURL, nil
 }
 
 // killProc tears down the current subprocess (if any) without locking
@@ -267,12 +518,24 @@ func (b *Backend) killProc() {
 }
 
 // Close terminates the subprocess and prevents further use. It is
-// idempotent: a second call is a no-op. Close blocks until cmd.Wait
-// returns or the grace period elapses.
+// idempotent: a second call is a no-op. Close blocks until in-flight
+// Transcribe calls drain (bounded by closeDrainTimeout) and then until
+// cmd.Wait returns or the SIGTERM/SIGKILL grace period elapses.
 //
 // Close returns nil on the expected shutdown path (SIGTERM/SIGKILL).
 // A non-nil error indicates the subprocess died of something other
 // than our shutdown signal — useful for the daemon's audit log.
+//
+// Shutdown sequence:
+//
+//  1. Toggle b.closed so future Transcribe calls return immediately.
+//  2. Cancel b.closeCtx so any in-flight HTTP request aborts as
+//     context.Canceled instead of seeing the subprocess vanish.
+//  3. Wait for in-flight Transcribe goroutines to drain via b.wg.
+//     Bounded by closeDrainTimeout so a hung request cannot pin
+//     daemon shutdown forever.
+//  4. SIGTERM the subprocess and wait shutdownGraceful for it to
+//     exit; SIGKILL if it does not.
 func (b *Backend) Close() error {
 	b.mu.Lock()
 	if b.closed {
@@ -284,11 +547,60 @@ func (b *Backend) Close() error {
 	b.proc = nil
 	b.mu.Unlock()
 
+	// Step 2: cancel any in-flight HTTP request so it aborts
+	// cleanly before we kill the subprocess.
+	b.closeCancel()
+
+	// Step 3: wait for the in-flight goroutines to drain. The
+	// bounded wait prevents a hung HTTP request from pinning
+	// shutdown indefinitely.
+	if !waitWithTimeout(&b.wg, closeDrainTimeout) {
+		slog.Default().Warn(
+			"whisperlocal: in-flight transcribe goroutines did not drain within timeout; proceeding with subprocess teardown",
+			"timeout", closeDrainTimeout,
+		)
+	}
+
 	if proc == nil {
 		return nil
 	}
+	// Step 4: tear down the subprocess.
 	terminateProc(proc)
 	return closeError(proc)
+}
+
+// waitWithTimeout waits for wg.Wait to complete or for the timeout
+// to elapse. Returns true if the WaitGroup drained, false if the
+// timeout fired first. The bounded variant exists because we need
+// to surface a warning on shutdown timeout without taking a hard
+// dependency on a specific logger here.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// mergeContexts returns a context that cancels when either parent
+// cancels. The returned cancel function releases the goroutine that
+// watches the parents.
+func mergeContexts(a, b context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(a)
+	go func() {
+		select {
+		case <-b.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // terminateProc sends SIGTERM, waits up to shutdownGraceful for the
@@ -300,11 +612,6 @@ func (b *Backend) Close() error {
 // it produces (exit status 143 = 128+SIGTERM) is intentionally
 // swallowed by Backend.Close so the daemon does not log a warning on
 // every clean shutdown.
-//
-// The post-Kill wait is bounded: if the kernel wedges (uninterruptible
-// sleep, etc.) we log and detach rather than blocking the daemon's
-// shutdown forever. A leaked subprocess is uglier than a hung daemon
-// but at least the daemon exits.
 func terminateProc(proc *serverProc) {
 	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
 		return
@@ -318,10 +625,17 @@ func terminateProc(proc *serverProc) {
 	)
 }
 
-// terminate is the testable core of terminateProc. It is split out so
-// the timing semantics (SIGTERM grace, post-SIGKILL bounded detach)
-// can be exercised against synthetic channels without spawning a real
-// subprocess. The pid argument is only used for the warning log.
+// terminate is the testable core of terminateProc. It takes a
+// waitDone channel (closed when the process has actually exited) and
+// two side-effect hooks for SIGTERM and SIGKILL so the control flow
+// can be exercised in unit tests without a real subprocess.
+//
+// Both the SIGTERM grace window and the post-SIGKILL reap are
+// bounded. If the kernel has wedged the process (uninterruptible
+// sleep / D-state), an unbounded <-waitDone on the Kill path would
+// block daemon shutdown forever. The worst case with the bound in
+// place is a detached zombie — strictly better than a hung daemon.
+// This is the pkg-yap review C6 guarantee.
 func terminate(waitDone <-chan struct{}, sigterm, sigkill func(), pid int) {
 	sigterm()
 	select {
@@ -333,37 +647,8 @@ func terminate(waitDone <-chan struct{}, sigterm, sigkill func(), pid int) {
 	select {
 	case <-waitDone:
 	case <-time.After(shutdownGraceful):
-		slog.Default().Warn("whisperlocal: subprocess did not exit after SIGKILL; detaching",
-			"pid", pid)
+		slog.Default().Warn("whisperlocal: subprocess did not exit after SIGKILL; detaching", "pid", pid)
 	}
-}
-
-// closeError returns the wait error from the (now-terminated)
-// subprocess unless it is the expected SIGTERM/SIGKILL exit, in which
-// case nil is returned. The daemon's deferred Close path logs the
-// returned error if non-nil; we want it to stay quiet on the happy
-// path.
-func closeError(proc *serverProc) error {
-	if proc == nil {
-		return nil
-	}
-	err := proc.waitErr
-	if err == nil {
-		return nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		// Linux exec.ExitError exposes ProcessState.Sys() as
-		// syscall.WaitStatus. SIGTERM (15) and SIGKILL (9) are
-		// our intentional shutdown signals.
-		if status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			switch status.Signal() {
-			case syscall.SIGTERM, syscall.SIGKILL:
-				return nil
-			}
-		}
-	}
-	return err
 }
 
 // emit sends chunk on out unless ctx is cancelled first.
@@ -454,77 +739,20 @@ func (b *Backend) postInference(ctx context.Context, baseURL string, wavData []b
 	return decoded.Text, nil
 }
 
-// spawnWhisperServer starts a real whisper-server child process bound
-// to a free localhost port and waits until the port accepts
-// connections. This is the production spawn function; tests substitute
-// b.spawn with a fake.
-func spawnWhisperServer(ctx context.Context, b *Backend) (*serverProc, error) {
-	port, err := pickFreePort()
-	if err != nil {
-		return nil, fmt.Errorf("whisperlocal: pick port: %w", err)
-	}
-
-	args := []string{
-		"--model", b.modelPath,
-		"--host", "127.0.0.1",
-		"--port", strconv.Itoa(port),
-		// `--no-prints` would silence the model load banner; the
-		// build of whisper-cpp on Nix accepts it but it's not
-		// universal across distros, so we leave it off and let the
-		// child write to its inherited stderr where it is harmless
-		// in the daemon's stderr stream.
-	}
-	if b.language != "" {
-		args = append(args, "--language", b.language)
-	}
-
-	// We deliberately use context.Background here rather than the
-	// caller's ctx because the subprocess outlives a single
-	// Transcribe call. Backend.Close (and the daemon's deferred
-	// shutdown) is the canonical way to terminate it.
-	cmd := exec.CommandContext(context.Background(), b.serverPath, args...)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	// Detach from any session-wide signals so a Ctrl+C in a foreground
-	// terminal does not race the parent's signal handler. The daemon
-	// owns shutdown via Close.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("whisperlocal: start %s: %w", b.serverPath, err)
-	}
-
-	proc := &serverProc{
-		cmd:      cmd,
-		baseURL:  fmt.Sprintf("http://127.0.0.1:%d", port),
-		waitDone: make(chan struct{}),
-	}
-	go func() {
-		proc.waitErr = cmd.Wait()
-		close(proc.waitDone)
-	}()
-
-	if err := waitForListening(ctx, "127.0.0.1", port, proc); err != nil {
-		// Tear down the half-started child before returning. Same
-		// SIGTERM-grace-then-SIGKILL pattern as terminate but
-		// scoped to the startup goroutine.
-		terminate(
-			proc.waitDone,
-			func() { _ = cmd.Process.Signal(syscall.SIGTERM) },
-			func() { _ = cmd.Process.Kill() },
-			cmd.Process.Pid,
-		)
-		return nil, err
-	}
-	return proc, nil
-}
-
 // pickFreePort asks the kernel for an unused TCP port by binding to
-// :0, reading back the assigned port, and immediately closing. There
-// is a tiny race window between Close and the subprocess Listen — in
-// practice this has not bitten anyone for localhost subprocesses, and
-// the alternative (parsing the child's stderr banner) is fragile and
-// version-dependent.
+// :0, reading back the assigned port, and immediately closing.
+//
+// There is a tiny race window between Close and the subprocess
+// Listen, which is why spawnWhisperServer retries on bind failure
+// (detectable via the pipeBuffer snapshot) up to spawnRetryAttempts
+// times. The retry covers the rare case where the kernel hands the
+// same port to a sibling process between our Listen+Close and the
+// child's bind; bind-failure-then-respawn is the only safe path
+// short of upstream support for fd handoff.
+//
+// Whisper-server does not support port-0 auto-bind (it literally
+// listens on port 0, which is non-routable), so banner parsing for
+// the assigned port is not an option here.
 func pickFreePort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -541,16 +769,28 @@ func pickFreePort() (int, error) {
 // waitForListening polls until the subprocess accepts a TCP
 // connection on host:port, or until startupTimeout elapses, or until
 // proc exits early. Returns nil on success.
+//
+// On failure the error includes the last several lines of the
+// subprocess's stdout/stderr (via proc.pipes), so a model load
+// failure or bind error surfaces in the wrapped error path rather
+// than only in the daemon's stderr stream.
 func waitForListening(ctx context.Context, host string, port int, proc *serverProc) error {
 	deadline := time.Now().Add(startupTimeout)
 	address := net.JoinHostPort(host, strconv.Itoa(port))
 	for {
-		// Subprocess died during startup — surface the wait error.
+		// Subprocess died during startup — surface the wait
+		// error along with the captured output.
 		select {
 		case <-proc.waitDone:
-			return fmt.Errorf("whisperlocal: subprocess exited during startup: %w", proc.waitErr)
+			return wrapStartupError(
+				fmt.Errorf("whisperlocal: subprocess exited during startup: %w", proc.waitErr),
+				proc,
+			)
 		case <-ctx.Done():
-			return fmt.Errorf("whisperlocal: ctx cancelled during subprocess startup: %w", ctx.Err())
+			return wrapStartupError(
+				fmt.Errorf("whisperlocal: ctx cancelled during subprocess startup: %w", ctx.Err()),
+				proc,
+			)
 		default:
 		}
 
@@ -560,9 +800,147 @@ func waitForListening(ctx context.Context, host string, port int, proc *serverPr
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("whisperlocal: subprocess did not start listening on %s within %s",
-				address, startupTimeout)
+			return wrapStartupError(
+				fmt.Errorf("whisperlocal: subprocess did not start listening on %s within %s",
+					address, startupTimeout),
+				proc,
+			)
 		}
 		time.Sleep(startupPollInterval)
 	}
+}
+
+// wrapStartupError appends the subprocess's captured output (last
+// pipeBufferLines lines) to the supplied error so users see the
+// real diagnostic instead of a vague timeout.
+func wrapStartupError(err error, proc *serverProc) error {
+	if proc == nil || proc.pipes == nil {
+		return err
+	}
+	lines := proc.pipes.Snapshot()
+	if len(lines) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w\nlast subprocess output:\n%s", err, joinLines(lines))
+}
+
+// joinLines concatenates lines with newline separators. Used by
+// wrapStartupError to assemble a multi-line error string without
+// pulling in strings.Join (which is fine, but the explicit form
+// keeps the dependency surface minimal).
+func joinLines(lines []string) string {
+	var b bytes.Buffer
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(l)
+	}
+	return b.String()
+}
+
+// pipeBuffer is a fixed-capacity ring of subprocess stdout/stderr
+// lines, with a tee to os.Stderr (prefixed) so the daemon's log
+// stream still surfaces the output. Snapshot returns the current
+// ring contents in chronological order.
+//
+// The ring is bounded so a chatty subprocess (verbose mode, debug
+// builds) cannot grow the daemon's memory unbounded. Lines longer
+// than pipeBufferLineBytes are truncated with a "..." suffix.
+type pipeBuffer struct {
+	mu      sync.Mutex
+	lines   []string
+	next    int
+	full    bool
+	tee     io.Writer
+	prefix  string
+	scratch bytes.Buffer
+}
+
+// newPipeBuffer constructs a pipeBuffer with the given tee target
+// (typically os.Stderr) and prefix tag (typically
+// "[whisper-server]"). Pass nil for tee to disable tee output.
+func newPipeBuffer(tee io.Writer, prefix string) *pipeBuffer {
+	return &pipeBuffer{
+		lines:  make([]string, pipeBufferLines),
+		tee:    tee,
+		prefix: prefix,
+	}
+}
+
+// Write satisfies io.Writer. It splits incoming bytes on newlines,
+// appends each complete line to the ring, and tees a prefixed copy
+// to the tee target. A trailing partial line is buffered until the
+// next Write completes it.
+func (p *pipeBuffer) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	written := len(b)
+	for _, c := range b {
+		if c == '\n' {
+			p.flushLineLocked()
+			continue
+		}
+		if p.scratch.Len() < pipeBufferLineBytes {
+			p.scratch.WriteByte(c)
+		}
+	}
+	return written, nil
+}
+
+// flushLineLocked moves the scratch buffer into the ring as a
+// complete line and tees it. Caller must hold p.mu.
+func (p *pipeBuffer) flushLineLocked() {
+	line := p.scratch.String()
+	if p.scratch.Len() >= pipeBufferLineBytes {
+		line += "..."
+	}
+	p.scratch.Reset()
+	p.lines[p.next] = line
+	p.next = (p.next + 1) % len(p.lines)
+	if p.next == 0 {
+		p.full = true
+	}
+	if p.tee != nil {
+		fmt.Fprintf(p.tee, "%s %s\n", p.prefix, line)
+	}
+}
+
+// Snapshot returns the ring contents in chronological order. The
+// returned slice is freshly allocated so callers cannot mutate the
+// internal ring state.
+func (p *pipeBuffer) Snapshot() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.full {
+		out := make([]string, p.next)
+		copy(out, p.lines[:p.next])
+		// Include a trailing partial line if any bytes are
+		// pending in scratch (e.g. process died mid-line).
+		if p.scratch.Len() > 0 {
+			out = append(out, p.scratch.String())
+		}
+		return out
+	}
+	out := make([]string, 0, len(p.lines)+1)
+	out = append(out, p.lines[p.next:]...)
+	out = append(out, p.lines[:p.next]...)
+	if p.scratch.Len() > 0 {
+		out = append(out, p.scratch.String())
+	}
+	return out
+}
+
+// containsBindFailure returns true if any line in the snapshot
+// matches the whisper-server bind-failure banner. The exact text
+// (`couldn't bind to server socket`) was extracted from the
+// whisper.cpp upstream source.
+func containsBindFailure(lines []string) bool {
+	for _, line := range lines {
+		if bytes.Contains([]byte(line), []byte("couldn't bind to server socket")) ||
+			bytes.Contains([]byte(line), []byte("server listen failed")) {
+			return true
+		}
+	}
+	return false
 }

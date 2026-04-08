@@ -6,6 +6,7 @@ import (
 	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/internal/platform"
 	linux "github.com/hybridz/yap/internal/platform/linux"
+	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,13 @@ import (
 // sentinel in cmd/yap/main.go, which routes detached child processes
 // directly into daemon.Run before cobra ever sees os.Args. The
 // previous hidden spawn flag has been removed entirely.
-func newRootCmd(p platform.Platform) *cobra.Command {
+//
+// modelMgr is the model Manager the `yap models` subtree drives. The
+// production wiring uses models.Default() (the lazily-built singleton
+// wired to Hugging Face URLs); tests inject a fixture Manager via
+// ExecuteForTestWithModels so they can exercise the download path
+// without going to the network.
+func newRootCmd(p platform.Platform, modelMgr *models.Manager) *cobra.Command {
 	var rootCfg config.Config
 
 	root := &cobra.Command{
@@ -58,14 +65,14 @@ func newRootCmd(p platform.Platform) *cobra.Command {
 
 	// Configuration / models.
 	root.AddCommand(newConfigCmd(&rootCfg, p))
-	root.AddCommand(newModelsCmd())
+	root.AddCommand(newModelsCmd(modelMgr))
 
 	return root
 }
 
 // Execute runs the root command against os.Args. Called from main().
 func Execute() error {
-	return newRootCmd(linux.NewPlatform()).Execute()
+	return newRootCmd(linux.NewPlatform(), models.Default()).Execute()
 }
 
 // ExecuteForTest builds a fresh command tree, runs it with argv, and
@@ -82,13 +89,30 @@ func ExecuteForTest(argv []string, stdout, stderr io.Writer) error {
 // fresh on every call, exactly like ExecuteForTest, so test cases
 // remain isolated.
 func ExecuteForTestWithPlatform(p platform.Platform, argv []string, stdout, stderr io.Writer) error {
+	return ExecuteForTestWithDeps(p, models.Default(), argv, stdout, stderr)
+}
+
+// ExecuteForTestWithDeps is the most flexible test entry point. It
+// lets a test inject both a custom Platform and a custom models
+// Manager. The Manager hook is what `yap models` tests use to swap
+// in a fixture manifest backed by an httptest server, replacing the
+// previous SetDownloadClientForTest / OverrideManifestForTest globals.
+func ExecuteForTestWithDeps(
+	p platform.Platform,
+	modelMgr *models.Manager,
+	argv []string,
+	stdout, stderr io.Writer,
+) error {
 	if stdout == nil {
 		stdout = io.Discard
 	}
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	root := newRootCmd(p)
+	if modelMgr == nil {
+		modelMgr = models.Default()
+	}
+	root := newRootCmd(p, modelMgr)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.SetArgs(argv)

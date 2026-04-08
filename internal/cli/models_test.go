@@ -1,8 +1,10 @@
 package cli_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hybridz/yap/internal/cli"
+	linux "github.com/hybridz/yap/internal/platform/linux"
 	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
 )
 
@@ -28,6 +32,22 @@ func withTempCache(t *testing.T) string {
 	t.Setenv("GROQ_API_KEY", "")
 	return cache
 }
+
+// runCLIWithModelMgr runs the cobra command tree with a fixture
+// models.Manager injected. Tests use this to exercise the
+// `yap models` subtree against an httptest fixture instead of the
+// real Hugging Face URLs.
+func runCLIWithModelMgr(t *testing.T, mgr *models.Manager, argv ...string) (string, string, error) {
+	t.Helper()
+	var outBuf, errBuf bytes.Buffer
+	err := cli.ExecuteForTestWithDeps(linux.NewPlatform(), mgr, argv, &outBuf, &errBuf)
+	return outBuf.String(), errBuf.String(), err
+}
+
+// discardWriter is the no-op writer used by tests that do not care
+// about the captured stdout/stderr — handy when only the error is
+// being asserted.
+var _ io.Writer = (*bytes.Buffer)(nil)
 
 func TestModelsList_Empty(t *testing.T) {
 	withTempCache(t)
@@ -98,9 +118,9 @@ func TestModelsPath_UnknownModel(t *testing.T) {
 func TestModelsDownload_Success(t *testing.T) {
 	withTempCache(t)
 
-	// Stand up an httptest server with a known payload + hash. We
-	// swap the package's manifest at runtime via the test helper so
-	// the CLI command resolves to our fake URL.
+	// Stand up an httptest server with a known payload + hash. The
+	// fixture Manager is wired to that server's URL via WithManifest
+	// + WithHTTPClient — no package-level mutation, no globals.
 	payload := []byte("hello cli download")
 	sum := sha256.Sum256(payload)
 	hash := hex.EncodeToString(sum[:])
@@ -110,20 +130,19 @@ func TestModelsDownload_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Substitute manifest + http client for the duration of the test.
-	prevClient := models.SetDownloadClientForTest(srv.Client())
-	t.Cleanup(func() { models.SetDownloadClientForTest(prevClient) })
-	restoreManifest := models.OverrideManifestForTest([]models.Manifest{
-		{
-			Name:   "test.en",
-			URL:    srv.URL + "/ggml-test.en.bin",
-			SHA256: hash,
-			SizeMB: 1,
-		},
-	})
-	t.Cleanup(restoreManifest)
+	mgr := models.NewManager(
+		models.WithHTTPClient(srv.Client()),
+		models.WithManifest([]models.Manifest{
+			{
+				Name:   "test.en",
+				URL:    srv.URL + "/ggml-test.en.bin",
+				SHA256: hash,
+				SizeMB: 1,
+			},
+		}),
+	)
 
-	stdout, _, err := runCLI(t, "models", "download", "test.en")
+	stdout, _, err := runCLIWithModelMgr(t, mgr, "models", "download", "test.en")
 	if err != nil {
 		t.Fatalf("models download: %v", err)
 	}
@@ -131,7 +150,7 @@ func TestModelsDownload_Success(t *testing.T) {
 		t.Errorf("expected install confirmation, got:\n%s", stdout)
 	}
 
-	p, err := models.Path("test.en")
+	p, err := mgr.Path("test.en")
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
@@ -148,19 +167,19 @@ func TestModelsDownload_RejectsBadHash(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	prevClient := models.SetDownloadClientForTest(srv.Client())
-	t.Cleanup(func() { models.SetDownloadClientForTest(prevClient) })
-	restoreManifest := models.OverrideManifestForTest([]models.Manifest{
-		{
-			Name:   "test.en",
-			URL:    srv.URL + "/x",
-			SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
-			SizeMB: 1,
-		},
-	})
-	t.Cleanup(restoreManifest)
+	mgr := models.NewManager(
+		models.WithHTTPClient(srv.Client()),
+		models.WithManifest([]models.Manifest{
+			{
+				Name:   "test.en",
+				URL:    srv.URL + "/x",
+				SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+				SizeMB: 1,
+			},
+		}),
+	)
 
-	_, _, err := runCLI(t, "models", "download", "test.en")
+	_, _, err := runCLIWithModelMgr(t, mgr, "models", "download", "test.en")
 	if err == nil {
 		t.Fatal("expected sha mismatch error")
 	}
