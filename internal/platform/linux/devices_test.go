@@ -6,7 +6,7 @@ import (
 
 // TestNewDeviceLister returns a non-nil DeviceLister suitable for use
 // in the Platform composition root. We do not call ListDevices in unit
-// tests because PortAudio enumeration may pop a real audio backend in
+// tests because malgo enumeration may pop a real audio backend in
 // CI environments.
 func TestNewDeviceLister(t *testing.T) {
 	dl := NewDeviceLister()

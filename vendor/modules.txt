@@ -26,6 +26,9 @@ github.com/esiqveland/notify
 # github.com/gen2brain/beeep v0.11.2
 ## explicit; go 1.21.5
 github.com/gen2brain/beeep
+# github.com/gen2brain/malgo v0.11.24
+## explicit; go 1.17
+github.com/gen2brain/malgo
 # github.com/go-audio/audio v1.0.0
 ## explicit
 github.com/go-audio/audio
@@ -41,9 +44,6 @@ github.com/go-ole/go-ole
 # github.com/godbus/dbus/v5 v5.1.0
 ## explicit; go 1.12
 github.com/godbus/dbus/v5
-# github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
-## explicit; go 1.18
-github.com/gordonklaus/portaudio
 # github.com/holoplot/go-evdev v0.0.0-20250804134636-ab1d56a1fe83
 ## explicit; go 1.18
 github.com/holoplot/go-evdev

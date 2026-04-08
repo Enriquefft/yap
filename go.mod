@@ -7,9 +7,9 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/atotto/clipboard v0.1.4
 	github.com/gen2brain/beeep v0.11.2
+	github.com/gen2brain/malgo v0.11.24
 	github.com/go-audio/audio v1.0.0
 	github.com/go-audio/wav v1.1.0
-	github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
 	github.com/holoplot/go-evdev v0.0.0-20250804134636-ab1d56a1fe83
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

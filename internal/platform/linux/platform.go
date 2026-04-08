@@ -1,8 +1,7 @@
 // Package linux provides Linux-specific implementations of all
 // platform interfaces defined in internal/platform. It uses evdev for
-// hotkeys, malgo (or PortAudio in the legacy build) for audio,
-// linux/inject for app-aware text injection, and beeep/libnotify for
-// notifications.
+// hotkeys, malgo (miniaudio) for audio, linux/inject for app-aware
+// text injection, and beeep/libnotify for notifications.
 package linux
 
 import (

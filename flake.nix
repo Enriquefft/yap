@@ -10,12 +10,15 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # pkgsStatic compiles all C dependencies (including portaudio) against musl.
-        # This handles transitive dep rebuilds automatically — no manual -extldflags juggling.
+        # pkgsStatic exposes a musl-libc package set used for the
+        # fully-static build. malgo (the only CGo audio dep) bundles
+        # miniaudio as a single C header — no system C audio library
+        # is linked into the binary, so the static build only needs a
+        # musl libc and -ldl.
         pkgsS = pkgs.pkgsStatic;
 
         # Shared package definition; withStatic toggles static linker flags.
-        yapPkg = { buildGoModule, pkg-config, portaudio, lib, withStatic ? false }:
+        yapPkg = { buildGoModule, pkg-config, lib, withStatic ? false }:
           let
             # Single source of truth for the Nix-built version string.
             # Threaded into the Go binary via -ldflags so `yap status`
@@ -31,16 +34,18 @@
             # Example: vendorHash = "sha256-abc123...";
             vendorHash = null;
 
-            # CGO is required for portaudio (sole CGo boundary in yap).
+            # CGO is required for malgo (audio) and whisper.cpp
+            # bindings — the only CGo boundaries in yap.
             # Use env attrset to pass environment variables to avoid overlap with derivation args.
             env.CGO_ENABLED = "1";
 
             # nativeBuildInputs: tools needed at build time (not linked into binary).
-            # pkg-config is required for CGo to find portaudio headers in Nix sandbox.
             nativeBuildInputs = [ pkg-config ];
 
-            # buildInputs: C libraries linked into the binary.
-            buildInputs = [ portaudio ];
+            # buildInputs: C libraries linked into the binary. malgo
+            # vendors miniaudio.h directly, so no system audio library
+            # is required at link time.
+            buildInputs = [ ];
 
             # -s -w: strip debug symbols and DWARF (reduces binary size).
             # -X ...Version=${version}: thread the flake-declared version
@@ -70,7 +75,9 @@
           yap = pkgs.callPackage yapPkg {};
 
           # Static build: for curl install on any Linux distro.
-          # Uses pkgsStatic which compiles portaudio against musl automatically.
+          # Uses pkgsStatic so the toolchain links against musl libc.
+          # malgo provides miniaudio inline, so no audio C library needs
+          # a static rebuild.
           static = pkgsS.callPackage yapPkg { withStatic = true; };
         };
 
@@ -80,7 +87,8 @@
           buildInputs = with pkgs; [
             go
             pkg-config
-            portaudio
+            # malgo bundles miniaudio.h directly — no system audio
+            # development library is needed in the dev shell.
             # musl intentionally omitted: only used by pkgsStatic for static builds.
             # Including musl here adds -L/musl/lib to NIX_LDFLAGS, causing musl+glibc
             # mixing in test binaries which crashes at startup (segfault on go test).

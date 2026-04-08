@@ -3,16 +3,16 @@ package linux
 import (
 	"fmt"
 
-	"github.com/gordonklaus/portaudio"
+	"github.com/gen2brain/malgo"
 	"github.com/hybridz/yap/internal/platform"
 )
 
-// deviceLister implements platform.DeviceLister via PortAudio's
-// Devices() enumeration. Each call to ListDevices initializes
-// PortAudio, walks every input-capable device, marks the system
-// default, and tears the host API back down. The CLI uses this
-// outside the daemon (no shared audio handle), so we cannot rely on
-// the recorder's already-initialized PortAudio session.
+// deviceLister implements platform.DeviceLister via miniaudio's
+// context.Devices(Capture) enumeration. Each call to ListDevices
+// initializes a malgo context, walks every input device, and tears the
+// context back down. The CLI uses this outside the daemon (no shared
+// audio handle), so we cannot rely on the recorder's
+// already-initialized malgo session.
 type deviceLister struct{}
 
 // NewDeviceLister returns a Linux audio input device lister. It is
@@ -20,42 +20,49 @@ type deviceLister struct{}
 func NewDeviceLister() platform.DeviceLister { return deviceLister{} }
 
 // ListDevices enumerates input-capable audio devices, marking the
-// system default. Non-input devices (output-only sinks) are filtered
-// out so the resulting list matches what general.audio_device may
-// resolve against.
+// system default. malgo's DeviceInfo.IsDefault flag is the source of
+// truth for the default; the lister forwards it without
+// reinterpreting.
 func (deviceLister) ListDevices() ([]platform.Device, error) {
-	if err := portaudio.Initialize(); err != nil {
-		return nil, fmt.Errorf("portaudio init: %w", err)
+	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("malgo init context: %w", err)
 	}
-	defer portaudio.Terminate() //nolint:errcheck
+	defer freeMalgoContext(ctx)
 
-	devs, err := portaudio.Devices()
+	devs, err := ctx.Devices(malgo.Capture)
 	if err != nil {
 		return nil, fmt.Errorf("enumerate audio devices: %w", err)
 	}
 
-	// Resolve the platform default input device. The default-host
-	// API call may fail on systems without an audio backend; in that
-	// case we simply do not mark any device as default.
-	var defaultDev *portaudio.DeviceInfo
-	if hostAPI, hostErr := portaudio.DefaultHostApi(); hostErr == nil && hostAPI != nil {
-		defaultDev = hostAPI.DefaultInputDevice
-	}
-
 	out := make([]platform.Device, 0, len(devs))
-	for _, d := range devs {
-		if d == nil || d.MaxInputChannels < 1 {
-			continue
-		}
-		desc := fmt.Sprintf("%dch input", d.MaxInputChannels)
-		if d.HostApi != nil && d.HostApi.Name != "" {
-			desc = fmt.Sprintf("%s @ %s", desc, d.HostApi.Name)
+	for i := range devs {
+		// Probe the device for full info to surface a useful
+		// description (channel count). Failures here are non-fatal —
+		// we still list the device, just without the extra detail.
+		desc := "input device"
+		if full, fullErr := ctx.DeviceInfo(malgo.Capture, devs[i].ID, malgo.Shared); fullErr == nil {
+			if maxCh := maxChannelCount(full.Formats); maxCh > 0 {
+				desc = fmt.Sprintf("%dch input", maxCh)
+			}
 		}
 		out = append(out, platform.Device{
-			Name:        d.Name,
+			Name:        devs[i].Name(),
 			Description: desc,
-			IsDefault:   defaultDev != nil && d == defaultDev,
+			IsDefault:   devs[i].IsDefault != 0,
 		})
 	}
 	return out, nil
+}
+
+// maxChannelCount returns the largest channel count among the given
+// native data formats, or zero if the slice is empty.
+func maxChannelCount(formats []malgo.DataFormat) uint32 {
+	var max uint32
+	for _, f := range formats {
+		if f.Channels > max {
+			max = f.Channels
+		}
+	}
+	return max
 }
