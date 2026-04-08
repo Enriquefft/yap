@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hybridz/yap/internal/config"
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 	"github.com/hybridz/yap/pkg/yap/transform"
 	"github.com/hybridz/yap/pkg/yap/transform/httpstream"
@@ -56,7 +57,7 @@ func New(cfg transform.Config) (*Backend, error) {
 	cfg.APIURL = strings.TrimRight(cfg.APIURL, "/")
 	return &Backend{
 		cfg:    cfg,
-		client: httpstream.NewClient(httpTimeout),
+		client: httpstream.NewClient(httpTimeout, "yap-local/"+config.Version),
 	}, nil
 }
 

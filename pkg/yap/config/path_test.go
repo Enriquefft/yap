@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"encoding/json"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -124,17 +127,38 @@ func TestGet_UnknownPaths(t *testing.T) {
 	}
 }
 
-func TestGet_StructPathReturnsRepr(t *testing.T) {
-	// Reading a non-leaf path returns a stringified struct repr,
-	// which is fine for human inspection. The contract is "Get does
-	// not error on intermediate nodes". CLI users should drill in.
+func TestGet_StructPathReturnsJSON(t *testing.T) {
+	// Reading a non-leaf path returns a JSON encoding of the
+	// section. JSON over the bare fmt struct repr because the
+	// latter is order-dependent and would break scripted callers if
+	// a field is renamed or moved. The contract is documented on
+	// the Get godoc.
 	cfg := config.DefaultConfig()
 	got, err := config.Get(&cfg, "general")
 	if err != nil {
 		t.Fatalf("Get(general) should succeed: %v", err)
 	}
 	if got == "" {
-		t.Error("Get(general) returned empty string")
+		t.Fatal("Get(general) returned empty string")
+	}
+	// JSON output is parseable: it must round-trip through
+	// json.Unmarshal into a map without error.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(got), &m); err != nil {
+		t.Fatalf("Get(general) is not JSON: %v\noutput: %s", err, got)
+	}
+	// The map must contain the GeneralConfig fields by their toml tag
+	// (encoding/json by default uses the json tag, but the structs
+	// have no json tag so it falls back to the Go field name —
+	// which is what we want here for stability across future toml
+	// tag renames). At least one well-known field should appear.
+	if _, ok := m["Hotkey"]; !ok {
+		// Be permissive to either Go field name or toml tag here:
+		// the test is a smoke check, not a contract on encoding/json
+		// internals.
+		if _, ok := m["hotkey"]; !ok {
+			t.Errorf("expected JSON to contain hotkey field; got %s", got)
+		}
 	}
 }
 
@@ -144,6 +168,86 @@ func TestSet_NilPointer(t *testing.T) {
 	}
 	if _, err := config.Get(nil, "general.hotkey"); err == nil {
 		t.Error("Get(nil, ...) should fail")
+	}
+}
+
+// TestWalkerHandlesEveryConfigLeaf walks DefaultConfig() with
+// reflection, enumerates every dotted leaf path under the schema,
+// and asserts Get returns no error for each. The test fails the
+// build if a future schema change adds a field whose kind is not
+// covered by walk (currently struct, slice, and the leaf scalar
+// kinds). It is the locked-down regression check the F6 finding
+// asks for: any addition of *Foo, map[string]X, or interface{} to
+// the schema will surface here instead of silently breaking
+// `yap config get/set` for that path.
+func TestWalkerHandlesEveryConfigLeaf(t *testing.T) {
+	cfg := config.DefaultConfig()
+	// AppOverrides is empty in DefaultConfig; populate one element
+	// so the slice walker has something to descend into. The leaf
+	// fields under each element type still need to be reachable.
+	cfg.Injection.AppOverrides = []config.AppOverride{
+		{Match: "firefox", Strategy: "clipboard"},
+	}
+
+	leaves := enumerateLeafPaths(t, reflect.ValueOf(cfg), "")
+	if len(leaves) == 0 {
+		t.Fatal("enumerateLeafPaths returned zero paths — reflection walker is broken")
+	}
+	for _, path := range leaves {
+		t.Run(path, func(t *testing.T) {
+			if _, err := config.Get(&cfg, path); err != nil {
+				t.Errorf("Get(%q) returned error %v — walker missing a kind", path, err)
+			}
+		})
+	}
+}
+
+// enumerateLeafPaths walks v and returns every dotted path that
+// resolves to a scalar (string, bool, int, float). Struct fields are
+// indexed by their toml tag; slice elements are indexed by position.
+// The function mirrors the schema walker but with no behavior other
+// than path collection.
+func enumerateLeafPaths(t *testing.T, v reflect.Value, prefix string) []string {
+	t.Helper()
+	switch v.Kind() {
+	case reflect.Struct:
+		var out []string
+		typ := v.Type()
+		for i := 0; i < typ.NumField(); i++ {
+			tag := typ.Field(i).Tag.Get("toml")
+			if comma := strings.Index(tag, ","); comma >= 0 {
+				tag = tag[:comma]
+			}
+			if tag == "" {
+				continue
+			}
+			child := tag
+			if prefix != "" {
+				child = prefix + "." + tag
+			}
+			out = append(out, enumerateLeafPaths(t, v.Field(i), child)...)
+		}
+		return out
+	case reflect.Slice:
+		// For an empty slice we cannot enumerate elements; the parent
+		// path itself is reachable via Get and reports the slice
+		// length. For a populated slice we descend into each index.
+		if v.Len() == 0 {
+			return []string{prefix}
+		}
+		var out []string
+		for i := 0; i < v.Len(); i++ {
+			child := prefix + "." + strconv.Itoa(i)
+			out = append(out, enumerateLeafPaths(t, v.Index(i), child)...)
+		}
+		return out
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Float32, reflect.Float64:
+		return []string{prefix}
+	default:
+		t.Fatalf("path %q: unexpected kind %s in DefaultConfig — walker would silently break for this path", prefix, v.Kind())
+		return nil
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -93,12 +94,16 @@ func New(cfg transcribe.Config) (*Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = defaultRequestTimeout
-	}
 	client := cfg.HTTPClient
 	if client == nil {
+		// Compute the default timeout only when we are about to
+		// build a default client; doing it earlier looks like a
+		// bug because the value would be unused on the
+		// HTTPClient-supplied path.
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = defaultRequestTimeout
+		}
 		client = &http.Client{Timeout: timeout}
 	}
 	return &Backend{
@@ -295,19 +300,42 @@ func (b *Backend) Close() error {
 // it produces (exit status 143 = 128+SIGTERM) is intentionally
 // swallowed by Backend.Close so the daemon does not log a warning on
 // every clean shutdown.
+//
+// The post-Kill wait is bounded: if the kernel wedges (uninterruptible
+// sleep, etc.) we log and detach rather than blocking the daemon's
+// shutdown forever. A leaked subprocess is uglier than a hung daemon
+// but at least the daemon exits.
 func terminateProc(proc *serverProc) {
 	if proc == nil || proc.cmd == nil || proc.cmd.Process == nil {
 		return
 	}
-	_ = proc.cmd.Process.Signal(syscall.SIGTERM)
+	pid := proc.cmd.Process.Pid
+	terminate(
+		proc.waitDone,
+		func() { _ = proc.cmd.Process.Signal(syscall.SIGTERM) },
+		func() { _ = proc.cmd.Process.Kill() },
+		pid,
+	)
+}
 
+// terminate is the testable core of terminateProc. It is split out so
+// the timing semantics (SIGTERM grace, post-SIGKILL bounded detach)
+// can be exercised against synthetic channels without spawning a real
+// subprocess. The pid argument is only used for the warning log.
+func terminate(waitDone <-chan struct{}, sigterm, sigkill func(), pid int) {
+	sigterm()
 	select {
-	case <-proc.waitDone:
+	case <-waitDone:
 		return
 	case <-time.After(shutdownGraceful):
 	}
-	_ = proc.cmd.Process.Kill()
-	<-proc.waitDone
+	sigkill()
+	select {
+	case <-waitDone:
+	case <-time.After(shutdownGraceful):
+		slog.Default().Warn("whisperlocal: subprocess did not exit after SIGKILL; detaching",
+			"pid", pid)
+	}
 }
 
 // closeError returns the wait error from the (now-terminated)
@@ -477,14 +505,15 @@ func spawnWhisperServer(ctx context.Context, b *Backend) (*serverProc, error) {
 	}()
 
 	if err := waitForListening(ctx, "127.0.0.1", port, proc); err != nil {
-		// Tear down the half-started child before returning.
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-proc.waitDone:
-		case <-time.After(shutdownGraceful):
-			_ = cmd.Process.Kill()
-			<-proc.waitDone
-		}
+		// Tear down the half-started child before returning. Same
+		// SIGTERM-grace-then-SIGKILL pattern as terminate but
+		// scoped to the startup goroutine.
+		terminate(
+			proc.waitDone,
+			func() { _ = cmd.Process.Signal(syscall.SIGTERM) },
+			func() { _ = cmd.Process.Kill() },
+			cmd.Process.Pid,
+		)
 		return nil, err
 	}
 	return proc, nil

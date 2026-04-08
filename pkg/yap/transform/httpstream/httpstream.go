@@ -9,8 +9,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/hybridz/yap/internal/config"
 )
 
 // DefaultMaxRetries is the number of retry attempts beyond the initial
@@ -22,6 +20,14 @@ const DefaultMaxRetries = 3
 // because transform backends stream responses and the timeout has to
 // cover the full streamed body, not just the headers.
 const DefaultTimeout = 60 * time.Second
+
+// maxErrorBodyBytes caps how much of an error response body PostJSON
+// reads into memory. The cap protects against a misconfigured
+// upstream that returns a multi-megabyte HTML error page on every
+// retry — without the cap a single 500 storm would balloon memory by
+// (attempts × body size). 64 KiB is enough to surface any reasonable
+// JSON-shaped error message and the leading lines of an HTML page.
+const maxErrorBodyBytes = 64 * 1024
 
 // Client is an HTTP helper that posts JSON payloads and returns the
 // streamed response body for the caller to parse. A zero-value Client
@@ -43,17 +49,25 @@ type Client struct {
 	Backoff []time.Duration
 }
 
-// NewClient constructs a Client with the default timeout, the yap
-// user-agent, and the default retry policy. Callers that need a
-// custom *http.Client (for tests, mTLS, etc.) can overwrite the HTTP
-// field afterwards.
-func NewClient(timeout time.Duration) *Client {
+// NewClient constructs a Client with the default timeout, the
+// caller-supplied user-agent, and the default retry policy. Pass an
+// empty userAgent to skip setting the User-Agent header. Callers that
+// need a custom *http.Client (for tests, mTLS, etc.) can overwrite
+// the HTTP field afterwards.
+//
+// userAgent is required as a parameter rather than read from a yap
+// internal package: this package is documented as a public scaffold
+// for third parties writing their own transform backend, and reaching
+// into yap internals would defeat that purpose. Callers inside yap
+// pass their own version-stamped string; external callers pass
+// whatever identifier their program uses.
+func NewClient(timeout time.Duration, userAgent string) *Client {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
 	return &Client{
 		HTTP:       &http.Client{Timeout: timeout},
-		UserAgent:  "yap/" + config.Version,
+		UserAgent:  userAgent,
 		MaxRetries: DefaultMaxRetries,
 		Backoff: []time.Duration{
 			500 * time.Millisecond,
@@ -136,8 +150,10 @@ func (c *Client) PostJSON(ctx context.Context, url, apiKey string, body any) (io
 
 		// Non-2xx: consume the body so we can reuse the connection
 		// (or at least format a useful error) and decide retry vs
-		// fail-fast.
-		respBody, readErr := io.ReadAll(resp.Body)
+		// fail-fast. The body is bounded by maxErrorBodyBytes to
+		// protect against multi-megabyte error pages from
+		// misconfigured proxies.
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = fmt.Errorf("httpstream: read body: %w", readErr)

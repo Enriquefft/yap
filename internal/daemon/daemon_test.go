@@ -171,7 +171,7 @@ func TestNewTransformerWithFallback_NoNotifier_NoWrapping(t *testing.T) {
 		Backend: "local",
 		Model:   "llama3",
 	}
-	tr, err := NewTransformerWithFallback(tc, nil)
+	tr, err := NewTransformerWithFallback(tc, nil, false)
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestNewTransformerWithFallback_HealthCheckSuccess_Wraps(t *testing.T) {
 		APIKey:  "sk-test",
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier)
+	tr, err := NewTransformerWithFallback(tc, notifier, false)
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestNewTransformerWithFallback_HealthCheckFailure_Notifies(t *testing.T) {
 		Model:   "llama3",
 	}
 	notifier := &countingNotifier{}
-	tr, err := NewTransformerWithFallback(tc, notifier)
+	tr, err := NewTransformerWithFallback(tc, notifier, false)
 	if err != nil {
 		t.Fatalf("NewTransformerWithFallback: %v", err)
 	}
@@ -264,9 +264,85 @@ func TestNewTransformerWithFallback_UnknownBackend_Errors(t *testing.T) {
 		Backend: "this-backend-does-not-exist",
 		Model:   "x",
 	}
-	_, err := NewTransformerWithFallback(tc, &countingNotifier{})
+	_, err := NewTransformerWithFallback(tc, &countingNotifier{}, false)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestNewTransformerWithFallback_StreamPartials_NoFallbackWrapping
+// asserts the F1-alternative fix: when the user opted into
+// stream_partials the daemon must skip wrapping the primary in the
+// buffered fallback decorator, even when a notifier is supplied. The
+// buffered decorator would defeat the partial-injection promise.
+func TestNewTransformerWithFallback_StreamPartials_NoFallbackWrapping(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tc := pcfg.TransformConfig{
+		Enabled: true,
+		Backend: "openai",
+		APIURL:  srv.URL + "/v1",
+		Model:   "gpt-4o-mini",
+		APIKey:  "sk-test",
+	}
+	notifier := &countingNotifier{}
+	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
+	if err != nil {
+		t.Fatalf("NewTransformerWithFallback: %v", err)
+	}
+	if _, isFallback := tr.(*fallback.Transformer); isFallback {
+		t.Errorf("stream_partials must skip fallback wrapping; got *fallback.Transformer")
+	}
+	if got := atomic.LoadInt32(&notifier.calls); got != 0 {
+		t.Errorf("notifier calls = %d, want 0 on healthy check + stream_partials", got)
+	}
+}
+
+// TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPassthrough
+// asserts the streaming-mode health-probe path: even with
+// stream_partials = true, an unhealthy backend at startup time still
+// triggers the notifier and swaps to passthrough for the session.
+func TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPassthrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	tc := pcfg.TransformConfig{
+		Enabled: true,
+		Backend: "local",
+		APIURL:  srv.URL,
+		Model:   "llama3",
+	}
+	notifier := &countingNotifier{}
+	tr, err := NewTransformerWithFallback(tc, notifier, true /* streamPartials */)
+	if err != nil {
+		t.Fatalf("NewTransformerWithFallback: %v", err)
+	}
+	if got := atomic.LoadInt32(&notifier.calls); got != 1 {
+		t.Errorf("notifier calls = %d, want 1", got)
+	}
+	if _, isFallback := tr.(*fallback.Transformer); isFallback {
+		t.Errorf("unhealthy backend with stream_partials should yield passthrough, not fallback wrapper")
+	}
+
+	// The returned transformer must still be usable.
+	in := make(chan transcribe.TranscriptChunk, 1)
+	in <- transcribe.TranscriptChunk{Text: "hi", IsFinal: true}
+	close(in)
+	out, err := tr.Transform(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	var got []transcribe.TranscriptChunk
+	for c := range out {
+		got = append(got, c)
+	}
+	if len(got) != 1 || got[0].Text != "hi" {
+		t.Errorf("got = %+v, want passthrough echo", got)
 	}
 }
 

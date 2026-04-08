@@ -135,6 +135,19 @@ func TestAppTypeStringStable(t *testing.T) {
 	}
 }
 
+// TestAppTypeStringUnknown asserts the C11 fix: an unrecognized
+// AppType value renders as AppType(N) instead of silently aliasing
+// to "generic". A future enum addition that forgets to extend
+// String will then surface in audit logs immediately.
+func TestAppTypeStringUnknown(t *testing.T) {
+	// 99 is intentionally well outside the current enum range.
+	got := inject.AppType(99).String()
+	want := "AppType(99)"
+	if got != want {
+		t.Errorf("AppType(99).String() = %q, want %q (unknown values must not alias to generic)", got, want)
+	}
+}
+
 func TestTargetTmuxAndSSHRemoteAdditive(t *testing.T) {
 	tgt := inject.Target{
 		DisplayServer: "wayland",

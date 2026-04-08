@@ -57,10 +57,17 @@ type Backend struct {
 	client *http.Client
 }
 
+// DefaultTimeout is the per-request HTTP timeout substituted when
+// cfg.Timeout is zero or negative. Without it a stalled response
+// would hang the caller forever — &http.Client{Timeout: 0} disables
+// the timeout entirely. 30 s is the same value the rest of yap uses
+// for transcription HTTP defaults.
+const DefaultTimeout = 30 * time.Second
+
 // New builds a Groq backend from cfg. It validates required fields
 // (APIKey, Model) and substitutes DefaultAPIURL when cfg.APIURL is
 // empty. When cfg.HTTPClient is nil, a fresh *http.Client is built
-// using cfg.Timeout.
+// using cfg.Timeout (or DefaultTimeout when cfg.Timeout <= 0).
 func New(cfg transcribe.Config) (*Backend, error) {
 	if cfg.APIKey == "" {
 		return nil, errors.New("groq: Config.APIKey is required")
@@ -70,6 +77,9 @@ func New(cfg transcribe.Config) (*Backend, error) {
 	}
 	if cfg.APIURL == "" {
 		cfg.APIURL = DefaultAPIURL
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -134,6 +144,30 @@ func send(ctx context.Context, out chan<- transcribe.TranscriptChunk, chunk tran
 	}
 }
 
+// sleepCtx sleeps for d or returns ctx.Err when the context is
+// cancelled. Zero d returns immediately. This is the cancellation-
+// aware analog of time.Sleep used in the retry backoff loop so a
+// caller-cancelled ctx mid-backoff returns within microseconds rather
+// than waiting for the full delay.
+//
+// The transform-side pkg/yap/transform/httpstream package has the
+// same helper. Lifting this into a shared internal package would
+// require a new Go module path; the duplication is two ten-line
+// functions and is intentionally accepted.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // post is the former internal/transcribe.Transcribe body, now a method
 // on Backend. Behavior is preserved exactly: multipart upload with
 // model/language/response_format fields, Bearer auth, 4xx fail-fast,
@@ -194,7 +228,9 @@ func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
 			}
 			lastErr = err
 			if attempt < maxRetries {
-				time.Sleep(backoffDelays[attempt])
+				if sleepErr := sleepCtx(ctx, backoffDelays[attempt]); sleepErr != nil {
+					return "", sleepErr
+				}
 				continue
 			}
 			return "", fmt.Errorf("request failed after %d retries: %w", attempt, lastErr)
@@ -229,7 +265,9 @@ func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
 			}
 			lastErr = apiErr
 			if attempt < maxRetries {
-				time.Sleep(backoffDelays[attempt])
+				if sleepErr := sleepCtx(ctx, backoffDelays[attempt]); sleepErr != nil {
+					return "", sleepErr
+				}
 				continue
 			}
 			return "", apiErr

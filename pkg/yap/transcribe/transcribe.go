@@ -114,6 +114,12 @@ func Register(name string, f Factory) {
 // ErrUnknownBackend when no backend is registered under that name.
 // The returned error lists every currently registered backend to aid
 // diagnostics.
+//
+// pkg/yap/transform.Get has the same shape and the same error
+// formatting; if you change the error format here you must also
+// update transform.Get to keep them in sync. The duplication is
+// intentional — extracting a generic registry would couple the two
+// otherwise-independent backend lists.
 func Get(name string) (Factory, error) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()

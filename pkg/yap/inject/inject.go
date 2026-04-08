@@ -11,6 +11,7 @@ package inject
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 )
@@ -78,9 +79,13 @@ const (
 )
 
 // String returns a stable lowercase identifier for the AppType used in
-// audit logs, app-override matching, and debugging output.
+// audit logs, app-override matching, and debugging output. Unknown
+// values render as AppType(N) so a missing enum addition surfaces in
+// audit logs instead of silently aliasing to "generic".
 func (a AppType) String() string {
 	switch a {
+	case AppGeneric:
+		return "generic"
 	case AppTerminal:
 		return "terminal"
 	case AppElectron:
@@ -88,7 +93,7 @@ func (a AppType) String() string {
 	case AppBrowser:
 		return "browser"
 	default:
-		return "generic"
+		return fmt.Sprintf("AppType(%d)", int(a))
 	}
 }
 

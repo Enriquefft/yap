@@ -99,9 +99,12 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 //
 // Callers that want graceful degradation (the daemon startup path,
 // `yap record`) should use NewTransformerWithFallback and supply a
-// live Notifier.
+// live Notifier plus the user's stream_partials preference.
 func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
-	return NewTransformerWithFallback(tc, nil)
+	// streamPartials is irrelevant when notifier is nil — wrapping is
+	// skipped either way — so we pass false here to keep the API
+	// minimal.
+	return NewTransformerWithFallback(tc, nil, false)
 }
 
 // NewTransformerWithFallback builds a Transformer per the on-disk
@@ -113,9 +116,18 @@ func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 //   - transform.enabled is true
 //   - the configured backend is non-trivial (not "passthrough")
 //   - a non-nil notifier was supplied
+//   - streamPartials is false
 //
 // When any of those conditions is false the primary transformer is
-// returned directly. This preserves Phase 7's public API for the
+// returned directly. The streamPartials check is the streaming
+// escape hatch: the fallback decorator buffers the primary's output
+// and delivers it atomically (see pkg/yap/transform/fallback/doc.go),
+// which would defeat the partial-injection promise the user opted
+// into via general.stream_partials. Callers that want both
+// streaming partials AND graceful fallback have to pick one — and
+// the user picked streaming.
+//
+// The nil-notifier branch preserves Phase 7's public API for the
 // CLI's debug `yap transform` command, which intentionally passes a
 // nil notifier to see real errors.
 //
@@ -131,6 +143,7 @@ func NewTransformer(tc pcfg.TransformConfig) (transform.Transformer, error) {
 func NewTransformerWithFallback(
 	tc pcfg.TransformConfig,
 	notifier platform.Notifier,
+	streamPartials bool,
 ) (transform.Transformer, error) {
 	name := tc.Backend
 	if !tc.Enabled || name == "" {
@@ -151,6 +164,28 @@ func NewTransformerWithFallback(
 	}
 
 	if name == "passthrough" || notifier == nil {
+		return primary, nil
+	}
+
+	// streamPartials skips fallback wrapping — see the function
+	// comment for the rationale. The user opted into partial
+	// injection and the buffered fallback decorator would defeat
+	// that promise. We still run the health probe so a misconfigured
+	// backend surfaces a notification and swaps to passthrough at
+	// startup time.
+	if streamPartials {
+		if checker, ok := primary.(transform.Checker); ok {
+			checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := checker.HealthCheck(checkCtx)
+			cancel()
+			if err != nil {
+				notifier.Notify(
+					"yap: transform backend unreachable",
+					fmt.Sprintf("%s: %v — falling back to passthrough", name, err),
+				)
+				return passthroughTransformer()
+			}
+		}
 		return primary, nil
 	}
 
@@ -357,8 +392,14 @@ func Run(cfg *config.Config, deps Deps) error {
 	// decorator that falls back to passthrough on primary failure
 	// and raises a user-visible notification. A startup health probe
 	// is issued synchronously inside NewTransformerWithFallback when
-	// the backend supports transform.Checker.
-	transformer, err := NewTransformerWithFallback(cfg.Transform, deps.Platform.Notifier)
+	// the backend supports transform.Checker. When the user opted
+	// into stream_partials the wrapping is skipped — the buffered
+	// fallback decorator would defeat the partial-injection promise.
+	transformer, err := NewTransformerWithFallback(
+		cfg.Transform,
+		deps.Platform.Notifier,
+		cfg.General.StreamPartials,
+	)
 	if err != nil {
 		return fmt.Errorf("build transformer: %w", err)
 	}

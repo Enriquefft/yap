@@ -384,6 +384,76 @@ func TestImplementsCloser(t *testing.T) {
 	var _ io.Closer = (*Backend)(nil)
 }
 
+// TestTerminate_WedgedSubprocessIsBounded asserts the C6 fix: when
+// the kernel wedges and waitDone never fires, the post-SIGKILL wait
+// times out at shutdownGraceful instead of blocking the daemon
+// shutdown forever. We synthesize a "wedged" child by handing the
+// helper a waitDone channel that is never closed; the function must
+// return within ~2*shutdownGraceful (SIGTERM grace + post-SIGKILL
+// detach window).
+func TestTerminate_WedgedSubprocessIsBounded(t *testing.T) {
+	wedged := make(chan struct{}) // never closed — simulates wedged kernel
+	var sigtermCalled, sigkillCalled int32
+
+	start := time.Now()
+	terminate(
+		wedged,
+		func() { atomic.AddInt32(&sigtermCalled, 1) },
+		func() { atomic.AddInt32(&sigkillCalled, 1) },
+		1234,
+	)
+	elapsed := time.Since(start)
+
+	// The function MUST return within (SIGTERM grace) + (post-Kill
+	// detach window) + a small slack. Without the C6 fix it would
+	// block forever on the bare <-waitDone receive.
+	upper := 2*shutdownGraceful + 500*time.Millisecond
+	if elapsed > upper {
+		t.Errorf("terminate elapsed = %v, want < %v (post-SIGKILL wait must be bounded)", elapsed, upper)
+	}
+	// Lower bound: at least the SIGTERM grace, since waitDone never
+	// fires.
+	if elapsed < shutdownGraceful {
+		t.Errorf("terminate returned in %v, want >= %v (SIGTERM grace must elapse)", elapsed, shutdownGraceful)
+	}
+	if atomic.LoadInt32(&sigtermCalled) != 1 {
+		t.Errorf("sigterm called %d times, want 1", sigtermCalled)
+	}
+	if atomic.LoadInt32(&sigkillCalled) != 1 {
+		t.Errorf("sigkill called %d times, want 1", sigkillCalled)
+	}
+}
+
+// TestTerminate_GracefulShutdown asserts the happy path: SIGTERM
+// elicits an exit (waitDone closes during the grace window) and the
+// helper returns immediately without escalating to SIGKILL.
+func TestTerminate_GracefulShutdown(t *testing.T) {
+	wait := make(chan struct{})
+	var sigkillCalled int32
+
+	go func() {
+		// Simulate the subprocess exiting promptly after SIGTERM.
+		time.Sleep(20 * time.Millisecond)
+		close(wait)
+	}()
+
+	start := time.Now()
+	terminate(
+		wait,
+		func() {}, // SIGTERM no-op for the simulation
+		func() { atomic.AddInt32(&sigkillCalled, 1) },
+		1234,
+	)
+	elapsed := time.Since(start)
+
+	if elapsed > shutdownGraceful {
+		t.Errorf("graceful path elapsed = %v, want < %v", elapsed, shutdownGraceful)
+	}
+	if atomic.LoadInt32(&sigkillCalled) != 0 {
+		t.Errorf("sigkill called %d times, want 0 (graceful path should not escalate)", sigkillCalled)
+	}
+}
+
 // TestSpawnReadiness_TimesOut exercises the production spawn function
 // against a binary that exits immediately. The spawn must surface an
 // error rather than hang.

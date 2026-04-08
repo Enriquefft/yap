@@ -10,14 +10,24 @@ import (
 )
 
 func TestNewDefaultChunks(t *testing.T) {
+	// The default chunk sequence is observable through Transcribe
+	// rather than a public field — see mock.go for the rationale.
 	b := mock.New()
-	if len(b.Chunks) != 1 {
-		t.Fatalf("default chunks: got %d, want 1", len(b.Chunks))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
 	}
-	if !b.Chunks[0].IsFinal {
+	var got []transcribe.TranscriptChunk
+	for c := range ch {
+		got = append(got, c)
+	}
+	if len(got) != 1 {
+		t.Fatalf("default chunks: got %d, want 1", len(got))
+	}
+	if !got[0].IsFinal {
 		t.Errorf("default chunk IsFinal=false, want true")
 	}
-	if b.Chunks[0].Text == "" {
+	if got[0].Text == "" {
 		t.Error("default chunk text is empty")
 	}
 }

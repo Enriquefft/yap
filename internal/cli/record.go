@@ -104,8 +104,15 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	// Phase 8: wrap the configured transform backend in a fallback
 	// decorator so `yap record --transform` degrades gracefully when
 	// the backend is unreachable. The platform notifier is the same
-	// one the daemon uses, so the user sees the same toast.
-	transformer, err := daemon.NewTransformerWithFallback(eff.Transform, p.Notifier)
+	// one the daemon uses, so the user sees the same toast. When the
+	// user opted into stream_partials the wrapping is skipped — the
+	// buffered fallback decorator would defeat the partial-injection
+	// promise.
+	transformer, err := daemon.NewTransformerWithFallback(
+		eff.Transform,
+		p.Notifier,
+		eff.General.StreamPartials,
+	)
 	if err != nil {
 		return fmt.Errorf("record: build transformer: %w", err)
 	}

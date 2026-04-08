@@ -164,6 +164,42 @@ func TestValidate_TableDriven(t *testing.T) {
 			},
 			validator: knownKeys,
 		},
+		// F7: schemeless / hostless / whitespace URLs must be rejected.
+		{
+			name: "custom backend with schemeless host (no host part)",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "custom"
+				c.Transcription.APIURL = "https://"
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.api_url",
+		},
+		{
+			name: "custom backend with embedded space",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "custom"
+				c.Transcription.APIURL = "https://example.com/with spaces/foo"
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.api_url",
+		},
+		{
+			name: "custom backend with trailing newline",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "custom"
+				c.Transcription.APIURL = "https://example.com/v1\n"
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.api_url",
+		},
+		{
+			name: "custom backend http url",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "custom"
+				c.Transcription.APIURL = "http://localhost:8080/v1"
+			},
+			validator: knownKeys,
+		},
 		{
 			name: "whisperlocal needs no url",
 			mutate: func(c *config.Config) {
@@ -229,6 +265,60 @@ func TestValidate_TableDriven(t *testing.T) {
 				}
 			},
 			validator: knownKeys,
+		},
+		// F8: app_overrides[].strategy must be one of the documented
+		// strategies. Each valid value goes through the validator;
+		// each typo is rejected.
+		{
+			name: "app override strategy osc52",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "kitty", Strategy: "osc52"}}
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "app override strategy keystroke",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "code", Strategy: "keystroke"}}
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "app override strategy tmux",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "tmux-session", Strategy: "tmux"}}
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "app override strategy wtype",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "wtype"}}
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "app override strategy xdotool",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "xdotool"}}
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "app override strategy typo (clipoard)",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "firefox", Strategy: "clipoard"}}
+			},
+			validator: knownKeys,
+			wantErr:   "injection.app_overrides[0].strategy",
+		},
+		{
+			name: "app override strategy typo (osc-52)",
+			mutate: func(c *config.Config) {
+				c.Injection.AppOverrides = []config.AppOverride{{Match: "kitty", Strategy: "osc-52"}}
+			},
+			validator: knownKeys,
+			wantErr:   "injection.app_overrides[0].strategy",
 		},
 	}
 

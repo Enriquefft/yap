@@ -30,6 +30,18 @@
 // Library consumers that want to skip the registry can construct a
 // Backend directly via New.
 //
+// # Synthetic IsFinal terminator
+//
+// When the upstream Ollama server closes the stream without
+// emitting an explicit "done": true frame (a misbehaving server, a
+// dropped connection, or a model that ran out of context), the
+// backend emits a synthetic transcribe.TranscriptChunk with
+// IsFinal=true and an empty Text so the consumer always sees a
+// terminal chunk. Consumers that filter out empty-Text chunks must
+// preserve the IsFinal=true marker — otherwise they will silently
+// drop the stream-end signal and the surrounding pipeline will
+// never see the close.
+//
 // This package holds zero mutable package-level state; all runtime
 // state lives on Backend.
 package local

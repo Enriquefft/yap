@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -10,6 +11,12 @@ import (
 // Get resolves a dot-notation key against cfg and returns the value as
 // a string suitable for CLI output. Slice elements are addressable via
 // a numeric index, e.g. "injection.app_overrides.0.match".
+//
+// Leaf paths return the scalar value formatted for human consumption.
+// Non-leaf struct paths return a JSON-encoded representation of the
+// section so the output is parseable and stable across schema field
+// reorders. Slice paths return "<N items>" so users see the length
+// and know to drill in with an index.
 func Get(cfg *Config, key string) (string, error) {
 	if cfg == nil {
 		return "", fmt.Errorf("config: Get on nil *Config")
@@ -21,7 +28,7 @@ func Get(cfg *Config, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatValue(v), nil
+	return formatValue(v)
 }
 
 // Set parses value into the type of the field at key and assigns it.
@@ -123,20 +130,32 @@ func assign(v reflect.Value, value string) error {
 }
 
 // formatValue stringifies v for CLI output. Slices report their
-// length so users know to drill in with an index.
-func formatValue(v reflect.Value) string {
+// length so users know to drill in with an index. Structs are
+// JSON-encoded so the output is parseable and stable across field
+// reorders — scripted callers can pipe `yap config get general` into
+// jq.
+func formatValue(v reflect.Value) (string, error) {
 	switch v.Kind() {
 	case reflect.String:
-		return v.String()
+		return v.String(), nil
 	case reflect.Bool:
-		return strconv.FormatBool(v.Bool())
+		return strconv.FormatBool(v.Bool()), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconv.FormatInt(v.Int(), 10)
+		return strconv.FormatInt(v.Int(), 10), nil
 	case reflect.Float32, reflect.Float64:
-		return strconv.FormatFloat(v.Float(), 'f', -1, 64)
+		return strconv.FormatFloat(v.Float(), 'f', -1, 64), nil
 	case reflect.Slice:
-		return fmt.Sprintf("<%d items>", v.Len())
+		return fmt.Sprintf("<%d items>", v.Len()), nil
+	case reflect.Struct:
+		// JSON over fmt.Sprintf("%v") because the latter depends on
+		// field declaration order — a future field rename or reorder
+		// would silently break tooling that scrapes the output.
+		out, err := json.Marshal(v.Interface())
+		if err != nil {
+			return "", fmt.Errorf("config: marshal struct value: %w", err)
+		}
+		return string(out), nil
 	default:
-		return fmt.Sprintf("%v", v.Interface())
+		return fmt.Sprintf("%v", v.Interface()), nil
 	}
 }

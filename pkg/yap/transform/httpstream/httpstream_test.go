@@ -17,7 +17,7 @@ import (
 // newTestClient returns a Client wired to the supplied server with a
 // tight retry policy (no backoff) so tests run quickly.
 func newTestClient(server *httptest.Server) *httpstream.Client {
-	c := httpstream.NewClient(5 * time.Second)
+	c := httpstream.NewClient(5*time.Second, "httpstream-test/0.0")
 	c.HTTP = server.Client()
 	c.MaxRetries = 3
 	c.Backoff = []time.Duration{0, 0, 0}
@@ -173,7 +173,7 @@ func TestPostJSON_5xx_Exhausted(t *testing.T) {
 // TestPostJSON_TransportError_Retries asserts that a transport failure
 // (connection refused) is retried.
 func TestPostJSON_TransportError_Retries(t *testing.T) {
-	c := httpstream.NewClient(1 * time.Second)
+	c := httpstream.NewClient(1*time.Second, "httpstream-test/0.0")
 	c.MaxRetries = 2
 	c.Backoff = []time.Duration{0, 0}
 
@@ -214,10 +214,39 @@ func TestPostJSON_ContextCancelled(t *testing.T) {
 	}
 }
 
+// TestPostJSON_ErrorBodyBounded asserts the C7 fix: an upstream that
+// returns a multi-megabyte 5xx body does not cause unbounded memory
+// growth per retry attempt. The error string includes only the first
+// 64 KiB of the body even when the server sends much more.
+func TestPostJSON_ErrorBodyBounded(t *testing.T) {
+	// 1 MiB body — well above the 64 KiB cap.
+	const bodySize = 1024 * 1024
+	huge := strings.Repeat("A", bodySize)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(huge))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	c.MaxRetries = 0
+	_, err := c.PostJSON(context.Background(), srv.URL, "", struct{}{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	// The recorded body in the error string must be <= the cap.
+	// We allow a generous slack for the surrounding "httpstream: http
+	// 500: " prefix.
+	const cap = 64*1024 + 256
+	if got := len(err.Error()); got > cap {
+		t.Errorf("error string length = %d, want <= %d (LimitReader must cap body)", got, cap)
+	}
+}
+
 // TestPostJSON_InvalidJSONPayload asserts that a payload that cannot
 // be marshalled (a channel, for example) produces an immediate error.
 func TestPostJSON_InvalidJSONPayload(t *testing.T) {
-	c := httpstream.NewClient(1 * time.Second)
+	c := httpstream.NewClient(1*time.Second, "httpstream-test/0.0")
 	_, err := c.PostJSON(context.Background(), "http://example.invalid", "", make(chan int))
 	if err == nil {
 		t.Fatal("expected error")

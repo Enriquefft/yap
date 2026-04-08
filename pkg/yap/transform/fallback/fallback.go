@@ -68,36 +68,33 @@ func (t *Transformer) Transform(ctx context.Context, in <-chan transcribe.Transc
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
 		defer close(out)
-		var ok bool
-		ok = t.forwardPrimary(ctx, primaryOut, out, buffered)
-		if !ok {
-			return
-		}
+		t.forwardPrimary(ctx, primaryOut, out, buffered)
 	}()
 	return out, nil
 }
 
 // forwardPrimary copies the primary stream through to out. On the
 // primary's error chunk, OnError fires and the buffered input is
-// replayed through the fallback. Returns true on completion (success
-// or fallback), false on ctx cancellation.
+// replayed through the fallback.
 //
-// Note: primary emission is staged into a slice and replayed only
-// after the primary stream terminates cleanly. That way a primary
-// error chunk mid-stream triggers a clean fallback instead of a
-// half-transformed, half-raw output.
+// Primary emission is staged into a slice and replayed only after the
+// primary stream terminates cleanly. That way a primary error chunk
+// mid-stream triggers a clean fallback instead of a half-transformed,
+// half-raw output. The trade-off is that no primary chunk is emitted
+// downstream until the primary completes successfully — see the
+// package doc for the rationale and the daemon-side stream_partials
+// escape hatch for callers that want streaming over recovery.
 func (t *Transformer) forwardPrimary(
 	ctx context.Context,
 	primaryOut <-chan transcribe.TranscriptChunk,
 	out chan<- transcribe.TranscriptChunk,
 	buffered []transcribe.TranscriptChunk,
-) bool {
+) {
 	var staged []transcribe.TranscriptChunk
-	var primaryErr error
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return
 		case chunk, open := <-primaryOut:
 			if !open {
 				// Primary finished without error: drain staged
@@ -105,49 +102,57 @@ func (t *Transformer) forwardPrimary(
 				for _, c := range staged {
 					select {
 					case <-ctx.Done():
-						return false
+						return
 					case out <- c:
 					}
 				}
-				return true
+				return
 			}
 			if chunk.Err != nil {
-				primaryErr = chunk.Err
-				// Drain the rest of primaryOut so its goroutine
-				// can terminate cleanly, but discard what comes
-				// next — partial output is not mixed with fallback
-				// output.
+				// Primary failed mid-stream. Drain the rest of
+				// primaryOut so its goroutine can terminate cleanly,
+				// then run the fallback. Partial output is not mixed
+				// with fallback output.
 				drainRemaining(ctx, primaryOut)
-				break
+				t.runFallback(ctx, chunk.Err, buffered, out)
+				return
 			}
 			staged = append(staged, chunk)
-			continue
 		}
-		break
 	}
+}
 
-	// Primary failed mid-stream. Run the fallback.
+// runFallback notifies of the primary failure, invokes the fallback
+// transformer with a fresh replay of the buffered input, and forwards
+// the fallback's output to out. On a fallback factory error a single
+// terminal error chunk is emitted instead so the consumer always sees
+// the fallback's verdict.
+func (t *Transformer) runFallback(
+	ctx context.Context,
+	primaryErr error,
+	buffered []transcribe.TranscriptChunk,
+	out chan<- transcribe.TranscriptChunk,
+) {
 	t.notify(primaryErr)
 	fbOut, err := t.Fallback.Transform(ctx, replay(buffered))
 	if err != nil {
 		select {
 		case <-ctx.Done():
-			return false
 		case out <- transcribe.TranscriptChunk{IsFinal: true, Err: err}:
-			return true
 		}
+		return
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return
 		case chunk, open := <-fbOut:
 			if !open {
-				return true
+				return
 			}
 			select {
 			case <-ctx.Done():
-				return false
+				return
 			case out <- chunk:
 			}
 		}

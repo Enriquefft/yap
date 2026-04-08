@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,23 @@ func TestClientRequiresTranscriber(t *testing.T) {
 	_, err := yap.New()
 	if err == nil {
 		t.Fatal("yap.New with no transcriber should fail")
+	}
+}
+
+// TestClientRejectsNilTransformer asserts the C15 fix: explicitly
+// passing a nil Transformer to WithTransformer is a programming
+// error and New surfaces it. The omission case (no WithTransformer
+// at all) still defaults to passthrough — that is the documented
+// behavior and the existing
+// TestClientDefaultTransformerIsPassthrough test locks it down.
+func TestClientRejectsNilTransformer(t *testing.T) {
+	backend := mock.New()
+	_, err := yap.New(yap.WithTranscriber(backend), yap.WithTransformer(nil))
+	if err == nil {
+		t.Fatal("expected error when WithTransformer(nil) is called explicitly")
+	}
+	if !strings.Contains(err.Error(), "WithTransformer") {
+		t.Errorf("error should mention WithTransformer, got %v", err)
 	}
 }
 
@@ -243,6 +261,148 @@ var _ transform.Transformer = upperTransformer{}
 // every test above) satisfies io.Reader. This keeps the io import
 // honest and documents the interface the public API consumes.
 var _ io.Reader = (*bytes.Reader)(nil)
+
+// TestTranscribeAllPreservesChunkMetadata exercises the C2 fix:
+// TranscribeAll returns every chunk with full metadata (Language,
+// IsFinal, Text) preserved, so callers that need detected language
+// or per-chunk timing have a batch entry point that does not throw
+// the metadata away.
+func TestTranscribeAllPreservesChunkMetadata(t *testing.T) {
+	chunks := []transcribe.TranscriptChunk{
+		{Text: "hello ", Language: "en"},
+		{Text: "world", Language: "en", IsFinal: true},
+	}
+	backend := mock.New(chunks...)
+	client, err := yap.New(yap.WithTranscriber(backend))
+	if err != nil {
+		t.Fatalf("yap.New: %v", err)
+	}
+	got, err := client.TranscribeAll(context.Background(), bytes.NewReader(nil))
+	if err != nil {
+		t.Fatalf("TranscribeAll: %v", err)
+	}
+	if len(got) != len(chunks) {
+		t.Fatalf("TranscribeAll returned %d chunks, want %d", len(got), len(chunks))
+	}
+	if got[0].Text != "hello " || got[0].Language != "en" || got[0].IsFinal {
+		t.Errorf("chunk[0] = %+v", got[0])
+	}
+	if got[1].Text != "world" || got[1].Language != "en" || !got[1].IsFinal {
+		t.Errorf("chunk[1] = %+v", got[1])
+	}
+}
+
+// TestTranscribeAllPropagatesError verifies the C2 contract for
+// errors: TranscribeAll returns the chunks accumulated before the
+// error plus the error itself, so callers can decide whether to
+// surface partial results.
+func TestTranscribeAllPropagatesError(t *testing.T) {
+	sentinel := errors.New("boom")
+	chunks := []transcribe.TranscriptChunk{
+		{Text: "first"},
+		{Err: sentinel, IsFinal: true},
+	}
+	backend := mock.New(chunks...)
+	client, err := yap.New(yap.WithTranscriber(backend))
+	if err != nil {
+		t.Fatalf("yap.New: %v", err)
+	}
+	got, gotErr := client.TranscribeAll(context.Background(), bytes.NewReader(nil))
+	if !errors.Is(gotErr, sentinel) {
+		t.Errorf("TranscribeAll err = %v, want %v", gotErr, sentinel)
+	}
+	if len(got) != 1 || got[0].Text != "first" {
+		t.Errorf("partial chunks = %+v, want one chunk with Text=first", got)
+	}
+}
+
+// slowTransformer sleeps between chunks so the C14 test can cancel
+// the context mid-pipeline and observe the cancellation latch
+// without racing the transcriber.
+type slowTransformer struct {
+	delay time.Duration
+}
+
+func (s slowTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+	out := make(chan transcribe.TranscriptChunk)
+	go func() {
+		defer close(out)
+		for c := range in {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(s.delay):
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case out <- c:
+			}
+		}
+	}()
+	return out, nil
+}
+
+// TestClientCancellationDuringTransform asserts the streaming
+// contract: cancelling ctx while the transformer is mid-stream
+// surfaces as a context.Canceled error from Transcribe and does not
+// leak goroutines beyond a small delta. The C14 finding asks for
+// this guarantee — without it, a stuck transformer could trap a
+// recording forever.
+func TestClientCancellationDuringTransform(t *testing.T) {
+	chunks := []transcribe.TranscriptChunk{
+		{Text: "first"},
+		{Text: "second"},
+		{Text: "third"},
+		{Text: "fourth", IsFinal: true},
+	}
+	backend := mock.New(chunks...)
+	tr := slowTransformer{delay: 200 * time.Millisecond}
+	client, err := yap.New(yap.WithTranscriber(backend), yap.WithTransformer(tr))
+	if err != nil {
+		t.Fatalf("yap.New: %v", err)
+	}
+
+	// Snapshot the goroutine count before the call so we can
+	// detect a leak after.
+	before := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	doneErr := make(chan error, 1)
+	go func() {
+		_, err := client.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+		doneErr <- err
+	}()
+
+	// Let one or two chunks pass through, then cancel.
+	time.Sleep(350 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-doneErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Transcribe err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Transcribe did not return within 2s of cancel")
+	}
+
+	// Allow background goroutines to drain. We are looking for a
+	// regression where the transformer goroutine wedges, not for an
+	// exact count match — runtime.NumGoroutine includes the test
+	// runner's own goroutines plus anything other tests left
+	// behind.
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if delta := runtime.NumGoroutine() - before; delta <= 2 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if delta := runtime.NumGoroutine() - before; delta > 2 {
+		t.Errorf("goroutine delta after cancel = %d, want <= 2", delta)
+	}
+}
 
 // TestCtxCancellationSurfacesAsError exercises the cancellation path
 // by cancelling the context before Transcribe runs.

@@ -91,6 +91,44 @@ func TestRegisterDuplicatePanics(t *testing.T) {
 	transform.Register(name, fakeFactory)
 }
 
+// TestRegistry_NonCheckerBackendWorks asserts the C19 fix: a backend
+// that does NOT implement Checker is still usable end-to-end via
+// the registry. The fakeTransformer in this file deliberately omits
+// HealthCheck; the test confirms callers that type-assert on
+// Checker get ok=false (so they can skip the probe) and the
+// returned Transformer still emits chunks.
+func TestRegistry_NonCheckerBackendWorks(t *testing.T) {
+	name := uniqueName(t, "nochecker")
+	transform.Register(name, fakeFactory)
+
+	factory, err := transform.Get(name)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", name, err)
+	}
+	tr, err := factory(transform.Config{})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+
+	// The Checker assertion must fail cleanly — fakeTransformer
+	// does not implement HealthCheck.
+	if _, ok := tr.(transform.Checker); ok {
+		t.Fatal("fakeTransformer must NOT implement transform.Checker; this test depends on that")
+	}
+
+	// The Transformer must still satisfy the basic Transform
+	// contract: pass an empty input channel through to a closed
+	// output channel.
+	in := make(chan transcribe.TranscriptChunk)
+	close(in)
+	out, err := tr.Transform(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Transform: %v", err)
+	}
+	for range out {
+	}
+}
+
 func TestBackendsSorted(t *testing.T) {
 	names := []string{
 		uniqueName(t, "c"),

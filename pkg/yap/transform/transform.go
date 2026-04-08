@@ -86,6 +86,10 @@ func Register(name string, f Factory) {
 
 // Get returns the factory for name. Wraps ErrUnknownBackend when no
 // backend is registered under that name.
+//
+// pkg/yap/transcribe.Get has the same shape and the same error
+// formatting; if you change the error format here you must also
+// update transcribe.Get to keep them in sync.
 func Get(name string) (Factory, error) {
 	registryMu.RLock()
 	defer registryMu.RUnlock()

@@ -16,13 +16,13 @@ import (
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 )
 
-// Backend is the deterministic test Transcriber. Chunks is replayed
-// verbatim on every call; the final element should have IsFinal=true.
-// Chunks is a public field so tests can tweak individual cases
-// (partial sequences, error chunks, multi-chunk streams) without
-// paying for a builder API.
+// Backend is the deterministic test Transcriber. The chunk sequence
+// is set once via New (or the registry factory) and not exposed for
+// post-construction mutation: the goroutine spawned by Transcribe
+// reads from the slice, so post-Transcribe mutation would be a data
+// race. Tests that need a different sequence build a new Backend.
 type Backend struct {
-	Chunks []transcribe.TranscriptChunk
+	chunks []transcribe.TranscriptChunk
 }
 
 // New constructs a Backend that will emit the given chunks. If no
@@ -35,7 +35,11 @@ func New(chunks ...transcribe.TranscriptChunk) *Backend {
 			{Text: "mock transcription", IsFinal: true},
 		}
 	}
-	return &Backend{Chunks: chunks}
+	// Defensive copy so the caller can reuse / mutate their slice
+	// after construction without affecting Backend behavior.
+	cp := make([]transcribe.TranscriptChunk, len(chunks))
+	copy(cp, chunks)
+	return &Backend{chunks: cp}
 }
 
 // NewFactory adapts New into the transcribe.Factory signature for the
@@ -52,10 +56,10 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 	if audio != nil {
 		_, _ = io.Copy(io.Discard, audio)
 	}
-	out := make(chan transcribe.TranscriptChunk, len(b.Chunks))
+	out := make(chan transcribe.TranscriptChunk, len(b.chunks))
 	go func() {
 		defer close(out)
-		for _, c := range b.Chunks {
+		for _, c := range b.chunks {
 			select {
 			case <-ctx.Done():
 				return

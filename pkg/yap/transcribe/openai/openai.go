@@ -1,19 +1,3 @@
-// Package openai implements a generic OpenAI-compatible speech-to-text
-// backend. Any server that speaks the /v1/audio/transcriptions protocol
-// (OpenAI itself, Groq, vLLM, llama.cpp server, litellm, Fireworks,
-// ...) is a valid target. Callers must provide Config.APIURL — this
-// backend does not substitute a default endpoint because there is no
-// universal default for "OpenAI-compatible."
-//
-// Wire behavior, retry semantics, and request shape are identical to
-// the Groq backend. The packages are kept separate so each can pick
-// its own defaults and so future divergence (e.g. Groq-specific
-// response fields) does not cross-contaminate.
-//
-// Importing this package for side effects registers the backend under
-// the name "openai" in the transcribe registry:
-//
-//	import _ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
 package openai
 
 import (
@@ -50,9 +34,17 @@ type Backend struct {
 	client *http.Client
 }
 
+// DefaultTimeout is the per-request HTTP timeout substituted when
+// cfg.Timeout is zero or negative. Without it a stalled response
+// would hang the caller forever — &http.Client{Timeout: 0} disables
+// the timeout entirely. 30 s matches the rest of yap's transcription
+// HTTP defaults.
+const DefaultTimeout = 30 * time.Second
+
 // New builds an OpenAI-compatible backend from cfg. APIURL, APIKey,
 // and Model are all required — this backend has no sensible default
-// endpoint.
+// endpoint. When cfg.HTTPClient is nil, a fresh *http.Client is built
+// using cfg.Timeout (or DefaultTimeout when cfg.Timeout <= 0).
 func New(cfg transcribe.Config) (*Backend, error) {
 	if cfg.APIURL == "" {
 		return nil, errors.New("openai: Config.APIURL is required")
@@ -62,6 +54,9 @@ func New(cfg transcribe.Config) (*Backend, error) {
 	}
 	if cfg.Model == "" {
 		return nil, errors.New("openai: Config.Model is required")
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
 	}
 	client := cfg.HTTPClient
 	if client == nil {
@@ -124,6 +119,28 @@ func send(ctx context.Context, out chan<- transcribe.TranscriptChunk, chunk tran
 	}
 }
 
+// sleepCtx sleeps for d or returns ctx.Err when the context is
+// cancelled. Zero d returns immediately. Used by the retry backoff
+// loop so a caller-cancelled ctx mid-backoff returns within
+// microseconds rather than waiting for the full delay. The
+// transform-side pkg/yap/transform/httpstream and the sibling
+// pkg/yap/transcribe/groq packages have the same helper; the small
+// duplication is intentional rather than introducing a shared
+// internal package.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 // post POSTs a multipart form to the configured endpoint and returns
 // the decoded transcription text. Retries on 5xx and client-timeout
 // errors with the same backoff as the Groq backend.
@@ -182,7 +199,9 @@ func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
 			}
 			lastErr = err
 			if attempt < maxRetries {
-				time.Sleep(backoffDelays[attempt])
+				if sleepErr := sleepCtx(ctx, backoffDelays[attempt]); sleepErr != nil {
+					return "", sleepErr
+				}
 				continue
 			}
 			return "", fmt.Errorf("request failed after %d retries: %w", attempt, lastErr)
@@ -217,7 +236,9 @@ func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
 			}
 			lastErr = apiErr
 			if attempt < maxRetries {
-				time.Sleep(backoffDelays[attempt])
+				if sleepErr := sleepCtx(ctx, backoffDelays[attempt]); sleepErr != nil {
+					return "", sleepErr
+				}
 				continue
 			}
 			return "", apiErr
