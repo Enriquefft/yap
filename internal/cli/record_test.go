@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adrg/xdg"
 	"github.com/hybridz/yap/internal/platform"
 	"github.com/hybridz/yap/pkg/yap/inject"
 )
@@ -89,6 +90,7 @@ func withRecordConfig(t *testing.T) {
 	t.Setenv("YAP_TRANSFORM_API_KEY", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	xdg.Reload()
 	writeConfigFile(t, cfgFile, `
 [general]
   max_duration = 1

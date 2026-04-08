@@ -83,6 +83,28 @@
 
         # Development shell: provides all tools needed for local development.
         # Usage: nix develop   (or direnv with use flake)
+        # Static-only dev shell: provides a musl-gcc wrapper so
+        # `make build-static` works from this shell.  Separated from
+        # the default dev shell because adding musl to the default
+        # shell's NIX_LDFLAGS causes musl+glibc mixing in test binaries
+        # which segfaults `go test`.
+        # Usage: nix develop .#static
+        devShells.static = let
+          muslCC = pkgs.pkgsStatic.stdenv.cc;
+        in pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            go
+            pkg-config
+            (writeShellScriptBin "musl-gcc" ''
+              exec ${muslCC}/bin/${muslCC.targetPrefix}gcc "$@"
+            '')
+          ];
+          shellHook = ''
+            echo "yap static dev shell — musl toolchain active"
+            echo "  make build-static  — static musl build"
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             go
@@ -102,9 +124,9 @@
 
           shellHook = ''
             echo "yap dev shell — go $(go version | awk '{print $3}')"
-            echo "  make build         — dynamic build"
-            echo "  make build-static  — static musl build"
-            echo "  make build-check   — static build + ldd verify"
+            echo "  make build              — dynamic build"
+            echo "  nix build .#static      — static musl build"
+            echo "  nix develop .#static    — shell with musl-gcc for make build-static"
           '';
         };
       }) // {

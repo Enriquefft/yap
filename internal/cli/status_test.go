@@ -27,6 +27,7 @@ func TestStatus_NoDaemon(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	xdg.Reload()
 	writeConfigFile(t, cfgFile, `[general]
   hotkey = "KEY_RIGHTCTRL"
   mode = "toggle"

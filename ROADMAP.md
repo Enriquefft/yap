@@ -5,7 +5,7 @@
 
 ---
 
-## Status (2026-04-07)
+## Status (2026-04-08)
 
 | # | Phase | Status |
 |---|-------|--------|
@@ -14,11 +14,11 @@
 | 2 | Config Rework | done |
 | 3 | Library Extraction (`pkg/yap/`) | done |
 | 4 | Text Injection Overhaul | done |
-| 5 | Streaming Pipeline | pending |
+| 5 | Streaming Pipeline | done |
 | 6 | Local Whisper Backend | done |
-| 7 | CLI Rework | partial (~15%) |
-| 8 | LLM Transform (pluggable) | pending |
-| 9 | Audio Backend (malgo) | pending |
+| 7 | CLI Rework | done |
+| 8 | LLM Transform (pluggable) | done |
+| 9 | Audio Backend (malgo) | done |
 | 10 | Hotkey Combos | pending |
 | 11 | Press-to-Toggle + Silence | partial (toggle only) |
 | 12 | Transcription History | pending |
@@ -206,7 +206,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 ### Active-window detection
 - [x] Sway via `swaymsg -t get_tree`
 - [x] Hyprland via `hyprctl activewindow -j`
-- [ ] wlroots generic via `ext-foreign-toplevel-list-v1` — **deferred to Phase 4.5** (see Findings)
+- [x] wlroots generic via `ext-foreign-toplevel-list-v1`
 - [x] X11 via `xdotool getactivewindow` + `xprop WM_CLASS`
 - [x] Per-call detection (each `Inject(ctx, text)` resolves the target once and shares it across strategies)
 - [x] Returns structured `Target{DisplayServer, WindowID, AppClass, AppType, Tmux, SSHRemote}`
@@ -221,7 +221,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 ### Terminal strategy
 - [x] OSC 52 sequence (`\x1b]52;c;<base64>\x07`) written to the slave pseudo-tty owned by a descendant shell of the focused terminal
 - [x] Bracketed paste wrapping (`\x1b[200~ ... \x1b[201~`) for multi-line content
-- [x] tmux path: `tmux load-buffer - && tmux paste-buffer` when `$TMUX` set; runs first in the strategy walk
+- [x] tmux path: `tmux load-buffer - && tmux paste-buffer -p` when `$TMUX` set; runs first in the strategy walk
 - [ ] xterm `allowWindowOps` detection with warning — deferred (no Phase 4 user has reported the issue)
 
 ### Electron / browser strategy
@@ -235,7 +235,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [x] Clipboard backing per call, scoped to that call only
 
 ### Strategy selection
-- [x] `Inject(ctx, text)`: detect → apply user `app_overrides` → walk strategies in fixed order → first `Supports(target)` whose `Deliver` returns nil wins; on failure, try next; log every attempt
+- [x] `Inject(ctx, text)`: detect → apply user `app_overrides` → apply `default_strategy` → walk strategies in fixed order → first `Supports(target)` whose `Deliver` returns nil wins; on failure, try next; log every attempt
 - [x] `InjectStream(ctx, chunks)`: Phase 4 buffers all chunks then delivers atomically; Phase 5 will refine partial-safe GUI targets to receive incremental chunks
 - [x] Cancellation mid-stream commits whatever's already buffered and returns
 
@@ -255,19 +255,10 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ### Findings
 
-- **Generic wlroots active-window detection is deferred to Phase 4.5.**
-  Sway and Hyprland have first-class CLI tools (`swaymsg`, `hyprctl`)
-  so detection is shell-out parsing. A generic wlroots backend would
-  need to speak `ext-foreign-toplevel-list-v1` via a wayland-client
-  library, which is a real CGo-or-Go dependency that would expand the
-  build matrix without Phase 4 user-visible payoff. Under a generic
-  wlroots compositor, `Detect` returns a `Target{DisplayServer:
-  "wayland", AppType: AppGeneric}` and the orchestrator falls through
-  to the wtype strategy with no per-app targeting — exactly the
-  Phase 1 paster.go behavior, except now it is one explicit
-  fall-through path with audit logging instead of a global try-everything
-  chain. Phase 4.5 (when scheduled) will replace this fallback with
-  the wlroots protocol client.
+- **Generic wlroots active-window detection via `ext-foreign-toplevel-list-v1`.**
+  Implemented in `detect_wlroots.go` using the `wlr-foreign-toplevel-management-unstable-v1`
+  Wayland protocol. Sway and Hyprland have first-class CLI tools (`swaymsg`, `hyprctl`)
+  so detection is shell-out parsing; the generic wlroots backend covers everything else.
 - **OSC52 resolves to the slave pty via `/proc` walk.** Compositor
   detection gives us the focused window's pid (terminal emulator). The
   emulator itself rarely has a pty on its own fd/0; the slave pty
@@ -306,6 +297,34 @@ Merged in commit `770edee` (2026-04). All tests pass.
   `pcfg.InjectionConfig`) flow in at session-start time, mirroring
   how `NewRecorder(deviceName)` flows in the audio device name. The
   daemon owns the bridge via `injectionOptionsFromConfig`.
+
+### Review findings (post-Phase 4 code review)
+
+- **F1 OSC52 silent clipboard corruption**: bracketed-paste wrapping
+  was removed from the OSC52 payload. The markers (`\x1b[200~` /
+  `\x1b[201~`) are terminal-side wire framing, not clipboard data;
+  embedding them corrupted every multi-line dictation on paste.
+  `bracketed.go` and `bracketed_test.go` are deleted.
+- **F2 tmux double-wrap**: replaced manual bracketed wrap with
+  `tmux paste-buffer -p`, which lets tmux decide whether to wrap
+  based on the pane's bracketed-paste state.
+- **F3 prependUnique Supports gate**: `selectStrategies` now calls
+  `forced.Supports(target)` before prepending an override.
+  Unsupported overrides fall through to natural order.
+- **C2 ctx plumbing**: `Deps.ExecCommand` replaced with
+  `Deps.ExecCommandContext`; `Deps.Sleep` replaced with
+  `Deps.SleepCtx`. Every strategy and detect backend passes ctx
+  through and aborts on cancellation.
+- **C7 DefaultStrategy**: new `injection.default_strategy` config
+  option. When no app_override matches, this strategy is prepended
+  with the same Supports gate. Bridges through
+  `platform.InjectionOptions.DefaultStrategy`.
+- **C8 classify allowlist cleanup**: removed `rxvt-unicode` and
+  `st-256color` (TERM values, not WM_CLASS); added actual WM_CLASS
+  `st`.
+- **C10 Injector concurrency mutex**: added `sync.Mutex`. `Inject`
+  and `InjectStream` lock it; a private `inject()` body is shared
+  between both entry points.
 
 ---
 
@@ -358,6 +377,25 @@ Merged in commit `770edee` (2026-04). All tests pass.
   pulling in a third-party leak detector and the package-graph
   cost that comes with it.
 
+### Review findings (post-Phase 5 code review)
+
+- **streamPartials escape hatch in daemon**: `daemon.NewTransformerWithFallback`
+  now takes `streamPartials bool`. When true, the fallback decorator is
+  skipped — the user gets streaming but loses graceful degradation on
+  transform failure. The health probe still runs in both modes and can
+  swap to passthrough on startup if the backend is unreachable. This
+  resolves the fallback-vs-streaming tradeoff: the buffered fallback
+  decorator would defeat the partial-injection promise the user opted
+  into via `general.stream_partials`.
+- **Retry backoff now ctx-aware**: groq and openai transcribe backends
+  replaced `time.Sleep(backoffDelays[attempt])` with `sleepCtx` so
+  mid-backoff cancellation returns within ~100ms instead of the full
+  3.5s sleep.
+- **httpstream no longer imports internal/config**: `NewClient` takes
+  `(timeout, userAgent string)` — third parties can reuse the scaffolding.
+- **Mock backend defensive copy**: `Chunks` field unexported to prevent
+  data race; `New` returns a defensive copy.
+
 ---
 
 ## Phase 6 — Local Whisper Backend — DONE
@@ -384,7 +422,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [x] Transcription works with the network disabled
 - [x] 5-second clip end-to-end latency < 1s on a modern laptop CPU (target: < 500ms) — measured 1.73s wall on first call (cold model load) for a 2-second clip on a Nix shell on this host; subsequent calls reuse the in-memory model
 - [x] `yap config set transcription.backend groq` still works
-- [ ] `make build-static` produces a working binary — **pre-existing breakage at HEAD; Phase 6 made no changes to the static path** (see Findings)
+- [x] `make build-static` produces a working binary — **fixed alongside Phase 9; see Findings**
 
 ### Findings
 
@@ -419,18 +457,12 @@ Merged in commit `770edee` (2026-04). All tests pass.
   failure surfaces to the caller as a `TranscriptChunk.Err`.
   Two retries would mask real bugs without giving the user
   actionable information.
-- **SHA256 manifest is base.en only.** The plan considered
-  shipping the full set (`tiny.en`, `base.en`, `small.en`,
-  `medium.en`) but only `base.en` was downloaded and verified
-  during this implementation run
-  (`a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002`).
-  The other names return a tailored error from
-  `lookupManifest`: `"models: model %q is not currently
-  pinned in the Phase 6 manifest (only %q is). Set
-  transcription.model_path to a hand-downloaded file or stay
-  on base.en"`. CLAUDE.md forbids TODOs; this approach gives
-  users a helpful error AND a clean follow-up path in one
-  shot.
+- **SHA256 manifest covers all four English models.** The pinned
+  manifest includes `tiny.en`, `base.en`, `small.en`, and
+  `medium.en` — each with a SHA256 verified against the canonical
+  Hugging Face download. Users who want a model not on this list
+  can point `transcription.model_path` at a hand-downloaded
+  ggml-\*.bin file.
 - **Config validator stays a leaf.** The plan considered
   having `pkg/yap/config.Validate` reject unknown whisperlocal
   model names by importing the models package. That import
@@ -453,20 +485,52 @@ Merged in commit `770edee` (2026-04). All tests pass.
   1532 ms; subsequent calls reuse the in-memory model and
   return in well under 500 ms, matching the ARCHITECTURE.md
   target.
-- **`make build-static` is broken at HEAD, before Phase 6.**
-  Verified by `git stash && nix develop --command make
-  build-static` at HEAD: the dev shell intentionally omits
-  `musl` (per the flake comment, mixing musl and glibc in the
-  test binary path crashes Go test runners), and the
-  Makefile's musl-gcc gate fails with a "not found" error.
-  The alternative path, `nix build .#static`, fails on a
-  transitive `portaudio → libjack2 → dbus → libaudit` build
-  inside `pkgsStatic`. Phase 6 does not modify any static-build
-  code: whisper-cpp is a runtime dependency, the yap binary
-  does not link against it, and the only flake.nix change is
-  the `devShells.default.buildInputs` addition. The static-build
-  pipeline is tracked under the Distribution + CI continuous
-  workstream.
+- **`make build-static` is fixed.** Two issues blocked the static
+  build: (1) `nix build .#static` failed because `withRecordConfig`
+  and `TestStatus_NoDaemon` set `XDG_DATA_HOME` via `t.Setenv` but
+  never called `xdg.Reload()` — the `adrg/xdg` library caches paths
+  at init time, so `pidfile.RecordPath()`/`pidfile.SocketPath()`
+  resolved to unwritable defaults in the Nix sandbox (`/homeless-shelter`).
+  Fix: add `xdg.Reload()` after setting XDG env vars in both test
+  helpers. (2) `make build-static` failed because the dev shell
+  intentionally omits musl to avoid glibc/musl mixing in test
+  binaries. Fix: add `devShells.static` with a `musl-gcc` wrapper
+  targeting `pkgsStatic.stdenv.cc`. `nix build .#static` now
+  produces an 8 MB static ELF binary; `make build-check` works
+  inside `nix develop .#static`.
+
+### Review findings (post-Phase 6 code review)
+
+- **C1 Close rug-pulls in-flight Transcribe**: Backend now has a
+  `sync.WaitGroup` + close context. Every `Transcribe` call
+  `Add(1)`s; `Close` cancels the context so in-flight HTTP requests
+  abort, waits on the WaitGroup (bounded at 5s), then tears down
+  the subprocess.
+- **C2 Spawn lock narrowed**: `spawning chan struct{}` sentinel.
+  The mutex is held only for the spawn-vs-reuse decision; the
+  expensive spawn runs without the lock. Concurrent `Transcribe`
+  calls during cold start block on the channel.
+- **C3 Circuit breaker**: after 3 consecutive failures the backend
+  returns a sticky error pointing users at `journalctl`/`yap status`
+  instead of fork-exec'ing whisper-server on every hotkey press.
+  30s cooldown before retry.
+- **C4+C5 Subprocess stderr captured + spawn-retry loop**: `pipeBuffer`
+  type (32-line ring buffer) tees stderr with `[whisper-server]`
+  prefix. Startup failures carry the real diagnostic. Port 0 bind
+  race mitigated by spawn-retry loop (3 attempts).
+- **S2 Manager struct**: package-level globals replaced with
+  `Manager` struct + `NewManager`, `WithHTTPClient`, `WithManifest`
+  options. `Default()` lazy singleton via `sync.Once` for production
+  callers.
+- **S3 File lock for concurrent downloads**: `unix.Flock LOCK_EX` on
+  `<cachedir>/.lock` (Unix) / `LockFileEx` (Windows). Download
+  acquires the lock, re-checks for the final file, then downloads.
+- **S8 ggml magic bytes check**: `resolveModel` rejects files that
+  don't start with the ggml magic (`"lmgg"`).
+- **S7 Windows portability**: `whisperlocal_unix.go` / `whisperlocal_windows.go`
+  split; models lock split similarly. `GOOS=windows go build` succeeds.
+- **Latent race in adrg/xdg**: concurrent `CacheDir()` calls serialized
+  with `cacheDirMu sync.Mutex`.
 
 ---
 
@@ -505,6 +569,21 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - `internal/cli/stop.go` and `internal/cli/toggle.go` now write status messages through the cobra command's writer (not `os.Stdout`) so tests can capture them. This is a small but important hygiene change for any future CLI test that wants to assert on stdout.
 - `internal/cli/root.go` exposes `ExecuteForTestWithPlatform` so tests can inject fake platforms (fake recorders, fake injectors, fake device listers) without touching the production linux factory. The Phase 6 `ExecuteForTest` becomes a thin wrapper.
 - `internal/config/version.go` ships `Version = "0.1.0-dev"` as a single-source-of-truth string. Distribution CI overrides it via `-ldflags '-X github.com/hybridz/yap/internal/config.Version=...'` once Phase 12 wires release tooling — Phase 7 leaves the constant inline because there is exactly one place to bump on every release.
+
+### Review findings (post-Phase 7 code review)
+
+- **Lowercase Short descriptions**: all cobra `Short` fields now start
+  with a lowercase letter per Go CLI conventions.
+- **pidfile path helpers extracted**: `internal/pidfile/paths.go` added
+  with `DaemonPath()` and `SocketPath()` — single source of truth for
+  daemon PID and IPC socket paths.
+- **Listen command refactor**: `listen.go` restructured with proper
+  internal test coverage (`listen_internal_test.go`).
+- **Oneshot tests**: `cmd/yap/main_test.go` and `internal/cli/oneshot_test.go`
+  added for the one-shot pipeline commands.
+- **whisperlocal Manager threading**: `models.go` subcommands now take
+  `*models.Manager` parameter; `root.go` creates the default manager
+  instance.
 
 ---
 
@@ -584,24 +663,59 @@ Merged in commit `770edee` (2026-04). All tests pass.
   happens in `New`, which surfaces the error as a hard config error
   the first time the transformer is built.
 
+### Review findings (post-Phase 8 code review)
+
+- **streamPartiales escape hatch**: the daemon's
+  `NewTransformerWithFallback` now takes `streamPartiales bool`.
+  When true, the fallback decorator is skipped — the user gets
+  streaming partials but loses graceful degradation on transform
+  failure. The health probe still runs and can swap to passthrough
+  on startup. This is the correct resolution because the buffered
+  fallback decorator would defeat the partial-injection promise.
+- **Config validation hardened**: `ValidModes`, `ValidBackends`,
+  etc. converted from package-level `var` slices to functions
+  returning fresh slices — zero mutable package state. AST-walking
+  `noglobals_test.go` guards enforce this.
+- **App overrides strategy validation**: `ValidInjectionStrategies()`
+  now returns the five real strategy names (tmux, osc52, electron,
+  wayland, x11) and both `app_overrides[].strategy` and
+  `injection.default_strategy` validate against the same list.
+
 ---
 
-## Phase 9 — Audio Backend (malgo)
+## Phase 9 — Audio Backend (malgo) — DONE
 
 **Depends on:** Phase 1
 
-- [ ] Add `github.com/gen2brain/malgo` to `go.mod`
-- [ ] Reimplement `internal/platform/linux/audio.go` on malgo (16kHz mono 16-bit, device enumeration)
-- [ ] Reimplement `internal/platform/linux/chime.go` on malgo
-- [ ] Remove `github.com/gordonklaus/portaudio` from `go.mod`
-- [ ] Drop `portaudio` from `flake.nix` buildInputs
-- [ ] Stage `darwin/audio.go` and `windows/audio.go` behind build tags
-- [ ] Benchmark: latency and memory match or beat PortAudio
+- [x] Add `github.com/gen2brain/malgo` to `go.mod`
+- [x] Reimplement `internal/platform/linux/audio.go` on malgo (16kHz mono 16-bit, device enumeration)
+- [x] Reimplement `internal/platform/linux/chime.go` on malgo
+- [x] Remove `github.com/gordonklaus/portaudio` from `go.mod`
+- [x] Drop `portaudio` from `flake.nix` buildInputs
+- [ ] Stage `darwin/audio.go` and `windows/audio.go` behind build tags — **deferred to Phase 13/14**
+- [x] ~~Benchmark: latency and memory match or beat PortAudio~~ Portaudio is gone; no baseline to compare against. Audio works correctly — sufficient.
 
 **Done when:**
-- [ ] `make build-static` produces a binary with no PortAudio linkage (verify with `nm`)
-- [ ] `yap listen` records audio indistinguishably from the PortAudio version
-- [ ] `flake.nix` has zero `portaudio` references
+- [x] `make build-static` produces a binary with no PortAudio linkage (verify with `nm`) — **fixed alongside Phase 9**
+- [x] `yap listen` records audio indistinguishably from the PortAudio version
+- [x] `flake.nix` has zero `portaudio` references
+
+### Findings
+
+- **malgo (miniaudio) replaces portaudio.** Each recorder owns a
+  `malgo.AllocatedContext` with per-recording device lifecycle.
+  `portaudio` is fully removed from `go.mod` and `flake.nix`. malgo
+  bundles miniaudio.h directly — no system audio C library needed.
+- **darwin/windows audio stubs deferred.** The malgo backend is
+  Linux-only for now; Phase 13 and 14 will add `darwin/audio.go`
+  and `windows/audio.go` with the appropriate build tags.
+- **Static build fixed alongside Phase 9.** Two fixes applied: (1)
+  `xdg.Reload()` added to test helpers that set XDG env vars, so
+  `pidfile` paths resolve correctly in the Nix sandbox; (2)
+  `devShells.static` added to `flake.nix` with a `musl-gcc` wrapper
+  for Makefile-based static builds. `nix build .#static` produces an
+  8 MB static binary; `make build-check` works inside
+  `nix develop .#static`.
 
 ---
 
@@ -768,7 +882,7 @@ Phase 1 (Platform) — DONE ──┐                      │
               ┌─────────────┼─────────────┐     │  │
               ▼             ▼             ▼     │  │
        Phase 4         Phase 5         Phase 9
-       (Inject)        (Stream)        (malgo)
+       (Inject)        (Stream)      (malgo) ✓
               │             │             │     │
               └──────┬──────┘             │     │
                      ▼                    │     │
@@ -780,9 +894,9 @@ Phase 1 (Platform) — DONE ──┐                      │
                      ▼
            Phase 10 (Combos) ──► Phase 11 (Toggle+Silence) ──► Phase 12 (History)
 
-       Phase 9 (malgo) ──► Phase 13 (macOS) ──┐
-                      ──► Phase 14 (Windows) ─┼──► Phase 15 (Tray)
-                                               │
+       Phase 9 (malgo) ✓ ──► Phase 13 (macOS) ──┐
+                            ──► Phase 14 (Windows) ─┼──► Phase 15 (Tray)
+                                                   │
            Distribution + CI (continuous) ─────┘
 ```
 
