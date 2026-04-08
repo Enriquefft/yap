@@ -19,28 +19,27 @@ func TestListen_Help(t *testing.T) {
 	}
 }
 
-// TestStart_HiddenAlias_Deprecation asserts that `yap start --help`
-// still works (the alias is registered) but is hidden from the root
-// help and emits the deprecation notice when invoked.
-func TestStart_HiddenAlias_Help(t *testing.T) {
+// TestStartCommand_NoLongerExists is the regression guard that the
+// deprecated `yap start` alias has been removed. The previous release
+// kept it as a hidden delegating command with a stderr deprecation
+// notice; the CHANGELOG warned it would go in the next major. It is
+// now gone, and cobra must reject `start` as an unknown subcommand.
+func TestStartCommand_NoLongerExists(t *testing.T) {
 	withCleanConfig(t)
-	stdout, _, err := runCLI(t, "start", "--help")
-	if err != nil {
-		t.Fatalf("start --help: %v", err)
+	_, stderr, err := runCLI(t, "start")
+	if err == nil {
+		t.Fatal("expected error for removed `start` command, got nil")
 	}
-	// Help text should mention listen as the replacement.
-	if !strings.Contains(stdout, "deprecated") {
-		t.Errorf("expected deprecation note in start --help, got:\n%s", stdout)
+	combined := err.Error() + "\n" + stderr
+	if !strings.Contains(combined, "unknown command") {
+		t.Errorf("expected `unknown command` in error/stderr, got err=%v stderr=%q",
+			err, stderr)
 	}
 }
 
-// TestStart_HiddenInRootHelp asserts that the deprecated `start`
-// command is hidden from the user-visible "Available Commands"
-// section. Cobra renders that section line-by-line as
-// `  <command-name>  <short-description>`, so we look for the literal
-// `start  ` two-space prefix that would only appear if the alias
-// were not Hidden.
-func TestStart_HiddenInRootHelp(t *testing.T) {
+// TestRoot_StartNotInHelp confirms `start` no longer appears in the
+// root command's Available Commands listing. `listen` must remain.
+func TestRoot_StartNotInHelp(t *testing.T) {
 	withCleanConfig(t)
 	stdout, _, err := runCLI(t, "--help")
 	if err != nil {
@@ -62,7 +61,7 @@ func TestStart_HiddenInRootHelp(t *testing.T) {
 			}
 			fields := strings.Fields(line)
 			if len(fields) > 0 && fields[0] == "start" {
-				t.Errorf("`start` should be hidden from Available Commands, got:\n%s", stdout)
+				t.Errorf("`start` should not appear in Available Commands, got:\n%s", stdout)
 			}
 		}
 	}

@@ -46,26 +46,10 @@ or any process supervisor that expects a no-fork lifecycle.`,
 	return cmd
 }
 
-// newStartCmd is a hidden alias for `yap listen` kept for one release.
-// It prints a deprecation notice to stderr on every invocation and
-// then runs the same handler. A CHANGELOG entry tracks the removal.
-func newStartCmd(cfg *config.Config, p platform.Platform) *cobra.Command {
-	return &cobra.Command{
-		Use:    "start",
-		Short:  "deprecated alias for `yap listen`",
-		Hidden: true,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.ErrOrStderr(),
-				"yap: 'start' is deprecated; use 'yap listen' instead")
-			return runListen(cfg, p, false)
-		},
-	}
-}
-
-// runListen is the shared handler for `yap listen` and the hidden
-// `yap start` alias. It runs the first-run wizard if no config file
-// exists, then either invokes daemon.Run in-process (foreground) or
-// spawns a detached child that will re-exec with YAP_DAEMON=1.
+// runListen is the shared handler for `yap listen`. It runs the
+// first-run wizard if no config file exists, then either invokes
+// daemon.Run in-process (foreground) or spawns a detached child that
+// will re-exec with YAP_DAEMON=1.
 func runListen(cfg *config.Config, p platform.Platform, foreground bool) error {
 	if needsWizard() {
 		if err := runWizard(p); err != nil {

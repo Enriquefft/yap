@@ -52,8 +52,6 @@ The first time you launch the daemon, yap runs an interactive wizard to set up y
 yap listen
 ```
 
-> The current binary still ships `yap start` as a synonym for `yap listen` while the CLI rework lands. Both work today; new docs and scripts should use `yap listen`.
-
 The wizard will ask for:
 
 1. Your transcription backend. The default is **whisperlocal** (local whisper.cpp via the `whisper-server` subprocess); **groq** is available as a remote fallback.

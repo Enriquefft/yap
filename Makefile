@@ -1,15 +1,27 @@
 BINARY := yap
 CMD    := ./cmd/yap
+
+# VERSION is computed from `git describe` so release builds report a
+# meaningful version string in `yap status`. Falls back to "dev" when
+# git metadata is unavailable (e.g. tarball builds, sandboxed CI).
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
+# VERSION_LDFLAG injects the value into internal/config.Version via the
+# Go linker. internal/config/version.go is the single source of truth
+# for the default ("dev"); release builds override it here.
+VERSION_LDFLAG := -X github.com/hybridz/yap/internal/config.Version=$(VERSION)
+
 # -s -w: strip debug info. Required for NFR-05 (< 20MB).
 # -linkmode external -extldflags '-static': produce static binary (NFR-01, NFR-02).
-LDFLAGS := -s -w -linkmode external -extldflags '-static'
+LDFLAGS_COMMON := -s -w $(VERSION_LDFLAG)
+LDFLAGS_STATIC := $(LDFLAGS_COMMON) -linkmode external -extldflags '-static'
 TAGS    := netgo,osusergo
 MAX_SIZE_MB := 20
 
 .PHONY: build build-static verify-static size-check build-check test clean
 
 build:
-	go build -o $(BINARY) $(CMD)
+	go build -ldflags "$(LDFLAGS_COMMON)" -o $(BINARY) $(CMD)
 
 build-static:
 	@which musl-gcc > /dev/null 2>&1 || \
@@ -21,7 +33,7 @@ build-static:
 	CGO_ENABLED=1 CC=musl-gcc \
 	go build \
 	  -tags $(TAGS) \
-	  -ldflags="$(LDFLAGS)" \
+	  -ldflags="$(LDFLAGS_STATIC)" \
 	  -o $(BINARY) $(CMD)
 
 verify-static:

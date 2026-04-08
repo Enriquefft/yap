@@ -47,7 +47,6 @@ func newRootCmd(p platform.Platform) *cobra.Command {
 
 	// Pipeline / lifecycle commands.
 	root.AddCommand(newListenCmd(&rootCfg, p))
-	root.AddCommand(newStartCmd(&rootCfg, p)) // hidden alias
 	root.AddCommand(newRecordCmd(&rootCfg, p))
 	root.AddCommand(newTranscribeCmd(&rootCfg))
 	root.AddCommand(newTransformCmd(&rootCfg))

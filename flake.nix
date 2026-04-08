@@ -16,9 +16,15 @@
 
         # Shared package definition; withStatic toggles static linker flags.
         yapPkg = { buildGoModule, pkg-config, portaudio, lib, withStatic ? false }:
+          let
+            # Single source of truth for the Nix-built version string.
+            # Threaded into the Go binary via -ldflags so `yap status`
+            # reports the same value the flake declares.
+            version = "0.1.0";
+          in
           buildGoModule {
             pname = "yap";
-            version = "0.1.0";
+            inherit version;
             src = ./.;
 
             # vendorHash: set to null on first build; replace with sha256 from error output.
@@ -37,8 +43,14 @@
             buildInputs = [ portaudio ];
 
             # -s -w: strip debug symbols and DWARF (reduces binary size).
+            # -X ...Version=${version}: thread the flake-declared version
+            #   into internal/config.Version so `yap status` reports the
+            #   same value the package metadata advertises.
             # Static flags only added when withStatic = true.
-            ldflags = [ "-s" "-w" ]
+            ldflags = [
+              "-s" "-w"
+              "-X" "github.com/hybridz/yap/internal/config.Version=${version}"
+            ]
               ++ lib.optionals withStatic [
                 "-linkmode external"
                 "-extldflags \"-static\""
