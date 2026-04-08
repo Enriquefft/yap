@@ -55,41 +55,62 @@ type TagMeta struct {
 }
 
 func main() {
-	out := flag.String("o", "", "output file path (required)")
+	nixosOut := flag.String("o-nixos", "", "output path for nixosModules.nix (required)")
+	hmOut := flag.String("o-hm", "", "output path for homeManagerModules.nix (required)")
 	flag.Parse()
-	if *out == "" {
-		fmt.Fprintln(os.Stderr, "gen-nixos: -o is required")
+	if *nixosOut == "" || *hmOut == "" {
+		fmt.Fprintln(os.Stderr, "gen-nixos: -o-nixos and -o-hm are required")
 		os.Exit(2)
 	}
 
-	var buf bytes.Buffer
-	if err := Render(&buf); err != nil {
-		fmt.Fprintln(os.Stderr, "gen-nixos:", err)
+	if err := writeRendered(*nixosOut, RenderNixOS); err != nil {
+		fmt.Fprintln(os.Stderr, "gen-nixos: nixos:", err)
 		os.Exit(1)
 	}
-
-	if err := os.WriteFile(*out, buf.Bytes(), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "gen-nixos: write output:", err)
+	if err := writeRendered(*hmOut, RenderHomeManager); err != nil {
+		fmt.Fprintln(os.Stderr, "gen-nixos: home-manager:", err)
 		os.Exit(1)
 	}
 }
 
-// Render writes the rendered nixosModules.nix to w. It is the single
-// entry point shared by main() and the test suite.
-func Render(w io.Writer) error {
-	data := buildTemplateData(pcfg.DefaultConfig())
+func writeRendered(path string, render func(io.Writer) error) error {
+	var buf bytes.Buffer
+	if err := render(&buf); err != nil {
+		return err
+	}
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
 
-	tmpl := template.New("nix").Funcs(template.FuncMap{
+// sharedFuncMap returns the template function map used by both module
+// templates.
+func sharedFuncMap() template.FuncMap {
+	return template.FuncMap{
 		"nixType":        nixType,
 		"nixDefault":     nixDefault,
 		"nixDescription": nixDescription,
 		"tomlRender":     tomlRender,
-	})
-	tmpl, err := tmpl.Parse(nixTemplate)
+	}
+}
+
+// renderModule renders a module template with the shared schema data.
+func renderModule(w io.Writer, tmplText string) error {
+	data := buildTemplateData(pcfg.DefaultConfig())
+	tmpl := template.New("nix").Funcs(sharedFuncMap())
+	tmpl, err := tmpl.Parse(tmplText)
 	if err != nil {
 		return fmt.Errorf("parse template: %w", err)
 	}
 	return tmpl.Execute(w, data)
+}
+
+// RenderNixOS writes the rendered nixosModules.nix to w.
+func RenderNixOS(w io.Writer) error {
+	return renderModule(w, nixosModuleTemplate)
+}
+
+// RenderHomeManager writes the rendered homeManagerModules.nix to w.
+func RenderHomeManager(w io.Writer) error {
+	return renderModule(w, homeManagerModuleTemplate)
 }
 
 // buildTemplateData walks cfg via reflection and assembles the

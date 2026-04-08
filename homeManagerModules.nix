@@ -7,7 +7,7 @@ self:
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.services.yap;
+  cfg = config.programs.yap;
 
   # Runtime dependencies injected into the wrapped yap binary's PATH.
   # Injection tools are all included unconditionally (small packages;
@@ -29,11 +29,9 @@ let
         --prefix PATH : ${lib.makeBinPath runtimeDeps}
     '';
   };
-
-  configFile = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
 in {
-  options.services.yap = {
-    enable = lib.mkEnableOption "yap hold-to-talk voice dictation daemon";
+  options.programs.yap = {
+    enable = lib.mkEnableOption "yap";
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -41,10 +39,10 @@ in {
       description = "The yap package to use.";
     };
 
-    user = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = "User account under which yap runs. When set, adds the user to the input group for evdev access.";
+    daemon.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Start yap daemon as a systemd user service. Disable if you manage keybinds externally (sxhkd, WM binds, etc.) and only use yap record/toggle.";
     };
 
     settings = {
@@ -211,15 +209,24 @@ in {
     };
   };
 
-  config = lib.mkIf cfg.enable (lib.mkMerge [
-    {
-      environment.systemPackages = [ wrappedPkg ];
-      services.pipewire.alsa.enable = true;
-      environment.etc."yap/config.toml".source = configFile;
-    }
+  config = lib.mkIf cfg.enable {
+    home.packages = [ wrappedPkg ];
 
-    (lib.mkIf (cfg.user != null) {
-      users.users.${cfg.user}.extraGroups = [ "input" ];
-    })
-  ]);
+    xdg.configFile."yap/config.toml" = {
+      source = (pkgs.formats.toml {}).generate "yap-config.toml" cfg.settings;
+    };
+
+    systemd.user.services.yap = lib.mkIf cfg.daemon.enable {
+      Unit = {
+        Description = "yap hold-to-talk voice dictation daemon";
+        After = [ "pipewire.service" ];
+      };
+      Service = {
+        ExecStart = "${lib.getExe wrappedPkg} listen --foreground";
+        Restart = "on-failure";
+        RestartSec = 3;
+      };
+      Install = { WantedBy = [ "default.target" ]; };
+    };
+  };
 }

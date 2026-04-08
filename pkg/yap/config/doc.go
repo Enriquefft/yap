@@ -22,8 +22,8 @@
 // and descriptions.
 //
 // Run `go generate ./pkg/yap/config/...` after any schema change to
-// regenerate nixosModules.nix. CI enforces that the committed file
-// matches generator output byte-for-byte.
+// regenerate nixosModules.nix and homeManagerModules.nix. CI enforces
+// that the committed files match generator output byte-for-byte.
 package config
 
-//go:generate go run ../../../internal/cmd/gen-nixos -o ../../../nixosModules.nix
+//go:generate go run ../../../internal/cmd/gen-nixos -o-nixos ../../../nixosModules.nix -o-hm ../../../homeManagerModules.nix

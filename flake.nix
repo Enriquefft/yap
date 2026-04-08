@@ -133,5 +133,11 @@
         # NixOS module: closes over self to reference flake packages directly.
         # No overlay needed — the module resolves the package from self.packages.
         nixosModules.default = import ./nixosModules.nix self;
+
+        # Home-manager module: provides programs.yap with optional systemd
+        # user service. Users who manage keybinds externally can set
+        # programs.yap.daemon.enable = false and use yap record/toggle
+        # from their own keybind setup.
+        homeManagerModules.default = import ./homeManagerModules.nix self;
       };
 }
