@@ -20,7 +20,7 @@
 | 8 | LLM Transform (pluggable) | done |
 | 9 | Audio Backend (malgo) | done |
 | 10 | Hotkey Combos | pending |
-| 11 | Press-to-Toggle + Silence | partial (toggle only) |
+| 11 | Press-to-Toggle + Silence | done |
 | 12 | Transcription History | pending |
 | 13 | macOS Support | pending |
 | 14 | Windows Support | pending |
@@ -737,23 +737,22 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 11 — Press-to-Toggle + Silence Detection
+## Phase 11 — Press-to-Toggle + Silence Detection — DONE
 
 **Depends on:** Phase 2, Phase 5
-**Current state:** IPC toggle exists in `internal/daemon/daemon.go` but the hotkey is hardcoded to hold-to-talk; silence detection entirely absent.
 
-- [ ] Daemon `mode` switch: `general.mode == "toggle"` toggles state on hotkey press; `"hold"` keeps existing behavior
-- [ ] State machine: `idle → recording → processing → idle`, exposed via `yap status`
-- [ ] `pkg/yap/silence/` — amplitude-threshold VAD
-- [ ] Monitors PCM frames during capture for sustained silence above `silence_threshold` longer than `silence_duration`
-- [ ] Works in both hold-to-talk and toggle modes
-- [ ] Integrates with the streaming pipeline — silence closes the audio feed cleanly
-- [ ] Warning chime ~1s before silence auto-stop (reuse warning WAV asset)
+- [x] Daemon `mode` switch: `general.mode == "toggle"` toggles state on hotkey press; `"hold"` keeps existing behavior
+- [x] State machine: `idle → recording → processing → idle`, exposed via `yap status`
+- [x] `pkg/yap/silence/` — amplitude-threshold VAD
+- [x] Monitors PCM frames during capture for sustained silence above `silence_threshold` longer than `silence_duration`
+- [x] Works in both hold-to-talk and toggle modes
+- [x] Integrates with the streaming pipeline — silence closes the audio feed cleanly
+- [x] Warning chime ~1s before silence auto-stop (reuse warning WAV asset)
 
 **Done when:**
-- [ ] `general.mode = "toggle"` + hotkey press starts recording; next press stops and submits
-- [ ] `silence_detection = true` + 2s silence auto-submits and injects the partial transcription
-- [ ] `yap status` reports the current state machine value
+- [x] `general.mode = "toggle"` + hotkey press starts recording; next press stops and submits
+- [x] `silence_detection = true` + 2s silence auto-submits and injects the partial transcription
+- [x] `yap status` reports the current state machine value
 
 ---
 

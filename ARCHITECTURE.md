@@ -45,9 +45,9 @@ Transcription is 100% of the product's value. It must be local by default and fa
 The "text appears where I'm typing" promise is the entire UX. Linux has no unified input API. Solving that is not plumbing — it's the deep module where most of the engineering value lives.
 
 - **Active-window detection** per display server: Sway via `swaymsg`, Hyprland via `hyprctl`, generic wlroots via `ext-foreign-toplevel-list-v1`, X11 via `xdotool` + `xprop`.
-- **App classification** via WM_CLASS / process name allowlists: `AppTerminal`, `AppElectron`, `AppBrowser`, `AppTmux` (additive), `AppSSHRemote` (additive), `AppGeneric`.
+- **App classification** via WM_CLASS / process name allowlists: `AppTerminal`, `AppElectron`, `AppBrowser`, `AppGeneric`. Additive flags `Target.Tmux` and `Target.SSHRemote` when `$TMUX` / `$SSH_TTY` are detected.
 - **Per-app strategies**:
-  - Terminals → OSC52 + bracketed paste, with tmux-aware passthrough.
+  - Terminals → OSC52 clipboard sequence, with tmux-aware passthrough via `paste-buffer -p`.
   - Electron / browsers → clipboard save + synthesized Ctrl+V, with Monaco autocomplete-popup workarounds.
   - Generic GUI → wtype on Wayland, `xdotool type --clearmodifiers` on X11, both with focus-acquisition polling (never hard-coded sleeps).
 - **Strategy selection** is explicit. The user can override per-app via config. Selection is logged in the audit trail.
@@ -110,8 +110,7 @@ internal/
 │   │   └── inject/                     # Linux-specific injection strategies
 │   │       ├── detect.go               # Sway/Hyprland/wlroots/X11 active-window detection
 │   │       ├── osc52.go                # Terminal OSC52 clipboard
-│   │       ├── bracketed.go            # Shell bracketed-paste wrapping
-│   │       ├── tmux.go                 # tmux load-buffer / paste-buffer
+│   │       ├── tmux.go                 # tmux load-buffer / paste-buffer -p
 │   │       ├── electron.go             # Clipboard + synthesized paste
 │   │       ├── wayland.go              # wtype primary, ydotool fallback
 │   │       └── x11.go                  # xdotool with focus polling
@@ -254,6 +253,8 @@ type Target struct {
     WindowID      string  // compositor / OS-specific identifier
     AppClass      string  // WM_CLASS / bundle ID / process name
     AppType       AppType // classified type
+    Tmux          bool    // additive — set when $TMUX is detected
+    SSHRemote     bool    // additive — set when $SSH_TTY is detected
 }
 
 type AppType int
@@ -262,8 +263,6 @@ const (
     AppTerminal
     AppElectron
     AppBrowser
-    AppTmux      // additive — set when $TMUX is detected
-    AppSSHRemote // additive — set when $SSH_TTY is detected
 )
 
 type Strategy interface {
@@ -385,6 +384,7 @@ api_key = ""                    # or env: YAP_TRANSFORM_API_KEY
 prefer_osc52 = true             # use OSC52 for terminals when supported
 bracketed_paste = true          # wrap multi-line text for shells
 electron_strategy = "clipboard" # "clipboard" | "keystroke"
+default_strategy = ""           # fallback strategy when no app_override matches; empty = natural order
 # Per-app overrides, evaluated in order, first match wins:
 # app_overrides = [
 #   { match = "firefox", strategy = "clipboard" },
@@ -461,7 +461,7 @@ Every command is a thin Cobra wrapper over `pkg/yap/`. Commands contain no pipel
 | Audio capture | `gen2brain/malgo` (miniaudio) — PulseAudio/ALSA/PipeWire backends |
 | Hotkey | `holoplot/go-evdev` — pure Go, reads `/dev/input/event*` |
 | Active-window detection | Sway: `swaymsg -t get_tree`. Hyprland: `hyprctl activewindow -j`. wlroots: `ext-foreign-toplevel-list-v1`. X11: `xdotool getactivewindow` + `xprop WM_CLASS`. |
-| Terminal injection | OSC 52 (`\x1b]52;c;<base64>\x07`) + bracketed paste (`\x1b[200~ ... \x1b[201~`). tmux: `tmux load-buffer - && tmux paste-buffer`. |
+| Terminal injection | OSC 52 (`\x1b]52;c;<base64>\x07`). tmux: `tmux load-buffer - && tmux paste-buffer -p`. |
 | Electron / browser injection | Clipboard save → set → synthesized Ctrl+V → restore. Monaco anti-autocomplete shim opt-in per-app. |
 | Generic GUI injection | Wayland: `wtype` (primary), `ydotool` (fallback with socket check). X11: `xdotool type --clearmodifiers` with focus polling. |
 | Clipboard | `atotto/clipboard` — pure Go |
@@ -504,9 +504,9 @@ Every command is a thin Cobra wrapper over `pkg/yap/`. Commands contain no pipel
 - **Module path:** `github.com/hybridz/yap`
 - **Go version:** 1.25+
 - **Build:** `nix develop --command go build ./cmd/yap`
-- **Static build:** `make build-static` produces a single static binary verified by `ldd` to have no dynamic dependencies on Linux.
-- **CGo boundary:** `malgo` (audio) and `whisperlocal` (transcription) are the only CGo dependencies. Static linking is verified for both via `pkgsStatic` in the Nix flake (Linux/musl).
-- **Cross-compilation:** GitHub Actions matrix builds `linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/amd64`. Each target runs the test suite.
+- **Static build:** `make build-static` produces a single static binary verified by `ldd` to have no dynamic dependencies on Linux. **Status: blocked** — musl toolchain not wired into the Nix dev shell; tracked under Distribution + CI.
+- **CGo boundary:** `malgo` (audio) is the only CGo dependency. `whisperlocal` shells out to `whisper-server` at runtime — no CGo. Static linking needs only `malgo`/miniaudio headers.
+- **Cross-compilation:** GitHub Actions matrix builds `linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/amd64`. Each target runs the test suite. **Status: not yet wired** — pending Distribution + CI workstream.
 - **Distribution channels:** GitHub Releases (canonical), curl install script, Nix flake, Homebrew formula, AUR PKGBUILD, `go install github.com/hybridz/yap/cmd/yap@latest`.
 
 ---
@@ -520,7 +520,7 @@ Every command is a thin Cobra wrapper over `pkg/yap/`. Commands contain no pipel
 | Transcription interface | Streaming chunks | Future-proof for whisper.cpp server mode and OpenAI streaming. Non-streaming backends wrap as a single-chunk channel. |
 | Transform backends | Local (Ollama, llama.cpp) and OpenAI-compatible peers | Local LLMs are first-class, not "another endpoint." |
 | Text injection | Deep module with per-target strategies | The fallback chain is the symptom; this is the fix. |
-| Terminal delivery | OSC52 + bracketed paste, tmux-aware | Works over SSH, works in modern terminals, works inside tmux. |
+| Terminal delivery | OSC52, tmux-aware (`paste-buffer -p`) | Works over SSH, works in modern terminals, works inside tmux. |
 | Electron delivery | Clipboard + synthesized paste | Most reliable path for Monaco, contenteditable fields, Claude Code. |
 | Audio library | `gen2brain/malgo` (miniaudio) | Single C header, static-link friendly, native backends per OS. |
 | Library surface | Public `pkg/yap/` | Composability, testability, no package-level-mutable workarounds. |
