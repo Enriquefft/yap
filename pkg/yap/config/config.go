@@ -39,6 +39,8 @@ type TranscriptionConfig struct {
 	Model             string `toml:"model"               yap:"doc=Model name (whisperlocal: base.en; remote: backend-specific)"`
 	ModelPath         string `toml:"model_path"          yap:"doc=Explicit local model path (whisperlocal only); empty auto-downloads"`
 	WhisperServerPath string `toml:"whisper_server_path" yap:"doc=Path to the whisper-server binary (whisperlocal only); empty resolves via $YAP_WHISPER_SERVER, $PATH, then a Nix profile fallback"`
+	WhisperThreads    int    `toml:"whisper_threads"     yap:"min=0;max=64;doc=whisper.cpp thread count (whisperlocal only); 0 picks runtime.NumCPU()/2 rounded up to at least 1"`
+	WhisperUseGPU     bool   `toml:"whisper_use_gpu"     yap:"doc=use GPU backend for whisper.cpp when available (whisperlocal only)"`
 	Language          string `toml:"language"            yap:"doc=ISO language code; empty auto-detects"`
 	Prompt            string `toml:"prompt"              yap:"doc=Context hint passed to the backend when supported"`
 	APIURL            string `toml:"api_url"             yap:"doc=Remote endpoint URL; required when backend is remote"`
@@ -123,6 +125,8 @@ func DefaultConfig() Config {
 			Model:             "base.en",
 			ModelPath:         "",
 			WhisperServerPath: "",
+			WhisperThreads:    0,
+			WhisperUseGPU:     true,
 			Language:          "en",
 			Prompt:            "",
 			APIURL:            "",

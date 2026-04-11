@@ -15,6 +15,8 @@
   model = "base.en"
   model_path = ""
   whisper_server_path = ""
+  whisper_threads = 0
+  whisper_use_gpu = true
   language = "en"
   prompt = ""
   api_url = ""

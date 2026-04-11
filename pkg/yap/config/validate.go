@@ -98,6 +98,30 @@ func (c Config) Validate(keyValidator KeyValidator) error {
 			errs = append(errs, fmt.Errorf("transcription.api_url: must be http(s) URL with a host and no whitespace, got %q", u))
 		}
 	}
+	// English-only whisper.cpp models (name ending in ".en") cannot
+	// transcribe other languages — whisper-server silently drops the
+	// language hint. Reject the combination at config load so users
+	// see the error up front rather than mysterious English output.
+	//
+	// When transcription.model_path is set the name-based check is
+	// meaningless: whisperlocal.resolveModel ignores cfg.Model entirely
+	// and loads the file at ModelPath directly (see
+	// pkg/yap/transcribe/whisperlocal/discover.go). An air-gapped user
+	// with a hand-downloaded multilingual ggml-large-v3.bin plus a
+	// leftover model = "base.en" in their config is a supported setup;
+	// rejecting it here would be a false positive.
+	if c.Transcription.Backend == "whisperlocal" &&
+		c.Transcription.ModelPath == "" &&
+		strings.HasSuffix(c.Transcription.Model, ".en") &&
+		c.Transcription.Language != "" &&
+		c.Transcription.Language != "en" {
+		errs = append(errs, fmt.Errorf(
+			"transcription.language: %q is not supported with English-only model %q; use a multilingual model (base, small, medium) or set language = \"en\"",
+			c.Transcription.Language, c.Transcription.Model))
+	}
+	if c.Transcription.WhisperThreads < 0 || c.Transcription.WhisperThreads > 64 {
+		errs = append(errs, fmt.Errorf("transcription.whisper_threads: must be in [0,64], got %d", c.Transcription.WhisperThreads))
+	}
 
 	// transform
 	if !contains(transformBackends, c.Transform.Backend) {

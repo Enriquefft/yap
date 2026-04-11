@@ -208,6 +208,125 @@ func TestValidate_TableDriven(t *testing.T) {
 			},
 			validator: knownKeys,
 		},
+		// whisperlocal English-only model + non-en language is a
+		// silent misconfiguration: whisper-server logs a warning
+		// and transcribes in English anyway. Reject at load time.
+		{
+			name: "whisperlocal es with base.en rejected",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "base.en"
+				c.Transcription.Language = "es"
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.language",
+		},
+		{
+			name: "whisperlocal fr with small.en rejected",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "small.en"
+				c.Transcription.Language = "fr"
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.language",
+		},
+		{
+			name: "whisperlocal en with base.en ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "base.en"
+				c.Transcription.Language = "en"
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "whisperlocal es with base (multilingual) ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "base"
+				c.Transcription.Language = "es"
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "whisperlocal auto-detect with base.en ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "base.en"
+				c.Transcription.Language = ""
+			},
+			validator: knownKeys,
+		},
+		// M2: transcription.model_path is the absolute override —
+		// whisperlocal.resolveModel loads the file at ModelPath and
+		// never looks at cfg.Model. A leftover model = "base.en"
+		// alongside a hand-downloaded multilingual model_path and a
+		// non-English language must pass validation; rejecting it
+		// would be a false positive for the air-gapped escape hatch.
+		{
+			name: "whisperlocal es with base.en but multilingual model_path ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "base.en"
+				c.Transcription.ModelPath = "/home/user/models/ggml-large-v3.bin"
+				c.Transcription.Language = "es"
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "whisperlocal fr with small.en but multilingual model_path ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "whisperlocal"
+				c.Transcription.Model = "small.en"
+				c.Transcription.ModelPath = "/opt/whisper/ggml-medium.bin"
+				c.Transcription.Language = "fr"
+			},
+			validator: knownKeys,
+		},
+		// The English-only guard is whisperlocal-specific — the
+		// remote ".en"-named models (if any) are the backend's
+		// problem, not ours.
+		{
+			name: "groq with base.en-named model and es language ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.Backend = "groq"
+				c.Transcription.Model = "whisper-large-v3.en"
+				c.Transcription.Language = "es"
+			},
+			validator: knownKeys,
+		},
+		// whisper_threads bounds check.
+		{
+			name: "whisper_threads negative rejected",
+			mutate: func(c *config.Config) {
+				c.Transcription.WhisperThreads = -1
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.whisper_threads",
+		},
+		{
+			name: "whisper_threads above 64 rejected",
+			mutate: func(c *config.Config) {
+				c.Transcription.WhisperThreads = 65
+			},
+			validator: knownKeys,
+			wantErr:   "transcription.whisper_threads",
+		},
+		{
+			name: "whisper_threads zero (auto) ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.WhisperThreads = 0
+			},
+			validator: knownKeys,
+		},
+		{
+			name: "whisper_threads 8 ok",
+			mutate: func(c *config.Config) {
+				c.Transcription.WhisperThreads = 8
+			},
+			validator: knownKeys,
+		},
 		// transform
 		{
 			name:      "transform.backend invalid",

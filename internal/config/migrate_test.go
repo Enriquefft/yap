@@ -171,24 +171,47 @@ func TestMigrate_EnvOverrideAppliesAfter(t *testing.T) {
 }
 
 func TestConfigPath_EtcFallback(t *testing.T) {
-	// This test does not write to /etc/yap (would need root) — it
-	// exercises the precedence logic by pointing YAP_CONFIG at a
-	// non-existent user file and confirming the /etc fallback is
-	// chosen when /etc/yap/config.toml exists. We emulate by
-	// checking that when both XDG and YAP_CONFIG are unset, the
-	// function picks the user path (there is no /etc/yap on the
-	// test runner unless Nix put it there).
+	// Exercises the /etc/yap fallback deterministically: point
+	// systemConfigPath at a TempDir file, leave the user XDG
+	// empty, and confirm ConfigPath picks the system file. The
+	// previous incarnation of this test could not touch /etc at
+	// all and had to fuzzy-match the result; SetSystemConfigPathForTest
+	// replaces that workaround.
 	tmp := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("YAP_CONFIG", "")
+
+	sysDir := t.TempDir()
+	sysPath := filepath.Join(sysDir, "system-config.toml")
+	if err := os.WriteFile(sysPath, []byte("[general]\nhotkey = \"KEY_F7\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore := config.SetSystemConfigPathForTest(sysPath)
+	t.Cleanup(restore)
 
 	got, err := config.ConfigPath()
 	if err != nil {
 		t.Fatalf("ConfigPath: %v", err)
 	}
-	// Must be the user XDG path because no file exists yet.
-	wantPrefix := filepath.Join(tmp, "yap")
-	if !strings.HasPrefix(got, wantPrefix) && got != "/etc/yap/config.toml" {
-		t.Errorf("ConfigPath: got %s, want prefix %s or /etc/yap/config.toml", got, wantPrefix)
+	if got != sysPath {
+		t.Errorf("ConfigPath: got %s, want %s (system fallback)", got, sysPath)
+	}
+
+	// And when the user XDG file ALSO exists, the user file
+	// wins — confirm ConfigPath flips back to the user path.
+	userPath := filepath.Join(tmp, "yap", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(userPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userPath, []byte("[general]\nhotkey = \"KEY_F8\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = config.ConfigPath()
+	if err != nil {
+		t.Fatalf("ConfigPath (after user write): %v", err)
+	}
+	if !strings.HasPrefix(got, filepath.Join(tmp, "yap")) {
+		t.Errorf("ConfigPath after user write: got %s, want user XDG under %s", got, tmp)
 	}
 }
