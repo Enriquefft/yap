@@ -29,6 +29,12 @@ import (
 //     detector to drive fall-through.
 //   - detectWlrootsLatencyBudget — the hard 500 ms ceiling on a
 //     single wlroots detection roundtrip.
+//   - reasonAppOverride, reasonDefaultStrategy, reasonNaturalOrder,
+//     reasonNoneApplicable — stable human-readable tokens surfaced
+//     by buildStrategyOrder to the Resolve debug surface. They are
+//     immutable string constants, not mutable state, and keeping
+//     them named prevents drift between the selection logic and
+//     the Resolve output format.
 //
 // Anything else (var or const) at package scope must be moved into a
 // Deps field, an InjectionOptions field, or a function-local
@@ -53,6 +59,10 @@ func TestNoPackageLevelMutableState(t *testing.T) {
 		"errWlrootsProtocolUnsupported": {},
 		"errWlrootsNoFocusedWindow":     {},
 		"detectWlrootsLatencyBudget":    {},
+		"reasonAppOverride":             {},
+		"reasonDefaultStrategy":         {},
+		"reasonNaturalOrder":            {},
+		"reasonNoneApplicable":          {},
 	}
 
 	entries, err := os.ReadDir(wd)

@@ -32,6 +32,75 @@ type Injector interface {
 	InjectStream(ctx context.Context, in <-chan transcribe.TranscriptChunk) error
 }
 
+// StrategyResolver is an optional interface that Injector
+// implementations may satisfy. It exposes the target detection and
+// strategy selection logic as a pure query — no Deliver call is made.
+// Debug tooling (`yap paste --dry-run`, `yap record --resolve`) uses
+// this to report which strategy would fire without mutating any
+// external state.
+//
+// The interface is optional because platforms under active
+// development may not ship it on the first cut: the CLI type-asserts
+// at call time and surfaces a clean error when the current Injector
+// does not implement it, rather than forcing every platform backend
+// to supply a stub. This is the same pattern io.Closer uses to extend
+// io.Writer without breaking non-closeable writers.
+type StrategyResolver interface {
+	// Resolve runs target detection + classification + strategy
+	// selection and returns the StrategyDecision that the next Inject
+	// would act on. It MUST NOT call Deliver on any strategy, mutate
+	// the clipboard, synthesize keystrokes, or otherwise touch
+	// external state — it is a pure query.
+	//
+	// Returns an error only when target detection or classification
+	// fails outright (no display server, for example). Selection
+	// failure — "no strategy applies to this target" — is reported
+	// via an empty Strategy in the decision, never as an error, so
+	// callers can display the classified Target alongside the "no
+	// applicable strategies" verdict in one render.
+	Resolve(ctx context.Context) (StrategyDecision, error)
+}
+
+// StrategyDecision is the structured output of StrategyResolver.Resolve.
+// Every field is populated even when Strategy is empty so that debug
+// tooling can render a meaningful report regardless of whether any
+// strategy matched.
+type StrategyDecision struct {
+	// Target is the classified active-window description produced by
+	// detection. It carries the DisplayServer, AppClass, AppType,
+	// and the additive Tmux / SSHRemote modifiers. Always populated,
+	// even when no strategy matches — the user needs the classification
+	// to understand why nothing fired.
+	Target Target
+
+	// Strategy is the Name() of the strategy that would fire first on
+	// the next Inject call. Empty when no strategy applies to Target
+	// (for example, a wayland generic target on a build with no
+	// wayland strategy registered). Never a failure signal on its own
+	// — callers render the empty string as "none" or similar.
+	Strategy string
+
+	// Tool is the underlying executable the winning strategy would
+	// invoke (wtype, xdotool, tmux, osc52, …). Derived from the
+	// strategy's identity, not from a live subprocess probe: Resolve
+	// is pure and must not shell out. Empty when Strategy is empty or
+	// when the strategy does not map to a single external tool.
+	Tool string
+
+	// Fallbacks is the full ordered list of strategy Name() values
+	// that Inject would walk if the first one fell through via
+	// ErrStrategyUnsupported or a transient failure. The first entry
+	// is always equal to Strategy when Strategy is non-empty.
+	Fallbacks []string
+
+	// Reason is a human-readable explanation of why this particular
+	// ordering was selected. Stable tokens ("app_override matched
+	// kitty → osc52", "default_strategy wayland", "natural order",
+	// "no applicable strategies") let the user map the decision back
+	// to their config without diffing code.
+	Reason string
+}
+
 // Target is the classified description of the focused application.
 // It is the output of active-window detection and the input to
 // Strategy.Supports. The zero value is deliberately invalid — callers

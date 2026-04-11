@@ -106,23 +106,23 @@ func (i *Injector) inject(ctx context.Context, text string) error {
 		target = annotate(target, i.deps)
 	}
 
-	order := selectStrategies(ctx, i.logger, i.strategies, i.opts, target)
-	if len(order) == 0 {
+	order := buildStrategyOrder(ctx, i.logger, i.strategies, i.opts, target)
+	if len(order.strategies) == 0 {
 		i.logOutcome(ctx, slog.LevelError, injectOutcomeFields{
 			target:     target,
 			outcome:    "failed",
-			reason:     "no applicable strategies",
+			reason:     order.reason,
 			bytes:      len(text),
 			durationMS: i.elapsedMillis(start),
 		})
-		return fmt.Errorf("inject: no applicable strategies for target %q on %s", target.AppClass, target.DisplayServer)
+		return fmt.Errorf("inject: %s for target %q on %s", order.reason, target.AppClass, target.DisplayServer)
 	}
 
 	var (
 		attempts    int
 		attemptErrs []error
 	)
-	for _, strat := range order {
+	for _, strat := range order.strategies {
 		attempts++
 		err := strat.Deliver(ctx, target, text)
 		if err == nil {
@@ -160,6 +160,53 @@ func (i *Injector) inject(ctx context.Context, text string) error {
 	})
 	return fmt.Errorf("inject: all %d strategies failed for %q on %s: %w",
 		attempts, target.AppClass, target.DisplayServer, errors.Join(attemptErrs...))
+}
+
+// Resolve runs target detection + classification + strategy selection
+// as a pure query and returns the StrategyDecision that the next
+// Inject would act on. It does NOT call Deliver on any strategy —
+// clipboard, keystroke, and OSC52 tty writes are all suppressed.
+//
+// Resolve satisfies pkg/yap/inject.StrategyResolver, the optional
+// interface debug tooling (`yap paste --dry-run`,
+// `yap record --resolve`) uses to surface the routing decision
+// without mutating external state. The method is safe to call
+// concurrently with Inject — both paths acquire i.mu — and emits no
+// audit log entry itself, since the result is already consumed by
+// the caller.
+//
+// Target detection failure is surfaced as an error because the
+// caller cannot render a meaningful decision without a classified
+// target. Selection failure ("no strategy applies") is reported via
+// an empty Strategy in the returned decision, never as an error, so
+// the caller can still display the classified Target alongside the
+// "no applicable strategies" reason in a single render.
+func (i *Injector) Resolve(ctx context.Context) (yinject.StrategyDecision, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	target, err := Detect(ctx, i.deps)
+	if err != nil {
+		// Surface detection failure directly: the caller needs to
+		// distinguish "could not detect target" from "detected but
+		// no strategy applies". Fall-through to a generic target
+		// (as Inject does) would hide genuine detection bugs in the
+		// debug surface.
+		return yinject.StrategyDecision{}, fmt.Errorf("resolve: detect target: %w", err)
+	}
+
+	order := buildStrategyOrder(ctx, i.logger, i.strategies, i.opts, target)
+	decision := yinject.StrategyDecision{
+		Target:    target,
+		Fallbacks: strategyNames(order.strategies),
+		Reason:    order.reason,
+	}
+	if len(order.strategies) > 0 {
+		first := order.strategies[0]
+		decision.Strategy = first.Name()
+		decision.Tool = toolForStrategy(first.Name(), target)
+	}
+	return decision, nil
 }
 
 // InjectStream consumes chunks until the channel closes, accumulates

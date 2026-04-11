@@ -65,18 +65,17 @@ func makeStrategies(deliveredAt *[]string) []Strategy {
 	return []Strategy{tmux, osc52, electron, wayland, x11}
 }
 
+// names delegates to strategyNames so the test assertions share one
+// implementation with the production Resolve path.
 func names(ss []Strategy) []string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = s.Name()
-	}
-	return out
+	return strategyNames(ss)
 }
 
-// selectFor is a thin helper for tests that don't care about ctx or
-// logger capture. Tests that do care call selectStrategies directly.
+// selectFor is a thin helper for tests that don't care about ctx,
+// logger capture, or the reason token. Tests that do care call
+// buildStrategyOrder directly.
 func selectFor(strategies []Strategy, opts platform.InjectionOptions, target yinject.Target) []Strategy {
-	return selectStrategies(context.Background(), nil, strategies, opts, target)
+	return buildStrategyOrder(context.Background(), nil, strategies, opts, target).strategies
 }
 
 func TestSelect_TerminalNoTmux(t *testing.T) {
@@ -215,11 +214,11 @@ func TestSelectStrategies_UnsupportedOverrideFallsThrough(t *testing.T) {
 			{Match: "kitty", Strategy: "x11"},
 		},
 	}
-	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+	got := buildStrategyOrder(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppClass:      "kitty",
 		AppType:       yinject.AppTerminal,
-	})
+	}).strategies
 	want := []string{"osc52", "wayland"}
 	if !equalStrings(names(got), want) {
 		t.Errorf("got %v, want %v (unsupported override must fall through)", names(got), want)
@@ -291,10 +290,10 @@ func TestSelectStrategies_DefaultStrategyIgnoredWhenUnsupported(t *testing.T) {
 	opts := platform.InjectionOptions{
 		DefaultStrategy: "x11",
 	}
-	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+	got := buildStrategyOrder(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppGeneric,
-	})
+	}).strategies
 	if !equalStrings(names(got), []string{"wayland"}) {
 		t.Errorf("got %v, want [wayland] (default must fall through)", names(got))
 	}
@@ -321,10 +320,10 @@ func TestSelectStrategies_DefaultStrategyIgnoredWhenUnknown(t *testing.T) {
 	opts := platform.InjectionOptions{
 		DefaultStrategy: "banana",
 	}
-	got := selectStrategies(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
+	got := buildStrategyOrder(context.Background(), logger, makeStrategies(nil), opts, yinject.Target{
 		DisplayServer: "wayland",
 		AppType:       yinject.AppGeneric,
-	})
+	}).strategies
 	if !equalStrings(names(got), []string{"wayland"}) {
 		t.Errorf("got %v, want [wayland]", names(got))
 	}
@@ -367,7 +366,7 @@ func TestMatchesOverride(t *testing.T) {
 var errSentinel = errors.New("sentinel")
 
 func TestSelect_DeliverErrorIsNotInterceptedByOrder(t *testing.T) {
-	// selectStrategies just builds the order; it does not call
+	// buildStrategyOrder just builds the order; it does not call
 	// Deliver. This test guards against any future refactor that
 	// accidentally couples selection with delivery.
 	deliveredAt := []string{}
@@ -380,7 +379,7 @@ func TestSelect_DeliverErrorIsNotInterceptedByOrder(t *testing.T) {
 		AppType:       yinject.AppTerminal,
 	})
 	if len(deliveredAt) != 0 {
-		t.Errorf("selectStrategies must not call Deliver, but recorded %v", deliveredAt)
+		t.Errorf("buildStrategyOrder must not call Deliver, but recorded %v", deliveredAt)
 	}
 }
 

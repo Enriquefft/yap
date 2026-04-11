@@ -190,6 +190,129 @@ func TestRecord_InvalidOut(t *testing.T) {
 	}
 }
 
+// TestRecord_Resolve_PrintsDecision guards that --resolve runs the
+// full record+transcribe pipeline and then writes the Resolve
+// decision INSTEAD of injecting the text. The recording injector
+// must NOT see any text: --resolve replaces delivery with a render.
+func TestRecord_Resolve_PrintsDecision(t *testing.T) {
+	withRecordConfig(t)
+	rec := &fakeRecorder{wait: 10 * time.Millisecond}
+	inj := &resolvingInjector{
+		decision: inject.StrategyDecision{
+			Target: inject.Target{
+				DisplayServer: "wayland",
+				WindowID:      "0xabcd",
+				AppClass:      "foot",
+				AppType:       inject.AppTerminal,
+			},
+			Strategy:  "osc52",
+			Tool:      "osc52",
+			Fallbacks: []string{"osc52", "wayland"},
+			Reason:    "natural order",
+		},
+	}
+	p := makeRecordPlatform(rec, inj)
+
+	stdout, _, err := runCLIWithPlatform(t, p, "record", "--resolve", "--max-duration", "1")
+	if err != nil {
+		t.Fatalf("record --resolve: %v", err)
+	}
+	// The wrapper drains the stream and renders the decision. The
+	// underlying Inject path (InjectStream on the recordingInjector)
+	// must NOT have been invoked on the inj embedded fake — the
+	// resolveInjector wrapper intercepts before delegation.
+	if len(inj.streamed) != 0 {
+		t.Errorf("underlying injector saw streamed chunks = %d, want 0 (resolve must intercept)", len(inj.streamed))
+	}
+	if got := inj.lastText(); got != "" {
+		t.Errorf("underlying injector saw Inject(%q), want empty (resolve must not deliver)", got)
+	}
+	if inj.resolveCalls != 1 {
+		t.Errorf("resolveCalls = %d, want 1", inj.resolveCalls)
+	}
+	// The decision must render to stdout with every field the user
+	// asked for. Mirrors the paste --dry-run contract.
+	for _, want := range []string{
+		"target:",
+		"display_server: wayland",
+		"window_id:      0xabcd",
+		"app_class:      foot",
+		"app_type:       terminal",
+		"strategy:  osc52",
+		"tool:      osc52",
+		"fallbacks: osc52, wayland",
+		"reason:    natural order",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q; got:\n%s", want, stdout)
+		}
+	}
+}
+
+// TestRecord_Resolve_UnsupportedInjector guards that --resolve on a
+// platform whose injector does not implement StrategyResolver
+// returns a clean error BEFORE any audio is captured. Failing fast
+// avoids wasting the user's microphone time on a broken debug path.
+func TestRecord_Resolve_UnsupportedInjector(t *testing.T) {
+	withRecordConfig(t)
+	rec := &fakeRecorder{wait: 10 * time.Millisecond}
+	inj := &recordingInjector{}
+	p := makeRecordPlatform(rec, inj)
+
+	_, _, err := runCLIWithPlatform(t, p, "record", "--resolve", "--max-duration", "1")
+	if err == nil {
+		t.Fatal("expected error when injector does not implement StrategyResolver")
+	}
+	if !strings.Contains(err.Error(), "--resolve not supported") {
+		t.Errorf("error message = %q, want '--resolve not supported' substring", err.Error())
+	}
+	if !strings.Contains(err.Error(), "StrategyResolver") {
+		t.Errorf("error message = %q, want 'StrategyResolver' substring", err.Error())
+	}
+	// The recorder must not have been started — we bailed out before
+	// the pipeline launched.
+	rec.mu.Lock()
+	started := rec.started
+	rec.mu.Unlock()
+	if started {
+		t.Error("recorder should not have started on the unsupported-injector error path")
+	}
+}
+
+// TestRecord_Resolve_WinsOverOutText guards the precedence rule:
+// when both --resolve and --out=text are set, --resolve wins. The
+// decision is written to stdout instead of the transcription.
+func TestRecord_Resolve_WinsOverOutText(t *testing.T) {
+	withRecordConfig(t)
+	rec := &fakeRecorder{wait: 10 * time.Millisecond}
+	inj := &resolvingInjector{
+		decision: inject.StrategyDecision{
+			Target: inject.Target{
+				DisplayServer: "wayland",
+				AppClass:      "kitty",
+				AppType:       inject.AppTerminal,
+			},
+			Strategy:  "osc52",
+			Tool:      "osc52",
+			Fallbacks: []string{"osc52", "wayland"},
+			Reason:    "natural order",
+		},
+	}
+	p := makeRecordPlatform(rec, inj)
+
+	stdout, _, err := runCLIWithPlatform(t, p, "record", "--resolve", "--out=text", "--max-duration", "1")
+	if err != nil {
+		t.Fatalf("record --resolve --out=text: %v", err)
+	}
+	// --resolve wins: the decision is printed, NOT the transcribed text.
+	if !strings.Contains(stdout, "strategy:  osc52") {
+		t.Errorf("stdout missing decision render; got:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "mock transcription") {
+		t.Errorf("stdout contains transcribed text even with --resolve set; got:\n%s", stdout)
+	}
+}
+
 // TestRecord_SIGUSR1_CancelsRecCtx asserts that sending SIGUSR1 to
 // the running record command cancels the recording context, which
 // causes the fake recorder to return early. The pipeline still

@@ -29,6 +29,7 @@ type recordOptions struct {
 	out            string
 	device         string
 	maxDur         int
+	resolve        bool
 }
 
 // newRecordCmd builds the `yap record` cobra command. The command
@@ -50,7 +51,15 @@ flows through transcribe and inject).
 
 Use --transform to enable LLM cleanup for this invocation only.
 Use --out=text to print the transcription to stdout instead of
-injecting it at the cursor.`,
+injecting it at the cursor.
+
+Use --resolve to run the full record+transcribe pipeline but skip
+injection entirely. Instead of delivering the transcribed text, the
+command reports the StrategyDecision the inject layer would have
+acted on. Useful for debugging "which strategy would record's text
+have gone through?" without mutating any external state. --resolve
+wins over --out=text: if both are set, the decision is printed and
+the transcription is discarded.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRecord(cmd.Context(), cfg, p, opts, cmd.OutOrStdout())
 		},
@@ -63,6 +72,8 @@ injecting it at the cursor.`,
 		"audio capture device (overrides general.audio_device)")
 	cmd.Flags().IntVar(&opts.maxDur, "max-duration", 0,
 		"maximum recording length in seconds (overrides general.max_duration)")
+	cmd.Flags().BoolVar(&opts.resolve, "resolve", false,
+		"run the full pipeline but report the StrategyDecision instead of injecting")
 	return cmd
 }
 
@@ -119,12 +130,31 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 	}
 	defer closeIfCloser(transformer, "transformer")
 
-	// The injector depends on output mode. text mode prints to the
-	// caller-supplied stdout instead of touching the focused window.
+	// The injector depends on output mode. --resolve wins over
+	// --out=text: when both are set, the full pipeline runs for
+	// side effects (audio capture, transcribe) but injection is
+	// replaced with a StrategyDecision render. text mode prints to
+	// the caller-supplied stdout instead of touching the focused
+	// window.
 	var injector inject.Injector
-	if opts.out == "text" {
+	switch {
+	case opts.resolve:
+		// Build the real platform injector so we can type-assert it
+		// to StrategyResolver. Failing the assertion here (before
+		// audio starts) surfaces a clean error without wasting the
+		// user's microphone time.
+		realInj, err := p.NewInjector(daemon.InjectionOptionsFromConfig(eff.Injection))
+		if err != nil {
+			return fmt.Errorf("record: build injector: %w", err)
+		}
+		resolver, ok := realInj.(inject.StrategyResolver)
+		if !ok {
+			return fmt.Errorf("record: --resolve not supported by the current injector (platform does not implement StrategyResolver)")
+		}
+		injector = newResolveInjector(resolver, stdout)
+	case opts.out == "text":
 		injector = newStdoutInjector(stdout)
-	} else {
+	default:
 		injector, err = p.NewInjector(daemon.InjectionOptionsFromConfig(eff.Injection))
 		if err != nil {
 			return fmt.Errorf("record: build injector: %w", err)
@@ -258,3 +288,83 @@ func (s *stdoutInjector) InjectStream(ctx context.Context, in <-chan transcribe.
 
 // Compile-time assertion that stdoutInjector satisfies inject.Injector.
 var _ inject.Injector = (*stdoutInjector)(nil)
+
+// resolveInjector is the inject.Injector implementation used by
+// `yap record --resolve`. It drains the transcription stream (so the
+// full pipeline runs end-to-end and any audio/transcribe bugs still
+// surface in the debug output) then calls Resolve on the underlying
+// StrategyResolver instead of delivering the text. The resulting
+// StrategyDecision is written to the supplied writer.
+//
+// Design: rather than special-casing "skip inject" inside the engine
+// or the CLI, we inject a wrapper that satisfies inject.Injector and
+// makes the "record pipeline → decision render" path structural. The
+// engine stays unaware, the CLI stays small, and the --resolve flag
+// integrates with the existing record flow (SIGUSR1, silence
+// detection, context cancellation) without any special cases.
+type resolveInjector struct {
+	resolver inject.StrategyResolver
+	w        io.Writer
+}
+
+// newResolveInjector wraps the real platform injector (exposed as a
+// StrategyResolver) in a resolve-only shim. The returned value
+// satisfies inject.Injector so the engine does not need to change.
+func newResolveInjector(resolver inject.StrategyResolver, w io.Writer) inject.Injector {
+	if w == nil {
+		w = os.Stdout
+	}
+	return &resolveInjector{resolver: resolver, w: w}
+}
+
+// Inject runs the resolver and writes the decision. The text is
+// discarded: --resolve never delivers. This path is only hit if the
+// engine calls Inject directly (non-streaming). In Phase 4 the engine
+// always goes through InjectStream; Inject is here for forward
+// compatibility with any future engine refactor that falls back to
+// the synchronous path.
+func (r *resolveInjector) Inject(ctx context.Context, _ string) error {
+	return r.resolveAndWrite(ctx)
+}
+
+// InjectStream drains the transcription channel so the upstream
+// pipeline stays unblocked, then runs Resolve and writes the
+// decision. The drained chunks are discarded — the whole point of
+// --resolve is "what would the injector do with this?", not "here's
+// the text".
+//
+// Chunk errors still propagate so a broken transcribe backend
+// surfaces as a pipeline failure rather than being silently swallowed
+// by the resolve path. Context cancellation propagates as ctx.Err()
+// the same way the real injector reports mid-stream cancellation:
+// the user cancelled, so there is no decision to render.
+func (r *resolveInjector) InjectStream(ctx context.Context, in <-chan transcribe.TranscriptChunk) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case chunk, ok := <-in:
+			if !ok {
+				return r.resolveAndWrite(ctx)
+			}
+			if chunk.Err != nil {
+				return chunk.Err
+			}
+		}
+	}
+}
+
+// resolveAndWrite invokes Resolve on the underlying resolver and
+// writes the decision to w. Wrapped into its own method so Inject
+// and InjectStream share exactly one code path for the render.
+func (r *resolveInjector) resolveAndWrite(ctx context.Context) error {
+	decision, err := r.resolver.Resolve(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve: %w", err)
+	}
+	writeStrategyDecision(r.w, decision)
+	return nil
+}
+
+// Compile-time assertion that resolveInjector satisfies inject.Injector.
+var _ inject.Injector = (*resolveInjector)(nil)
