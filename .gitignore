@@ -1,6 +1,7 @@
 .direnv/
 /result
 /yap
+/gen-nixos
 
 # Local secrets and workspace state
 .env
