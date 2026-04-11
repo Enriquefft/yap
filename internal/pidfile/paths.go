@@ -16,36 +16,32 @@ const (
 )
 
 // DaemonPath resolves the absolute path of the yap daemon's PID file.
-// Wraps xdg.DataFile so callers do not have to repeat the literal
-// "yap/yap.pid" string. Returns a wrapped error on resolution failure
-// so the caller can chain it into a higher-level command error.
-func DaemonPath() (string, error) {
-	path, err := xdg.DataFile(daemonPIDFile)
-	if err != nil {
-		return "", fmt.Errorf("resolve daemon pid path: %w", err)
-	}
-	return path, nil
-}
+// Lives in $XDG_RUNTIME_DIR/yap (tmpfs, wiped on reboot/logout) so no
+// stale state can survive a crash + reboot cycle. Returns a wrapped
+// error on resolution failure so the caller can chain it into a
+// higher-level command error.
+func DaemonPath() (string, error) { return xdgRuntime(daemonPIDFile) }
 
 // RecordPath resolves the absolute path of the standalone `yap record`
-// process PID file. Lives in the same XDG data directory as the
-// daemon PID so `yap stop` and `yap toggle` can locate both without
-// a second configuration knob.
-func RecordPath() (string, error) {
-	path, err := xdg.DataFile(recordPIDFile)
-	if err != nil {
-		return "", fmt.Errorf("resolve record pid path: %w", err)
-	}
-	return path, nil
-}
+// process PID file. Co-located with the daemon PID file in
+// $XDG_RUNTIME_DIR/yap so `yap stop` and `yap toggle` can locate both
+// without a second configuration knob.
+func RecordPath() (string, error) { return xdgRuntime(recordPIDFile) }
 
 // SocketPath resolves the absolute path of the daemon's IPC unix
-// socket. Co-located with the PID files in $XDG_DATA_HOME/yap so the
-// whole runtime tree is one directory operators can clean up.
-func SocketPath() (string, error) {
-	path, err := xdg.DataFile(socketFile)
+// socket. Lives in $XDG_RUNTIME_DIR/yap, which the OS wipes on reboot
+// or logout — no stale state across reboots.
+func SocketPath() (string, error) { return xdgRuntime(socketFile) }
+
+// xdgRuntime resolves relPath against $XDG_RUNTIME_DIR (falling back
+// to the OS temp dir inside adrg/xdg when the variable is unset) and
+// creates the parent directory chain. Any resolution failure is
+// wrapped with the literal name so callers can tell which runtime
+// file failed to resolve without re-parsing the error chain.
+func xdgRuntime(name string) (string, error) {
+	path, err := xdg.RuntimeFile(name)
 	if err != nil {
-		return "", fmt.Errorf("resolve socket path: %w", err)
+		return "", fmt.Errorf("resolve runtime path %s: %w", name, err)
 	}
 	return path, nil
 }
