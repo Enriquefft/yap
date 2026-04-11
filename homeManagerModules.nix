@@ -13,20 +13,44 @@ let
   # Injection tools are all included unconditionally (small packages;
   # yap detects the display server at runtime and picks the right one).
   # whisper-cpp is conditional on the transcription backend.
-  runtimeDeps = with pkgs; [
+  #
+  # Guarded on stdenv.isLinux because wtype/xdotool/ydotool are X11 and
+  # Wayland tools — they do not build on darwin. Users on nix-darwin
+  # importing this module get an empty runtimeDeps, and wrappedPkg
+  # below becomes a pure passthrough symlinkJoin.
+  runtimeDeps = lib.optionals pkgs.stdenv.isLinux (with pkgs; [
     wtype
     xdotool
     xprop
     ydotool
-  ] ++ lib.optional (cfg.settings.transcription.backend == "whisperlocal") whisper-cpp;
+  ] ++ lib.optional (cfg.settings.transcription.backend == "whisperlocal") whisper-cpp)
+  ++ cfg.extraRuntimePaths;
+
+  # Runtime shared libraries miniaudio dlopens at audio-backend init on
+  # Linux. These are not linked at build time, so they must be on the
+  # wrapped binary's LD_LIBRARY_PATH or 'yap record' fails on PipeWire
+  # NixOS. macOS uses CoreAudio and Windows uses WASAPI — neither needs
+  # anything here. See the runtimeHelperTmpl doc comment in
+  # internal/cmd/gen-nixos/template.go for the full rationale on why
+  # libpulseaudio + alsa-lib is the right set and why libjack is not.
+  runtimeLibs = lib.optionals pkgs.stdenv.isLinux (with pkgs; [
+    alsa-lib
+    libpulseaudio
+  ]) ++ cfg.extraRuntimeLibs;
 
   wrappedPkg = pkgs.symlinkJoin {
     name = "yap";
     paths = [ cfg.package ];
     nativeBuildInputs = [ pkgs.makeWrapper ];
+    # On non-Linux hosts both runtimeDeps and runtimeLibs are empty by
+    # default, so wrapProgram reduces to a no-op wrapper that just
+    # forwards to the unwrapped binary. Users who need runtime wiring
+    # on a future darwin port can populate extraRuntimePaths /
+    # extraRuntimeLibs from their own config and it flows through here.
     postBuild = ''
       wrapProgram $out/bin/yap \
-        --prefix PATH : ${lib.makeBinPath runtimeDeps}
+        --prefix PATH : ${lib.makeBinPath runtimeDeps} \
+        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeLibs}
     '';
   };
 in {
@@ -43,6 +67,18 @@ in {
       type = lib.types.bool;
       default = true;
       description = "Start yap daemon as a systemd user service. Disable if you manage keybinds externally (sxhkd, WM binds, etc.) and only use yap record/toggle.";
+    };
+
+    extraRuntimePaths = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [ ];
+      description = "Extra packages to prepend to the wrapped yap binary's PATH. Use for tools yap shells out to that are not covered by the defaults (e.g. a custom injection helper, or ffmpeg for audio inspection).";
+    };
+
+    extraRuntimeLibs = lib.mkOption {
+      type = lib.types.listOf lib.types.package;
+      default = [ ];
+      description = "Extra packages whose lib/ directories should be prepended to the wrapped yap binary's LD_LIBRARY_PATH. miniaudio ships Linux backends for PulseAudio, ALSA and JACK; the defaults include alsa-lib + libpulseaudio (covers PipeWire via pipewire-pulse). Add libjack here if you run bare JACK without pulse/alsa, or add any other dlopened dependency.";
     };
 
     settings = {
@@ -118,6 +154,16 @@ in {
           type = lib.types.str;
           default = "";
           description = "Path to the whisper-server binary (whisperlocal only); empty resolves via $YAP_WHISPER_SERVER, $PATH, then a Nix profile fallback";
+        };
+        whisper_threads = lib.mkOption {
+          type = lib.types.int;
+          default = 0;
+          description = "whisper.cpp thread count (whisperlocal only); 0 picks runtime.NumCPU()/2 rounded up to at least 1";
+        };
+        whisper_use_gpu = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "use GPU backend for whisper.cpp when available (whisperlocal only)";
         };
         language = lib.mkOption {
           type = lib.types.str;
