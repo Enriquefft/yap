@@ -1,0 +1,5 @@
+[general]
+hotkey = "KEY_RIGHTCTRL"
+mode = "hold"
+max_duration = 60
+audio_feedback = true

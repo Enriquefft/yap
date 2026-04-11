@@ -1,0 +1,8 @@
+[general]
+  hotkey = "KEY_RIGHTCTRL"
+  mode = "hold"
+  max_duration = 60
+
+[transcription]
+  backend = "whisperlocal"
+  model = "base.en"

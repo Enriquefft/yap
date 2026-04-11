@@ -1,0 +1,18 @@
+# My personal yap configuration
+# Last reviewed 2026-03-14
+# Keep this file hand-edited; the CLI preserves comments.
+
+[general]
+    # Hotkey that triggers dictation.
+    hotkey = "KEY_RIGHTCTRL"  # release to transcribe
+    # Hold-to-talk mode; toggle drops half of my words.
+    mode = "hold"
+    # Cap at 90s so long rants do not bankrupt the API budget.
+    max_duration = 90
+    audio_feedback = true  # the chime is comforting
+    audio_device = ""
+    silence_detection = false
+    silence_threshold = 0.02
+    silence_duration = 2.0
+    history = false
+    stream_partials = true

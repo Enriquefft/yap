@@ -1,0 +1,3 @@
+[general]
+silence_threshold = 0.02
+silence_duration = 2.0

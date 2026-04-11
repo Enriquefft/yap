@@ -1,0 +1,11 @@
+[transform]
+enabled = true
+backend = "openai"
+model = "gpt-5"
+system_prompt = """
+Fix transcription errors and punctuation.
+Do not rephrase.
+Preserve original language.
+"""
+api_url = ""
+api_key = ""

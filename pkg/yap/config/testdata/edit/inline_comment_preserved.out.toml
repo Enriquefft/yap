@@ -1,0 +1,15 @@
+[general]
+hotkey = "KEY_F24"  # my favorite
+mode = "hold"
+max_duration = 60
+audio_feedback = true
+audio_device = ""
+silence_detection = false
+silence_threshold = 0.02
+silence_duration = 2.0
+history = false
+stream_partials = true
+
+[transcription]
+backend = "whisperlocal"
+model = "base.en"

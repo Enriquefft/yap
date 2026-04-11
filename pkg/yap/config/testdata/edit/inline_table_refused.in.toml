@@ -1,0 +1,3 @@
+[general]
+hotkey = { key = "KEY_RIGHTCTRL", layout = "us" }
+mode = "hold"

@@ -1,0 +1,3 @@
+[general]
+hotkey = ["KEY_LEFTCTRL", "KEY_SPACE"]
+mode = "toggle"

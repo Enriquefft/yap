@@ -1,0 +1,3 @@
+[general]
+audio_feedback = false
+silence_detection = false

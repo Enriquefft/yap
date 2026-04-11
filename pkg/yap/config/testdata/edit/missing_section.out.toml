@@ -1,0 +1,32 @@
+[general]
+hotkey = "KEY_RIGHTCTRL"
+mode = "hold"
+max_duration = 60
+audio_feedback = true
+audio_device = ""
+silence_detection = false
+silence_threshold = 0.02
+silence_duration = 2.0
+history = false
+stream_partials = true
+
+[transcription]
+backend = "whisperlocal"
+model = "base.en"
+model_path = ""
+whisper_server_path = ""
+whisper_threads = 0
+whisper_use_gpu = true
+language = "en"
+prompt = ""
+api_url = ""
+api_key = ""
+
+[injection]
+prefer_osc52 = true
+bracketed_paste = true
+electron_strategy = "clipboard"
+default_strategy = ""
+
+[tray]
+enabled = true

@@ -1,0 +1,14 @@
+[general]
+  hotkey = "KEY_RIGHTCTRL"
+  mode = "hold"
+  max_duration = 60
+  audio_feedback = true
+  audio_device = ""
+  silence_detection = false
+  silence_threshold = 0.02
+  silence_duration = 2.0
+  history = false
+
+[transcription]
+  backend = "whisperlocal"
+  model = "base.en"

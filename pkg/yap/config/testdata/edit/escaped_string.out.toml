@@ -1,0 +1,3 @@
+[transcription]
+prompt = "say \"ok\" twice"
+backend = "whisperlocal"
