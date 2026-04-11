@@ -60,6 +60,14 @@ func TestYAPDaemonEnvSentinel(t *testing.T) {
 	if err := os.MkdirAll(dataHome, 0o755); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}
+	// Bug 5/6 migration: yap runtime files live under
+	// $XDG_RUNTIME_DIR/yap, not $XDG_DATA_HOME/yap. The test must
+	// own this directory so the spawned daemon writes its pidfile
+	// somewhere the test can poll.
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatalf("mkdir runtime: %v", err)
+	}
 
 	cmd := exec.Command(binPath)
 	cmd.Env = append(os.Environ(),
@@ -70,6 +78,7 @@ func TestYAPDaemonEnvSentinel(t *testing.T) {
 		"XDG_DATA_HOME="+dataHome,
 		"XDG_CACHE_HOME="+filepath.Join(tmp, "cache"),
 		"XDG_STATE_HOME="+filepath.Join(tmp, "state"),
+		"XDG_RUNTIME_DIR="+runtimeDir,
 	)
 	stderrFile, err := os.Create(filepath.Join(tmp, "daemon.stderr"))
 	if err != nil {
@@ -100,7 +109,7 @@ func TestYAPDaemonEnvSentinel(t *testing.T) {
 		}
 	})
 
-	pidPath := filepath.Join(dataHome, "yap", "yap.pid")
+	pidPath := filepath.Join(runtimeDir, "yap", "yap.pid")
 	deadline := time.Now().Add(5 * time.Second)
 	// Poll fast (10ms) so we do not miss the window when the
 	// daemon writes the PID file and then exits because some

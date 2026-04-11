@@ -136,13 +136,20 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 		return fmt.Errorf("record: engine init: %w", err)
 	}
 
-	// Track the record process via its own PID file so `yap stop`
-	// and `yap toggle` can target it without going through the
-	// daemon's IPC socket.
-	if err := writeRecordPID(); err != nil {
+	// Track the record process via its own flock-protected PID
+	// file so `yap stop` and `yap toggle` can target it without
+	// going through the daemon's IPC socket. The kernel releases
+	// the flock automatically on exit, so a crash can never leave
+	// a stale pidfile blocking the next `yap record` invocation.
+	pidHandle, err := acquireRecordPID()
+	if err != nil {
 		return fmt.Errorf("record: pid: %w", err)
 	}
-	defer removeRecordPID()
+	defer func() {
+		if cerr := pidHandle.Close(); cerr != nil {
+			slog.Default().Warn("record pid close error", "err", cerr)
+		}
+	}()
 
 	// Two contexts:
 	//

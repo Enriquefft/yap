@@ -3,6 +3,7 @@ package cli_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -84,12 +85,17 @@ func withRecordConfig(t *testing.T) {
 	t.Helper()
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("YAP_CONFIG", cfgFile)
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 	t.Setenv("YAP_TRANSFORM_API_KEY", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	xdg.Reload()
 	writeConfigFile(t, cfgFile, `
 [general]

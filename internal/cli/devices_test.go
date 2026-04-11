@@ -11,8 +11,10 @@ import (
 
 // fakeDeviceLister implements platform.DeviceLister for tests.
 type fakeDeviceLister struct {
-	devices []platform.Device
-	err     error
+	devices    []platform.Device
+	backend    string
+	backendErr error
+	err        error
 }
 
 func (f fakeDeviceLister) ListDevices() ([]platform.Device, error) {
@@ -20,6 +22,16 @@ func (f fakeDeviceLister) ListDevices() ([]platform.Device, error) {
 		return nil, f.err
 	}
 	return f.devices, nil
+}
+
+func (f fakeDeviceLister) Backend() (string, error) {
+	if f.backendErr != nil {
+		return "", f.backendErr
+	}
+	if f.backend == "" {
+		return "TestBackend", nil
+	}
+	return f.backend, nil
 }
 
 func withCleanConfig(t *testing.T) {
@@ -37,6 +49,7 @@ func TestDevices_HappyPath(t *testing.T) {
 	withCleanConfig(t)
 	p := platform.Platform{
 		DeviceLister: fakeDeviceLister{
+			backend: "PulseAudio",
 			devices: []platform.Device{
 				{Name: "default", Description: "1ch input @ pulse", IsDefault: true},
 				{Name: "USB Mic", Description: "2ch input @ alsa"},
@@ -47,6 +60,9 @@ func TestDevices_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("devices: %v", err)
 	}
+	if !strings.Contains(stdout, "BACKEND: PulseAudio") {
+		t.Errorf("expected BACKEND header, got:\n%s", stdout)
+	}
 	if !strings.Contains(stdout, "DEFAULT") || !strings.Contains(stdout, "NAME") || !strings.Contains(stdout, "DESCRIPTION") {
 		t.Errorf("expected table headers, got:\n%s", stdout)
 	}
@@ -55,6 +71,13 @@ func TestDevices_HappyPath(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "*") {
 		t.Errorf("expected default-marker asterisk, got:\n%s", stdout)
+	}
+	// BACKEND header must precede the table so users see the
+	// diagnostic context before the device list.
+	backendIdx := strings.Index(stdout, "BACKEND:")
+	defaultIdx := strings.Index(stdout, "DEFAULT")
+	if backendIdx < 0 || defaultIdx < 0 || backendIdx > defaultIdx {
+		t.Errorf("expected BACKEND header before table, got:\n%s", stdout)
 	}
 }
 
@@ -81,5 +104,22 @@ func TestDevices_ListDevicesError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "audio enumeration failed") {
 		t.Errorf("expected lister error to surface, got %v", err)
+	}
+}
+
+func TestDevices_BackendError(t *testing.T) {
+	withCleanConfig(t)
+	p := platform.Platform{
+		DeviceLister: fakeDeviceLister{backendErr: errors.New("no usable audio backend")},
+	}
+	_, _, err := runCLIWithPlatform(t, p, "devices")
+	if err == nil {
+		t.Fatal("expected error when Backend() fails")
+	}
+	if !strings.Contains(err.Error(), "no usable audio backend") {
+		t.Errorf("expected backend error to surface, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "devices: backend:") {
+		t.Errorf("expected 'devices: backend:' prefix, got %v", err)
 	}
 }

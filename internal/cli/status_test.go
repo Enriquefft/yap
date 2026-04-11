@@ -3,6 +3,7 @@ package cli_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,12 +22,17 @@ import (
 func TestStatus_NoDaemon(t *testing.T) {
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("YAP_CONFIG", cfgFile)
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	xdg.Reload()
 	writeConfigFile(t, cfgFile, `[general]
   hotkey = "KEY_RIGHTCTRL"
@@ -77,12 +83,17 @@ func TestStatus_NoDaemon(t *testing.T) {
 func TestStatus_WithFakeDaemon(t *testing.T) {
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("YAP_CONFIG", cfgFile)
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	writeConfigFile(t, cfgFile, "[general]\n  hotkey = \"KEY_RIGHTCTRL\"\n")
 
 	// xdg.DataFile honors XDG_DATA_HOME — point it at our scratch

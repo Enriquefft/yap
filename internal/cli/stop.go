@@ -53,8 +53,23 @@ func runStop(out io.Writer) error {
 }
 
 // stopDaemon runs the daemon-shutdown path. Returns (stopped, err)
-// where stopped is true if the daemon was present and the stop
-// request was acknowledged (IPC or fallback cleanup).
+// where stopped is true if a live daemon was present at the start of
+// the call and some stop action was taken (IPC or signal).
+//
+// Liveness is probed via pidfile.IsLocked — the authoritative signal.
+// A stale pidfile with no flock holder reads as "not running" so the
+// next listen can reclaim it cleanly. File existence (of pidfile or
+// socket) is never used as a liveness signal because both can outlive
+// a crashed daemon and would produce false positives.
+//
+// On IPC failure the fallback is SIGTERM+SIGKILL to the PID read from
+// the pidfile — NOT os.Remove. Unlinking the pidfile while the daemon
+// is still alive opens the exact lock-then-unlink race the pidfile
+// Handle contract was designed to eliminate: two concurrent Acquires
+// on the path would bind to two different inodes and both "own" the
+// lock. Killing the process instead lets the kernel release the flock
+// on exit, and the next Acquire truncates and rewrites the existing
+// file cleanly.
 func stopDaemon(out io.Writer) (bool, error) {
 	pidPath, err := pidfile.DaemonPath()
 	if err != nil {
@@ -65,33 +80,81 @@ func stopDaemon(out io.Writer) (bool, error) {
 		return false, fmt.Errorf("stop: daemon: %w", err)
 	}
 
-	if _, err := os.Stat(sockPath); errors.Is(err, os.ErrNotExist) {
-		// Daemon not running — not an error, just nothing to stop.
+	if !pidfile.IsLocked(pidPath) {
+		// No live daemon holding the flock. Stale pidfile (if any)
+		// is not our problem — the next Acquire reclaims it.
 		return false, nil
 	}
 
-	resp, err := ipc.Send(sockPath, ipc.CmdStop, 5*time.Second)
-	if err != nil {
-		// IPC failed — daemon may be hung. Force cleanup.
-		pidfile.Remove(pidPath)
-		os.Remove(sockPath)
-		fmt.Fprintln(out, "IPC stop failed; cleaned up stale files")
-		return true, nil
-	}
-	if !resp.Ok {
-		return true, fmt.Errorf("stop: daemon rejected stop command: %s", resp.Error)
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if isLive, _ := pidfile.IsLive(pidPath); !isLive {
+	resp, ipcErr := ipc.Send(sockPath, ipc.CmdStop, 5*time.Second)
+	if ipcErr == nil {
+		if !resp.Ok {
+			return true, fmt.Errorf("stop: daemon rejected stop command: %s", resp.Error)
+		}
+		if waitForFlockRelease(pidPath, 3*time.Second) {
 			fmt.Fprintln(out, "Daemon stopped")
 			return true, nil
 		}
+		fmt.Fprintln(out, "Warning: Daemon shutdown timeout; process still holds pidfile lock")
+		return true, nil
+	}
+
+	// IPC failed but the daemon holds the flock. Fall back to
+	// SIGTERM against the PID recorded in the pidfile. The kernel
+	// releases the flock when the process exits; the next listen
+	// reclaims the pidfile via Acquire's truncate-and-rewrite path.
+	pid, rerr := pidfile.Read(pidPath)
+	if rerr != nil || pid <= 0 {
+		return false, fmt.Errorf(
+			"stop: daemon IPC failed (%v) and pidfile unreadable (%v); investigate manually",
+			ipcErr, rerr)
+	}
+	proc, ferr := os.FindProcess(pid)
+	if ferr != nil {
+		return false, fmt.Errorf("stop: daemon IPC failed (%v); FindProcess(%d): %w", ipcErr, pid, ferr)
+	}
+	fmt.Fprintf(out, "IPC stop failed (%v); sending SIGTERM to pid %d\n", ipcErr, pid)
+	if serr := proc.Signal(syscall.SIGTERM); serr != nil {
+		if errors.Is(serr, os.ErrProcessDone) || errors.Is(serr, syscall.ESRCH) {
+			// Daemon died between the flock probe and the signal.
+			return true, nil
+		}
+		return false, fmt.Errorf("stop: SIGTERM pid %d: %w", pid, serr)
+	}
+	if waitForFlockRelease(pidPath, 3*time.Second) {
+		fmt.Fprintln(out, "Daemon stopped")
+		return true, nil
+	}
+	// SIGTERM did not stick. Escalate to SIGKILL. The kernel
+	// releases the flock on exit regardless of the signal.
+	fmt.Fprintln(out, "Daemon unresponsive to SIGTERM; escalating to SIGKILL")
+	if kerr := proc.Signal(syscall.SIGKILL); kerr != nil {
+		if errors.Is(kerr, os.ErrProcessDone) || errors.Is(kerr, syscall.ESRCH) {
+			return true, nil
+		}
+		return false, fmt.Errorf("stop: SIGKILL pid %d: %w", pid, kerr)
+	}
+	if waitForFlockRelease(pidPath, 2*time.Second) {
+		fmt.Fprintln(out, "Daemon killed")
+		return true, nil
+	}
+	return true, fmt.Errorf("stop: pid %d unresponsive to SIGKILL; kernel may have wedged the process", pid)
+}
+
+// waitForFlockRelease polls pidfile.IsLocked until it returns false or
+// the deadline elapses. Returns true on release, false on timeout.
+// This is the authoritative signal that a daemon process has exited,
+// replacing the old PID-signal-probe loop that couldn't distinguish a
+// dying process from a freshly-started one with the same PID.
+func waitForFlockRelease(pidPath string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !pidfile.IsLocked(pidPath) {
+			return true
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	fmt.Fprintln(out, "Warning: Daemon shutdown timeout; PID file still exists")
-	return true, nil
+	return false
 }
 
 // stopRecord SIGTERMs the standalone `yap record` process, if any.

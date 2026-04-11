@@ -16,16 +16,28 @@ import (
 	"github.com/hybridz/yap/internal/pidfile"
 )
 
+// withScratchXDG sets up a scratch XDG tree for a CLI test.
+//
+// XDG_RUNTIME_DIR is set and created alongside the other XDG dirs
+// because yap's runtime files (pidfiles, IPC socket) live under
+// $XDG_RUNTIME_DIR/yap after the bug 5/6 migration. Without it, tests
+// would resolve to the real /run/user/$UID/yap and collide with any
+// live yap daemon running on the developer's machine.
 func withScratchXDG(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	cfgFile := filepath.Join(tmp, "config.toml")
+	runtimeDir := filepath.Join(tmp, "run")
+	if err := os.MkdirAll(runtimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("YAP_CONFIG", cfgFile)
 	t.Setenv("YAP_API_KEY", "")
 	t.Setenv("GROQ_API_KEY", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(tmp, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(tmp, "data"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
 	writeConfigFile(t, cfgFile, "[general]\n  hotkey = \"KEY_RIGHTCTRL\"\n")
 	xdg.Reload()
 	return tmp
@@ -44,8 +56,30 @@ func TestStop_NothingRunning(t *testing.T) {
 }
 
 // TestStop_DaemonOnly stops a fake daemon via IPC and exits 0.
+//
+// The fake daemon holds the pidfile flock (via pidfile.Acquire) so
+// stop.stopDaemon's IsLocked liveness probe fires — mirroring the
+// contract real daemons satisfy inside daemon.Run.
 func TestStop_DaemonOnly(t *testing.T) {
 	withScratchXDG(t)
+
+	pidPath, err := pidfile.DaemonPath()
+	if err != nil {
+		t.Fatalf("resolve pid path: %v", err)
+	}
+	holder, err := pidfile.Acquire(pidPath)
+	if err != nil {
+		t.Fatalf("acquire pidfile: %v", err)
+	}
+	// The fake daemon releases its flock when the IPC shutdown
+	// callback fires, mirroring how a real daemon's deferred
+	// Close(), plus the ensuing process exit, unwinds the flock.
+	releasedOnStop := false
+	defer func() {
+		if !releasedOnStop {
+			_ = holder.Close()
+		}
+	}()
 
 	sockPath, err := pidfile.SocketPath()
 	if err != nil {
@@ -57,6 +91,8 @@ func TestStop_DaemonOnly(t *testing.T) {
 	}
 	stopped := make(chan struct{}, 1)
 	srv.SetShutdownFn(func() {
+		_ = holder.Close()
+		releasedOnStop = true
 		select {
 		case stopped <- struct{}{}:
 		default:
@@ -126,7 +162,23 @@ func TestStop_RecordOnly(t *testing.T) {
 func TestStop_BothPaths(t *testing.T) {
 	withScratchXDG(t)
 
-	// Daemon side.
+	// Daemon side: hold the pidfile flock too, mirroring real
+	// daemons so the stopDaemon IsLocked probe fires.
+	pidPath, err := pidfile.DaemonPath()
+	if err != nil {
+		t.Fatalf("daemon pid path: %v", err)
+	}
+	holder, err := pidfile.Acquire(pidPath)
+	if err != nil {
+		t.Fatalf("acquire pidfile: %v", err)
+	}
+	releasedOnStop := false
+	defer func() {
+		if !releasedOnStop {
+			_ = holder.Close()
+		}
+	}()
+
 	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		t.Fatalf("sock path: %v", err)
@@ -137,6 +189,8 @@ func TestStop_BothPaths(t *testing.T) {
 	}
 	stopped := make(chan struct{}, 1)
 	srv.SetShutdownFn(func() {
+		_ = holder.Close()
+		releasedOnStop = true
 		select {
 		case stopped <- struct{}{}:
 		default:
@@ -154,14 +208,14 @@ func TestStop_BothPaths(t *testing.T) {
 		t.Fatalf("spawn sleep: %v", err)
 	}
 	defer child.Process.Kill()
-	pidPath, err := pidfile.RecordPath()
+	recordPidPath, err := pidfile.RecordPath()
 	if err != nil {
 		t.Fatalf("pid path: %v", err)
 	}
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", child.Process.Pid)), 0o600); err != nil {
+	if err := os.WriteFile(recordPidPath, []byte(fmt.Sprintf("%d\n", child.Process.Pid)), 0o600); err != nil {
 		t.Fatalf("write pid file: %v", err)
 	}
-	defer os.Remove(pidPath)
+	defer os.Remove(recordPidPath)
 
 	_, _, err = runCLI(t, "stop")
 	if err != nil {

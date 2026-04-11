@@ -34,11 +34,24 @@ func runDevices(cmd *cobra.Command, p platform.Platform) error {
 	if p.DeviceLister == nil {
 		return errors.New("devices: list: platform does not support enumeration")
 	}
+	// Resolve the backend first so users who only care about the
+	// "which backend am I on?" question see it even when enumeration
+	// fails later for an unrelated reason. A failure here is still
+	// fatal because there is no meaningful fallback — we cannot list
+	// devices without a backend in the first place.
+	backend, err := p.DeviceLister.Backend()
+	if err != nil {
+		return fmt.Errorf("devices: backend: %w", err)
+	}
 	devices, err := p.DeviceLister.ListDevices()
 	if err != nil {
 		return fmt.Errorf("devices: list: %w", err)
 	}
-	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	out := cmd.OutOrStdout()
+	if _, err := fmt.Fprintf(out, "BACKEND: %s\n", backend); err != nil {
+		return err
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "DEFAULT\tNAME\tDESCRIPTION")
 	for _, d := range devices {
 		marker := " "

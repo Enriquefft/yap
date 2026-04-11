@@ -133,6 +133,14 @@ func TestConfigSet_RoundTripString(t *testing.T) {
 
 	seedDefaultConfig(t, cfgFile)
 
+	// The default whisperlocal model is "base.en" which is
+	// English-only; the validator correctly rejects setting
+	// language=ja while the model stays .en. Switch to a
+	// multilingual model first so the round-trip exercises the
+	// set/get path rather than the validator.
+	if _, _, err := runCLI(t, "config", "set", "transcription.model", "base"); err != nil {
+		t.Fatalf("set model: %v", err)
+	}
 	if _, _, err := runCLI(t, "config", "set", "transcription.language", "ja"); err != nil {
 		t.Fatalf("set: %v", err)
 	}

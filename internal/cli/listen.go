@@ -109,20 +109,37 @@ var spawnFunc = osSpawnDaemon
 // failing. The success banner is written through the supplied io.Writer
 // (the cobra command's OutOrStdout) so tests can capture it without
 // touching os.Stdout.
+//
+// The authoritative double-start guard lives in daemon.Run itself:
+// it takes the exclusive flock on the daemon pidfile via
+// pidfile.Acquire and fails loudly on contention. pidfile.Acquire is
+// the single source of truth for "am I allowed to start?".
+//
+// As a UX improvement we run a non-destructive pidfile.IsLocked probe
+// before forking the child. On a true positive the user gets a clean
+// "already running (pid N)" error in milliseconds instead of waiting
+// the full 3s startup deadline for the child's stderr tail. The probe
+// is advisory: a false negative (stale pidfile with no flock holder)
+// is reclaimed by Acquire in the child, and a race between probe and
+// child-side Acquire still resolves correctly because the child fails
+// loudly on its own flock contention.
 func spawnDaemonChild(out io.Writer) error {
 	pidPath, err := pidfile.DaemonPath()
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-
-	// DAEMON-05: Check if daemon is already running.
-	if isLive, _ := pidfile.IsLive(pidPath); isLive {
-		return fmt.Errorf("listen: yap is already running (PID file: %s)", pidPath)
-	}
-
 	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
+	}
+
+	if pidfile.IsLocked(pidPath) {
+		if holder, rerr := pidfile.Read(pidPath); rerr == nil && holder > 0 {
+			return fmt.Errorf(
+				"listen: yap daemon already running (pid %d); stop it first with `yap stop`",
+				holder)
+		}
+		return fmt.Errorf("listen: yap daemon already running; stop it first with `yap stop`")
 	}
 
 	handle, err := spawnFunc()
@@ -131,13 +148,32 @@ func spawnDaemonChild(out io.Writer) error {
 	}
 	defer handle.Release()
 
+	// Readiness has two signals:
+	//
+	//   1. pidfile.IsLocked(pidPath) becomes true. This is the
+	//      authoritative flock-based signal that the child has
+	//      reached pidfile.Acquire inside daemon.Run and committed
+	//      to being the owner. We use IsLocked rather than
+	//      os.Stat(pidPath) because after the C2 fix to
+	//      pidfile.Handle.Close, a previously-stopped daemon leaves
+	//      its pidfile on disk with no flock holder — a bare Stat
+	//      would declare success on the stale file without waiting
+	//      for our new child.
+	//
+	//   2. os.Stat(sockPath) succeeds. The ipc.NewServer constructor
+	//      os.Removes any stale socket before binding, so this is a
+	//      fresh signal: the socket exists exactly when this child's
+	//      IPC server is up.
+	//
+	// Both signals must fire before we declare success. The parent's
+	// pre-spawn IsLocked check at line 136 guarantees no pre-existing
+	// flock holder, so a transition to IsLocked=true inside the loop
+	// can only be our child.
 	deadline := time.Now().Add(3 * time.Second)
 	pidReady, sockReady := false, false
 	for time.Now().Before(deadline) {
-		if !pidReady {
-			if _, err := os.Stat(pidPath); err == nil {
-				pidReady = true
-			}
+		if !pidReady && pidfile.IsLocked(pidPath) {
+			pidReady = true
 		}
 		if !sockReady {
 			if _, err := os.Stat(sockPath); err == nil {
@@ -154,9 +190,9 @@ func spawnDaemonChild(out io.Writer) error {
 	stderrTail := handle.Stderr()
 	if !pidReady {
 		if stderrTail != "" {
-			return fmt.Errorf("listen: daemon did not start within 3s (PID file not created):\n%s", stderrTail)
+			return fmt.Errorf("listen: daemon did not start within 3s (pidfile flock not acquired):\n%s", stderrTail)
 		}
-		return fmt.Errorf("listen: daemon did not start within 3s (PID file not created)")
+		return fmt.Errorf("listen: daemon did not start within 3s (pidfile flock not acquired)")
 	}
 	if stderrTail != "" {
 		return fmt.Errorf("listen: daemon started but IPC socket not ready within 3s:\n%s", stderrTail)

@@ -51,6 +51,11 @@ func newModelsListCmd(mgr *models.Manager) *cobra.Command {
 whether it is currently in the cache, its on-disk size in MB, and
 the absolute path it would resolve to.
 
+Models that exist in the cache but fail ggml magic-byte validation
+(half-written downloads, saved 404 HTML bodies, truncated files) are
+shown with STATUS=corrupt and a footer listing the files to remove
+before rerunning 'yap models download'.
+
 Use this to check before running 'models download' or to confirm a
 hand-downloaded file landed in the right place.`,
 		Args: cobra.NoArgs,
@@ -60,17 +65,46 @@ hand-downloaded file landed in the right place.`,
 				return fmt.Errorf("models: list: %w", err)
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "%-12s %-12s %-8s %s\n", "NAME", "INSTALLED", "SIZE", "PATH")
+			fmt.Fprintf(out, "%-12s %-10s %-8s %s\n", "NAME", "STATUS", "SIZE", "PATH")
+			var corrupt []models.Model
 			for _, m := range entries {
-				installed := "no"
-				if m.Installed {
-					installed = "yes"
+				status := modelStatus(m)
+				if m.Corrupt {
+					corrupt = append(corrupt, m)
 				}
-				fmt.Fprintf(out, "%-12s %-12s %-8s %s\n",
-					m.Name, installed, fmt.Sprintf("%dMB", m.SizeMB), m.Path)
+				fmt.Fprintf(out, "%-12s %-10s %-8s %s\n",
+					m.Name, status, fmt.Sprintf("%dMB", m.SizeMB), m.Path)
+			}
+			if len(corrupt) > 0 {
+				fmt.Fprintln(out)
+				fmt.Fprintln(out, "corrupt cache files detected — these files exist but are not valid whisper.cpp models")
+				fmt.Fprintln(out, "(common causes: half-written download, saved 404 HTML body, truncated file)")
+				fmt.Fprintln(out, "remove them before rerunning 'yap models download':")
+				for _, m := range corrupt {
+					fmt.Fprintf(out, "  rm %s\n", m.Path)
+				}
 			}
 			return nil
 		},
+	}
+}
+
+// modelStatus collapses a Model's (Installed, Corrupt) pair into the
+// single user-facing column shown in `yap models list`. The three
+// possible states are mutually exclusive by construction, so a
+// straight-line switch is the whole vocabulary:
+//
+//   - "installed" — ready to use
+//   - "corrupt"   — file exists but fails ggml magic-byte verification
+//   - "missing"   — not in cache; run `yap models download <name>`
+func modelStatus(m models.Model) string {
+	switch {
+	case m.Installed:
+		return "installed"
+	case m.Corrupt:
+		return "corrupt"
+	default:
+		return "missing"
 	}
 }
 

@@ -100,15 +100,38 @@ func TestToggle_RecordSignalPath(t *testing.T) {
 	}
 }
 
-// TestToggle_NothingRunning errors out (exit 1) when neither the
-// daemon nor a record process is running.
-func TestToggle_NothingRunning(t *testing.T) {
+// TestToggle_NothingRunning_StartsRecord asserts that when neither the
+// daemon nor a record process is running, toggle attempts to start a
+// `yap record` process.
+//
+// In the test environment os.Executable() resolves to the go-test
+// binary, which does not know the `record` subcommand. startRecordProcess
+// fork-execs that binary, the child immediately exits with an unknown-
+// command error, never writes its pidfile, and the parent's
+// poll-for-pidfile handshake either times out or reaps the child
+// early via non-blocking Wait4. All acceptable outcomes mean the
+// spawn intent was correctly reached:
+//
+//   - "Recording started"          — a real yap binary happened to be on PATH
+//   - "start record"               — fork-exec itself failed
+//   - "resolve executable"         — os.Executable() failed (sandbox)
+//   - "did not register"           — child forked but never wrote the pidfile
+//     within the 500ms handshake deadline
+//   - "exited before registering"  — Bug 14 fix: non-blocking Wait4
+//     reaped the child early and surfaced the captured stderr tail
+//     (from the thread-safe lockedBuffer tee) instead of waiting the
+//     full 500ms for a silent timeout.
+func TestToggle_NothingRunning_StartsRecord(t *testing.T) {
 	withScratchXDG(t)
-	_, _, err := runCLI(t, "toggle")
-	if err == nil {
-		t.Fatal("expected toggle to error when nothing is running")
-	}
-	if !strings.Contains(err.Error(), "no daemon") {
-		t.Errorf("error did not name the no-daemon condition: %v", err)
+	stdout, _, err := runCLI(t, "toggle")
+	if err != nil {
+		if !strings.Contains(err.Error(), "start record") &&
+			!strings.Contains(err.Error(), "resolve executable") &&
+			!strings.Contains(err.Error(), "did not register") &&
+			!strings.Contains(err.Error(), "exited before registering") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	} else if !strings.Contains(stdout, "Recording started") {
+		t.Errorf("expected recording start in stdout, got:\n%s", stdout)
 	}
 }
