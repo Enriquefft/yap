@@ -82,7 +82,10 @@ func decodeChimeWAV(data []byte) (samples []int16, channels uint32, sampleRateOu
 // playPCM streams int16 PCM samples to the default output device using
 // a short-lived malgo session. Blocks until the buffer is drained.
 func playPCM(samples []int16, channels, rate uint32) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	// Use the shared initLinuxAudioContext helper so the chime lives on
+	// the same backend as the recorder and device lister — single
+	// source of truth for miniaudio backend selection.
+	ctx, _, err := initLinuxAudioContext()
 	if err != nil {
 		return
 	}

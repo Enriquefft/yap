@@ -161,6 +161,17 @@ type DeviceLister interface {
 	// platform. The returned slice is sorted by the platform's native
 	// enumeration order; callers may format it however they like.
 	ListDevices() ([]Device, error)
+
+	// Backend returns a short, human-readable name of the audio
+	// backend the platform will actually talk to when listing or
+	// recording. On Linux this is the selected miniaudio backend
+	// ("PulseAudio", "ALSA", "JACK", ...); other platforms may return
+	// their host API name. The `yap devices` CLI prints the result as
+	// a header above the device table so users can immediately tell
+	// whether miniaudio has fallen through to an unexpected backend
+	// (for example JACK on NixOS when the pulse/alsa runtime libraries
+	// are missing from LD_LIBRARY_PATH).
+	Backend() (string, error)
 }
 
 // Platform bundles all platform-specific implementations.
@@ -197,4 +208,17 @@ type Platform struct {
 	// enumerate devices leave this nil and the CLI surfaces a clear
 	// error to the user.
 	DeviceLister DeviceLister
+}
+
+// FrameNotifier is an optional interface that Recorder implementations
+// may satisfy. It allows callers (the daemon, typically) to receive raw
+// PCM frames during capture for real-time analysis (e.g. silence
+// detection). The callback fires on the audio worker thread — callers
+// must not block.
+//
+// SetOnFrame is called before Start and cleared after Start returns.
+// The frame format matches the recorder's native output: 16-bit signed
+// PCM at the recorder's sample rate and channel count.
+type FrameNotifier interface {
+	SetOnFrame(fn func([]int16))
 }

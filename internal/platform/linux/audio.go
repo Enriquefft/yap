@@ -3,13 +3,87 @@ package linux
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
 	"github.com/hybridz/yap/internal/platform"
 )
+
+// preferredBackends is the Linux audio backend preference list used by
+// every malgo context yap creates (recorder, device lister, chime).
+// The order is PulseAudio → ALSA → JACK because:
+//
+//   - PulseAudio (or PipeWire's pulse shim) is the standard user-space
+//     sound server on modern Linux desktops and is what users expect
+//     yap to record from.
+//   - ALSA is the reliable fallback when PulseAudio is unavailable
+//     (headless servers, stripped-down systems).
+//   - JACK is the last resort because it exposes a generic "Default
+//     Capture Device" that rarely matches what the user wanted and
+//     tends to be what miniaudio falls through to on NixOS when the
+//     pulse/alsa runtime libraries are missing — exactly the failure
+//     mode this order is designed to surface loudly.
+//
+// Keeping the order here as a single source of truth means `yap
+// devices`, `yap record`, and the chime player all agree on which
+// backend they are talking to.
+var preferredBackends = []malgo.Backend{
+	malgo.BackendPulseaudio,
+	malgo.BackendAlsa,
+	malgo.BackendJack,
+}
+
+// backendDisplayName maps a malgo.Backend constant to the human-readable
+// name used by `yap devices`. Mirrors the gBackendInfo[] table inside
+// miniaudio.h (see ma_get_backend_name). The Go binding does not
+// re-export that table, so we keep a local copy restricted to the
+// Linux-relevant backends.
+func backendDisplayName(b malgo.Backend) string {
+	switch b {
+	case malgo.BackendPulseaudio:
+		return "PulseAudio"
+	case malgo.BackendAlsa:
+		return "ALSA"
+	case malgo.BackendJack:
+		return "JACK"
+	case malgo.BackendNull:
+		return "Null"
+	default:
+		return fmt.Sprintf("unknown (%d)", uint32(b))
+	}
+}
+
+// initLinuxAudioContext walks preferredBackends in order, calling
+// malgo.InitContext with a single-backend list for each candidate. The
+// first backend that initializes successfully wins; its malgo context
+// is returned together with the selected backend. Callers own the
+// returned context and must free it with freeMalgoContext.
+//
+// This is the single source of truth for malgo context creation on
+// Linux. Using one helper for the recorder, the device lister, and the
+// chime player guarantees all three share the same backend, so the
+// output of `yap devices` describes exactly what `yap record` will use.
+//
+// The returned error aggregates every backend attempt so a total
+// failure still tells the user which backends were tried and how each
+// one failed — critical on NixOS-style setups where a missing runtime
+// library silently downgrades every candidate.
+func initLinuxAudioContext() (*malgo.AllocatedContext, malgo.Backend, error) {
+	var attemptErrs []error
+	for _, backend := range preferredBackends {
+		ctx, err := malgo.InitContext([]malgo.Backend{backend}, malgo.ContextConfig{}, nil)
+		if err != nil {
+			attemptErrs = append(attemptErrs, fmt.Errorf("%s: %w", backendDisplayName(backend), err))
+			continue
+		}
+		return ctx, backend, nil
+	}
+	return nil, 0, fmt.Errorf("no usable audio backend: %w", errors.Join(attemptErrs...))
+}
 
 // recorder implements platform.Recorder using miniaudio (malgo).
 //
@@ -21,10 +95,18 @@ import (
 // endian byte buffers and accumulated in r.frames under r.mu.
 type recorder struct {
 	ctx        *malgo.AllocatedContext
+	backend    malgo.Backend
 	deviceName string
 
 	mu     sync.Mutex
 	frames []int16
+
+	// onFrame is an optional per-frame callback set via SetOnFrame
+	// before Start and cleared after Start returns. The data callback
+	// invokes it on the malgo worker thread — callers must not block.
+	// No mutex is needed because the set/clear happens outside Start's
+	// blocking window.
+	onFrame func([]int16)
 
 	// captureDeviceID holds the malgo device id for the configured
 	// input when deviceName is non-empty. Storing it on the recorder
@@ -37,7 +119,7 @@ type recorder struct {
 // audio input device is available. Returns a clear error on PipeWire-only
 // systems with zero input devices.
 func NewRecorder(deviceName string) (platform.Recorder, error) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	ctx, backend, err := initLinuxAudioContext()
 	if err != nil {
 		return nil, fmt.Errorf("malgo init context: %w", err)
 	}
@@ -45,19 +127,21 @@ func NewRecorder(deviceName string) (platform.Recorder, error) {
 	devs, err := ctx.Devices(malgo.Capture)
 	if err != nil {
 		freeMalgoContext(ctx)
-		return nil, fmt.Errorf("enumerate audio devices: %w", err)
+		return nil, fmt.Errorf("enumerate audio devices on %s: %w", backendDisplayName(backend), err)
 	}
 	if len(devs) == 0 {
 		freeMalgoContext(ctx)
 		return nil, fmt.Errorf(
-			"no audio input devices available — " +
-				"on PipeWire systems enable pipewire-alsa " +
+			"no audio input devices available on %s backend — "+
+				"on PipeWire systems enable pipewire-alsa "+
 				"(NixOS: services.pipewire.alsa.enable = true)",
+			backendDisplayName(backend),
 		)
 	}
 
 	r := &recorder{
 		ctx:        ctx,
+		backend:    backend,
 		deviceName: deviceName,
 	}
 
@@ -80,6 +164,13 @@ func (r *recorder) Close() {
 	}
 	freeMalgoContext(r.ctx)
 	r.ctx = nil
+}
+
+// SetOnFrame sets a per-frame callback called from the malgo data callback.
+// It must be called before Start and cleared (nil) after Start returns.
+// The callback fires on the audio worker thread — callers must not block.
+func (r *recorder) SetOnFrame(fn func([]int16)) {
+	r.onFrame = fn
 }
 
 // Start begins audio capture. Blocks until ctx is cancelled.
@@ -105,12 +196,28 @@ func (r *recorder) Start(ctx context.Context) error {
 	// Disable ALSA mmap to favour the more compatible read/write path.
 	// PipeWire's ALSA shim does not implement mmap reliably for capture.
 	deviceConfig.Alsa.NoMMap = 1
+
+	// When a named device is configured we have to embed a Go pointer
+	// (to r.captureDeviceID) inside deviceConfig, which itself is a Go
+	// value. Handing a Go pointer that itself contains an unpinned Go
+	// pointer to cgo trips runtime.cgoCheckPointer's "Go pointer to
+	// unpinned Go pointer" panic. runtime.Pinner exists exactly for
+	// this case: it pins the DeviceID in the Go heap so cgo accepts it
+	// as a stable address.
+	//
+	// The pin only needs to survive malgo.InitDevice. ma_device_init in
+	// miniaudio.h (see the MA_COPY_MEMORY(&pDevice->capture.id, ...)
+	// call) copies the device id into pDevice->capture.id during init,
+	// and the PulseAudio/ALSA/JACK onContextInit callbacks only
+	// dereference the incoming descriptor pointer in-place (they copy
+	// the id by value into backend-local state). None of the Linux
+	// backends retain the config-provided pointer past the InitDevice
+	// return, so Unpin can happen as soon as InitDevice finishes —
+	// well before the device callback starts firing on the audio
+	// worker thread.
+	var pinner runtime.Pinner
 	if r.captureDeviceID != nil {
-		// Pass the address of the stored DeviceID to malgo. The
-		// recorder owns the backing memory until Close, so the pointer
-		// stays valid for the entire device lifetime. malgo's
-		// DeviceID.Pointer helper allocates fresh C memory and never
-		// frees it, so we deliberately bypass it here.
+		pinner.Pin(r.captureDeviceID)
 		deviceConfig.Capture.DeviceID = unsafe.Pointer(r.captureDeviceID)
 	}
 
@@ -122,21 +229,25 @@ func (r *recorder) Start(ctx context.Context) error {
 		r.mu.Lock()
 		r.frames = append(r.frames, samples...)
 		r.mu.Unlock()
+		if fn := r.onFrame; fn != nil {
+			fn(samples)
+		}
 	}
 
 	device, err := malgo.InitDevice(r.ctx.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: onRecvFrames,
 	})
+	pinner.Unpin()
 	if err != nil {
 		if r.deviceName != "" {
-			return fmt.Errorf("open audio device %q: %w", r.deviceName, err)
+			return fmt.Errorf("open audio device %q on %s: %w", r.deviceName, backendDisplayName(r.backend), err)
 		}
-		return fmt.Errorf("open audio device: %w", err)
+		return fmt.Errorf("open audio device on %s: %w", backendDisplayName(r.backend), err)
 	}
 	defer device.Uninit()
 
 	if err := device.Start(); err != nil {
-		return fmt.Errorf("start audio device: %w", err)
+		return fmt.Errorf("start audio device on %s: %w", backendDisplayName(r.backend), err)
 	}
 
 	<-ctx.Done()

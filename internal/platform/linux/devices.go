@@ -8,8 +8,9 @@ import (
 )
 
 // deviceLister implements platform.DeviceLister via miniaudio's
-// context.Devices(Capture) enumeration. Each call to ListDevices
-// initializes a malgo context, walks every input device, and tears the
+// context.Devices(Capture) enumeration. Each call to ListDevices or
+// Backend initializes a malgo context through the shared
+// initLinuxAudioContext helper, walks every input device, and tears the
 // context back down. The CLI uses this outside the daemon (no shared
 // audio handle), so we cannot rely on the recorder's
 // already-initialized malgo session.
@@ -23,8 +24,12 @@ func NewDeviceLister() platform.DeviceLister { return deviceLister{} }
 // system default. malgo's DeviceInfo.IsDefault flag is the source of
 // truth for the default; the lister forwards it without
 // reinterpreting.
+//
+// The backend used for enumeration is chosen by initLinuxAudioContext,
+// which is the same helper the recorder uses — so the devices listed
+// here are guaranteed to be the ones `yap record` will actually see.
 func (deviceLister) ListDevices() ([]platform.Device, error) {
-	ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, nil)
+	ctx, backend, err := initLinuxAudioContext()
 	if err != nil {
 		return nil, fmt.Errorf("malgo init context: %w", err)
 	}
@@ -32,7 +37,7 @@ func (deviceLister) ListDevices() ([]platform.Device, error) {
 
 	devs, err := ctx.Devices(malgo.Capture)
 	if err != nil {
-		return nil, fmt.Errorf("enumerate audio devices: %w", err)
+		return nil, fmt.Errorf("enumerate audio devices on %s: %w", backendDisplayName(backend), err)
 	}
 
 	out := make([]platform.Device, 0, len(devs))
@@ -53,6 +58,24 @@ func (deviceLister) ListDevices() ([]platform.Device, error) {
 		})
 	}
 	return out, nil
+}
+
+// Backend returns the human-readable name of the miniaudio backend
+// initLinuxAudioContext currently selects on this machine. The `yap
+// devices` CLI prints this as a header so users can diagnose
+// JACK-fallthrough situations (e.g. a NixOS system without
+// libpulse/libasound runtime libraries on LD_LIBRARY_PATH) at a glance.
+//
+// Backend creates and immediately frees a malgo context; it does not
+// share state with ListDevices. Both calls resolve the same backend
+// because initLinuxAudioContext is deterministic.
+func (deviceLister) Backend() (string, error) {
+	ctx, backend, err := initLinuxAudioContext()
+	if err != nil {
+		return "", fmt.Errorf("malgo init context: %w", err)
+	}
+	freeMalgoContext(ctx)
+	return backendDisplayName(backend), nil
 }
 
 // maxChannelCount returns the largest channel count among the given
