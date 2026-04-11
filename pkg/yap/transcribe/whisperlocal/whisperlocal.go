@@ -126,7 +126,19 @@ type Backend struct {
 	serverPath string
 	modelPath  string
 	language   string
-	client     *http.Client
+	// threads is the explicit whisper.cpp thread count forwarded to
+	// whisper-server via --threads. Zero means the backend computes
+	// a sane auto-count at spawn time (see resolveThreadCount).
+	// Storing it on the Backend keeps the spawn function a pure
+	// function of *Backend and lets tests override it deterministically
+	// without environment sniffing.
+	threads int
+	// useGPU controls whisper-server's --use-gpu flag. Defaults to
+	// true upstream so the production path keeps GPU on; downgrading
+	// to CPU is an opt-in knob for systems where the GPU backend
+	// misbehaves or the user wants deterministic wall time.
+	useGPU bool
+	client *http.Client
 
 	// spawn is the function that actually starts the subprocess.
 	// Tests inject a fake that returns an httptest server URL and a
@@ -232,11 +244,43 @@ func newBackendCommon(cfg transcribe.Config, serverPath, modelPath string, spawn
 		serverPath:  serverPath,
 		modelPath:   modelPath,
 		language:    cfg.Language,
+		threads:     cfg.WhisperThreads,
+		useGPU:      cfg.WhisperUseGPU,
 		client:      client,
 		spawn:       spawn,
 		closeCtx:    closeCtx,
 		closeCancel: closeCancel,
 	}
+}
+
+// resolveThreadCount maps the user-facing threads knob (0 = auto) to an
+// explicit positive integer suitable for whisper-server's --threads
+// flag. It is the single source of truth for the auto-count policy:
+// runtime.NumCPU()/2 rounded up (ceiling) to at least 1. Splitting
+// the parent process's logical CPUs in half leaves headroom for the
+// rest of the pipeline (audio capture, transform, injection) and
+// matches the "noticeable latency → instant" win the reporting user
+// measured. Ceiling division ensures odd-count hosts (e.g. a 3-core
+// VM) get the extra thread instead of being rounded down to 1.
+//
+// The helper is defined in the platform-agnostic file so both the
+// unix spawn path and any future platform backend share one policy.
+// It takes the raw CPU count as an argument so unit tests can force
+// deterministic output instead of depending on runtime.NumCPU() on
+// the test host.
+func resolveThreadCount(requested, numCPU int) int {
+	if requested > 0 {
+		return requested
+	}
+	// Integer ceiling division: (numCPU + 1) / 2. Valid for
+	// numCPU >= 0; numCPU=0 yields 0 which the guard below lifts
+	// to 1. The clamp is also the minimum the whisper-server flag
+	// accepts, so it is load-bearing rather than cosmetic.
+	auto := (numCPU + 1) / 2
+	if auto < 1 {
+		return 1
+	}
+	return auto
 }
 
 // Transcribe spawns the subprocess on first use, POSTs the audio at

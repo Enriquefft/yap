@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/adrg/xdg"
 )
 
 // withTempCache redirects XDG_CACHE_HOME to a fresh temp directory and
@@ -21,11 +23,43 @@ import (
 // they cannot pollute the developer's real model cache (a fully-
 // populated cache is ~2.1 GB across all four pinned English-only
 // models).
+//
+// xdg.Reload is called immediately after t.Setenv because the
+// adrg/xdg library caches resolved paths at init time: writing to
+// XDG_CACHE_HOME has no effect until Reload re-reads the environment.
+// Without the Reload any helper that bypasses CacheDir (which happens
+// to Reload on every call) would resolve against the developer's
+// real ~/.cache/yap/models and leak test fixtures into it — the
+// exact failure mode that let a historical 5-byte ggml-base.en.bin
+// sit in one user's cache and get reported as "installed".
+//
+// A t.Cleanup re-runs xdg.Reload so subsequent tests in the same
+// process see the restored outer environment rather than the temp
+// dir that t.Setenv rolled back.
+//
+// The Cleanup is registered BEFORE t.Setenv so that Go's LIFO cleanup
+// ordering runs Setenv's env-restore first (reverting XDG_CACHE_HOME
+// to the outer value) and our xdg.Reload second (re-reading the now-
+// correct outer env). Registering them in the opposite order would
+// run xdg.Reload while XDG_CACHE_HOME still pointed at the temp dir,
+// caching the stale temp path in xdg's internal state for every
+// subsequent test in the same binary — leaking fixtures across the
+// process boundary and resolving to a deleted directory.
 func withTempCache(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	t.Cleanup(func() { xdg.Reload() })
 	t.Setenv("XDG_CACHE_HOME", dir)
+	xdg.Reload()
 	return dir
+}
+
+// validGGMLBytes is the smallest payload that passes VerifyGGMLMagic:
+// the four-byte ggml magic prefix followed by filler. Tests that
+// want a file Installed() should accept use this helper so the
+// magic sequence is never hardcoded at the call site.
+func validGGMLBytes() []byte {
+	return []byte("lmgg-test-fixture")
 }
 
 // newFixtureManager constructs a Manager wired to an httptest server
@@ -97,7 +131,7 @@ func TestErrUnknownModel_ListsPinnedModels(t *testing.T) {
 	}
 	// Every pinned model name must appear in the error so the user can
 	// see exactly what they can pick from without consulting docs.
-	for _, name := range []string{"tiny.en", "base.en", "small.en", "medium.en"} {
+	for _, name := range []string{"tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en"} {
 		if !strings.Contains(msg, name) {
 			t.Errorf("expected message to mention %q, got %q", name, msg)
 		}
@@ -128,8 +162,13 @@ func TestInstalled_PresentFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Path: %v", err)
 	}
-	if err := os.WriteFile(p, []byte("dummy"), 0o644); err != nil {
-		t.Fatalf("write dummy: %v", err)
+	// A real model starts with the ggml magic prefix; Installed()
+	// validates the magic bytes so a plain "dummy" payload (which
+	// the pre-fix version accepted) no longer passes. validGGMLBytes
+	// centralises the magic so the single source of truth lives in
+	// the package that owns VerifyGGMLMagic.
+	if err := os.WriteFile(p, validGGMLBytes(), 0o600); err != nil {
+		t.Fatalf("write valid model fixture: %v", err)
 	}
 	got, err := mgr.Installed("base.en")
 	if err != nil {
@@ -140,6 +179,200 @@ func TestInstalled_PresentFile(t *testing.T) {
 	}
 }
 
+// TestInstalled_RejectsDummyFile is the regression for the
+// reported bug: a 5-byte junk file named ggml-base.en.bin (the
+// exact size of the historical "dummy" fixture that leaked into
+// a developer's cache) must not be reported as installed.
+// Installed() now calls VerifyGGMLMagic and surfaces a failing
+// file as "not installed" so `yap models list` stays consistent
+// with the resolveModel check that refuses to load it at record
+// time.
+func TestInstalled_RejectsDummyFile(t *testing.T) {
+	withTempCache(t)
+	mgr := NewManager()
+	p, err := mgr.Path("base.en")
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	// Exactly the 5-byte payload from the pre-fix test, which is
+	// the same failure mode the user reported from their real
+	// cache.
+	if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("write dummy: %v", err)
+	}
+	got, err := mgr.Installed("base.en")
+	if err != nil {
+		t.Fatalf("Installed: %v", err)
+	}
+	if got {
+		t.Fatal("Installed reported true for a 5-byte junk file; should fail magic-byte verification")
+	}
+}
+
+// TestList_RejectsDummyFile asserts List() agrees with Installed()
+// about what counts as a real model: a junk file in the cache
+// must appear with Installed=false in `yap models list` so the
+// CLI output never contradicts the record-time resolveModel
+// check.
+func TestList_RejectsDummyFile(t *testing.T) {
+	withTempCache(t)
+	mgr := NewManager()
+	p, err := mgr.Path("base.en")
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("write dummy: %v", err)
+	}
+	got, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range got {
+		if m.Name == "base.en" && m.Installed {
+			t.Fatal("List reported base.en installed for a 5-byte junk file; should fail magic-byte verification")
+		}
+	}
+}
+
+// TestList_CorruptFlagged is the L6 regression: a cache file that
+// exists but fails VerifyGGMLMagic must surface on List() with
+// Corrupt=true so the CLI renderer can tell the user their cache
+// has a bad file that needs removing. Before L6, such a file was
+// silently reported as "not installed", identical to a missing
+// file, which misled users with read-only caches (e.g. a Nix
+// store symlink) into thinking a redownload would fix the
+// problem.
+//
+// A corrupt Model must also have Installed=false because the two
+// flags are mutually exclusive: "ready to use" and "present-but-
+// broken" are different user-facing states and collapsing them
+// would defeat the whole point of L6.
+func TestList_CorruptFlagged(t *testing.T) {
+	withTempCache(t)
+	mgr := NewManager()
+	p, err := mgr.Path("base.en")
+	if err != nil {
+		t.Fatalf("Path: %v", err)
+	}
+	if err := os.WriteFile(p, []byte("dummy"), 0o600); err != nil {
+		t.Fatalf("write dummy: %v", err)
+	}
+	got, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *Model
+	for i := range got {
+		if got[i].Name == "base.en" {
+			found = &got[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("base.en missing from List output")
+	}
+	if found.Installed {
+		t.Error("corrupt file reported Installed=true; should be false")
+	}
+	if !found.Corrupt {
+		t.Error("corrupt file reported Corrupt=false; should be true")
+	}
+	if found.Path != p {
+		t.Errorf("Model.Path = %q, want %q", found.Path, p)
+	}
+	// Other pinned models (e.g. base, tiny) must remain in the
+	// default missing state — the corrupt flag applies only to
+	// the seeded file.
+	for _, m := range got {
+		if m.Name == "base.en" {
+			continue
+		}
+		if m.Corrupt {
+			t.Errorf("unrelated model %q flagged Corrupt=true", m.Name)
+		}
+	}
+}
+
+// TestList_MissingVsCorruptDistinct pins the semantic that the
+// three dispositions (installed, corrupt, missing) are mutually
+// exclusive. A fresh cache must report every model as
+// !Installed && !Corrupt so the CLI renderer's "missing" fallback
+// is the only thing the user sees for absent files.
+func TestList_MissingVsCorruptDistinct(t *testing.T) {
+	withTempCache(t)
+	mgr := NewManager()
+	got, err := mgr.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, m := range got {
+		if m.Installed {
+			t.Errorf("fresh cache reported %q Installed=true", m.Name)
+		}
+		if m.Corrupt {
+			t.Errorf("fresh cache reported %q Corrupt=true", m.Name)
+		}
+	}
+}
+
+// TestWithTempCache_LIFOCleanupOrder is the M1 regression. It
+// verifies that withTempCache's cleanup sequence leaves xdg's
+// resolved-path cache in sync with the real XDG_CACHE_HOME env
+// var after the helper's Cleanup runs. The bug was that
+// registering t.Cleanup(xdg.Reload) AFTER t.Setenv made LIFO
+// run our Reload first (caching the still-present temp dir)
+// before Setenv's env-restore reverted XDG_CACHE_HOME.
+//
+// The test exploits t.Run's subtests, which each get their own
+// cleanup stack that is torn down before the next subtest runs.
+// After the first subtest finishes, the parent's env var is
+// restored to whatever it was before the helper installed the
+// temp dir; xdg.CacheFile must resolve against that outer value
+// — NOT the deleted temp directory — on the next call.
+func TestWithTempCache_LIFOCleanupOrder(t *testing.T) {
+	// Pin an outer XDG_CACHE_HOME so we have a deterministic
+	// value to compare against after the inner subtest tears
+	// down. t.Setenv restores this on test exit.
+	outer := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", outer)
+	xdg.Reload()
+
+	var innerDir string
+	t.Run("inner-using-withTempCache", func(t *testing.T) {
+		innerDir = withTempCache(t)
+		// Sanity: inside the subtest xdg must resolve to the
+		// temp dir the helper installed.
+		p, err := xdg.CacheFile("yap/models/.keep")
+		if err != nil {
+			t.Fatalf("xdg.CacheFile inside withTempCache: %v", err)
+		}
+		if !strings.HasPrefix(p, innerDir) {
+			t.Errorf("inside withTempCache xdg resolved to %q, want prefix %q",
+				p, innerDir)
+		}
+	})
+
+	// After the subtest's cleanup stack has unwound, xdg must be
+	// back in sync with the outer env. If the LIFO ordering is
+	// wrong, xdg's internal cache will still point at innerDir
+	// (now deleted) and CacheFile will resolve against a stale
+	// directory — the exact regression this test guards against.
+	p, err := xdg.CacheFile("yap/models/.keep")
+	if err != nil {
+		t.Fatalf("xdg.CacheFile after withTempCache cleanup: %v", err)
+	}
+	if !strings.HasPrefix(p, outer) {
+		t.Errorf("after cleanup xdg resolved to %q, want prefix %q (outer); "+
+			"withTempCache leaked the inner temp dir into xdg's cache",
+			p, outer)
+	}
+	if strings.HasPrefix(p, innerDir) {
+		t.Errorf("after cleanup xdg still points at deleted inner dir %q: %q",
+			innerDir, p)
+	}
+}
+
 func TestList_PinnedEnglishModels(t *testing.T) {
 	withTempCache(t)
 	mgr := NewManager()
@@ -147,11 +380,16 @@ func TestList_PinnedEnglishModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	// The manifest pins exactly the four English-only whisper.cpp
-	// models. If you add or remove a model from the manifest, update
-	// this expected list — it is the canonical assertion of which
-	// models a fresh `yap models list` will surface.
-	wantNames := []string{"tiny.en", "base.en", "small.en", "medium.en"}
+	// The manifest pins both English-only and multilingual models.
+	// If you add or remove a model from the manifest, update this
+	// expected list — it is the canonical assertion of which models
+	// a fresh `yap models list` will surface.
+	wantNames := []string{
+		"tiny", "tiny.en",
+		"base", "base.en",
+		"small", "small.en",
+		"medium", "medium.en",
+	}
 	if len(got) != len(wantNames) {
 		t.Fatalf("expected %d pinned models, got %d: %+v",
 			len(wantNames), len(got), got)

@@ -67,6 +67,17 @@ type Config struct {
 	// $YAP_WHISPER_SERVER environment variable, then $PATH lookup,
 	// then a Nix profile fallback.
 	WhisperServerPath string
+	// WhisperThreads is the whisper.cpp thread count forwarded to
+	// whisper-server via --threads. Used only by the whisperlocal
+	// backend; ignored by remote backends. Zero means "auto": the
+	// whisperlocal backend picks runtime.NumCPU()/2 rounded up to
+	// at least 1 so modern CPUs stop being capped at whisper.cpp's
+	// hardcoded default of 4.
+	WhisperThreads int
+	// WhisperUseGPU selects the GPU backend for whisper-server. Used
+	// only by the whisperlocal backend; ignored by remote backends.
+	// Defaults to true to match whisper.cpp's own default behavior.
+	WhisperUseGPU bool
 	// Timeout is the per-request timeout. Zero means the backend's
 	// default. Ignored when HTTPClient is set.
 	Timeout time.Duration

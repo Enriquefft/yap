@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -76,10 +77,27 @@ func spawnWhisperServerOnce(ctx context.Context, b *Backend) (*serverProc, error
 		return nil, fmt.Errorf("whisperlocal: pick port: %w", err)
 	}
 
+	// Resolve the thread count once, up front, so the subprocess
+	// always receives an explicit --threads value. whisper.cpp's
+	// own default is hardcoded to 4 regardless of host CPU capability,
+	// which caps transcription speed on modern multi-core boxes; the
+	// reporting user measured ~1.55s on a 3s clip at 4 threads versus
+	// ~700ms at 8. Passing the resolved count explicitly is the only
+	// way to beat that default — whisper-server has no "auto" mode.
+	threads := resolveThreadCount(b.threads, runtime.NumCPU())
 	args := []string{
 		"--model", b.modelPath,
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(port),
+		"--threads", strconv.Itoa(threads),
+	}
+	// whisper-server exposes GPU control via a single --no-gpu boolean
+	// flag (no value). The upstream default is GPU-on, so we only emit
+	// --no-gpu when the user opted out. Emitting --use-gpu=true/false
+	// does not work — whisper-server rejects it as "unknown argument"
+	// and exits before binding, breaking every daemon start.
+	if !b.useGPU {
+		args = append(args, "--no-gpu")
 	}
 	if b.language != "" {
 		args = append(args, "--language", b.language)

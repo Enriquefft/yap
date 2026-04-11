@@ -18,11 +18,15 @@ import (
 // race-download the same model file because the second one
 // blocks on LockFileEx until the first closes the handle.
 //
+// The lock file is created with 0o600 to match the Unix lock's
+// single-user cache semantics. Windows treats the mode bits as
+// advisory but the intent stays consistent across platforms.
+//
 // The release function closes the handle, which releases the
 // lock atomically.
 func acquireCacheLock(dir string) (func(), error) {
 	lockPath := filepath.Join(dir, lockFileName)
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("models: open lock file %s: %w", lockPath, err)
 	}

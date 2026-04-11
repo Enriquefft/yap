@@ -107,13 +107,66 @@ func Default() *Manager {
 
 // Model is the surface returned by List. It pairs a manifest entry
 // with its on-disk state at the moment of inspection.
+//
+// The (Installed, Corrupt) pair partitions the three states a cache
+// entry can be in:
+//
+//   - Installed=true,  Corrupt=false — file exists and passes
+//     VerifyGGMLMagic. Ready to use.
+//   - Installed=false, Corrupt=false — file does not exist. Run
+//     `yap models download <name>` to fetch it.
+//   - Installed=false, Corrupt=true  — file exists on disk but is
+//     not a valid whisper.cpp model (half-written download, saved
+//     404 HTML body, renamed ZIP, truncated file, etc.). The user
+//     must `rm` the file before `yap models download` will succeed
+//     if the cache directory is writable; if the cache is a read-
+//     only link (Nix store, sandboxed Flatpak) they need to clear
+//     it out-of-band.
+//
+// Installed is kept as the positive-only answer so existing callers
+// (`if m.Installed { ... }`) stay correct — a corrupt file must not
+// count as installed.
 type Model struct {
 	Manifest
-	// Installed reports whether the file exists in the cache.
+	// Installed reports whether the file exists in the cache AND
+	// passes ggml magic-byte validation.
 	Installed bool
+	// Corrupt reports whether the file exists on disk but fails
+	// ggml magic-byte validation. Mutually exclusive with
+	// Installed: a file is either ready to use, corrupt, or absent.
+	Corrupt bool
 	// Path is the absolute on-disk path the file would live at,
 	// regardless of whether it currently exists.
 	Path string
+}
+
+// cacheFileState classifies a single cache-path as one of the three
+// disposition states List surfaces. It is the single source of truth
+// for the stat + magic-byte check used by List() and Installed(), so
+// the two entry points cannot disagree about what "installed" means.
+//
+// Returns installed=true if the file exists and passes
+// VerifyGGMLMagic. Returns corrupt=true if the file exists but fails
+// verification. Returns both false if the file is absent. A non-nil
+// error is reserved for unexpected stat failures (permission denied,
+// I/O error) and for the pathological "cache path is a directory"
+// case — not for "file does not exist" or "magic bytes wrong", which
+// are normal outcomes a user can recover from.
+func cacheFileState(path string) (installed, corrupt bool, err error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("models: stat %s: %w", path, statErr)
+	}
+	if info.IsDir() {
+		return false, false, fmt.Errorf("models: cache path %s is a directory", path)
+	}
+	if VerifyGGMLMagic(path) != nil {
+		return false, true, nil
+	}
+	return true, false, nil
 }
 
 // CacheDir returns the absolute path to the model cache directory,
@@ -167,30 +220,53 @@ func (m *Manager) Path(name string) (string, error) {
 	return filepath.Join(dir, manifest.Filename()), nil
 }
 
-// Installed reports whether the named model file exists in the cache.
+// Installed reports whether the named model file exists in the cache
+// AND passes ggml magic-byte validation. A file that exists on disk
+// but fails verification (e.g. a half-written download, a saved 404
+// HTML body, a renamed ZIP) is reported as NOT installed — the same
+// answer a fresh cache would give — so `yap models list` and the
+// downstream resolveModel check agree on what counts as a real
+// model.
+//
+// Callers who need to distinguish "missing" from "present-but-corrupt"
+// should use List() instead, which populates Model.Corrupt alongside
+// Model.Installed. Installed() collapses both of those into false
+// because every Installed() caller today only needs the ready-to-use
+// yes/no, and threading a second return value through every call
+// site would be noise without a corresponding benefit.
+//
 // A non-nil error is returned only if the cache directory cannot be
 // resolved or stat fails for a reason other than "file does not
-// exist".
+// exist". Magic-byte failures are not errors here; they are simply
+// "not installed" because the user's recovery action is identical
+// (run `yap models download <name>`).
 func (m *Manager) Installed(name string) (bool, error) {
 	p, err := m.Path(name)
 	if err != nil {
 		return false, err
 	}
-	info, err := os.Stat(p)
+	installed, _, err := cacheFileState(p)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("models: stat %s: %w", p, err)
+		return false, err
 	}
-	if info.IsDir() {
-		return false, fmt.Errorf("models: cache path %s is a directory", p)
-	}
-	return true, nil
+	return installed, nil
 }
 
 // List returns every pinned model with its current install state. The
 // returned slice is freshly allocated each call.
+//
+// Model.Installed is true only when the file both exists in the cache
+// AND passes ggml magic-byte validation — the same contract
+// Installed() enforces, so the two entry points give users a
+// consistent answer and junk files never show up as "installed".
+//
+// Model.Corrupt is true when the file exists on disk but fails
+// magic-byte verification. A corrupt file is NEITHER installed nor
+// missing — List surfaces it as a distinct third state so the CLI
+// renderer can tell the user their cache has a bad file that needs
+// removing (especially important when the cache directory is a
+// read-only Nix store link and a redownload would fail in a
+// confusing way).
 func (m *Manager) List() ([]Model, error) {
 	dir, err := CacheDir()
 	if err != nil {
@@ -199,13 +275,14 @@ func (m *Manager) List() ([]Model, error) {
 	out := make([]Model, 0, len(m.manifest))
 	for _, entry := range m.manifest {
 		full := filepath.Join(dir, entry.Filename())
-		installed := false
-		if info, statErr := os.Stat(full); statErr == nil && !info.IsDir() {
-			installed = true
+		installed, corrupt, stateErr := cacheFileState(full)
+		if stateErr != nil {
+			return nil, stateErr
 		}
 		out = append(out, Model{
 			Manifest:  entry,
 			Installed: installed,
+			Corrupt:   corrupt,
 			Path:      full,
 		})
 	}

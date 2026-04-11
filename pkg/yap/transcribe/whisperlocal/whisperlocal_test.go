@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -755,6 +757,229 @@ func TestTerminate_WedgedSubprocessIsBounded(t *testing.T) {
 	}
 	if atomic.LoadInt32(&sigkillCalled) != 1 {
 		t.Errorf("sigkill called %d times, want 1", sigkillCalled)
+	}
+}
+
+// TestResolveThreadCount covers the auto-count policy: 0 requests
+// runtime.NumCPU()/2 rounded up (ceiling) to at least 1; positive
+// requests pass through unchanged. The helper is a pure function
+// over (requested, numCPU) so the test can pin both axes without
+// depending on the host CPU topology.
+//
+// The 3-core case is a regression guard for the L2 fix: prior
+// versions used integer floor (numCPU / 2) and returned 1 for a
+// 3-core host, contradicting the "rounded up" doc contract. The
+// ceiling formula (numCPU + 1) / 2 gives 2, matching the doc and
+// the performance-oriented intent (use more cores, not fewer).
+func TestResolveThreadCount(t *testing.T) {
+	cases := []struct {
+		name      string
+		requested int
+		numCPU    int
+		want      int
+	}{
+		{"auto 22 cores", 0, 22, 11},
+		{"auto 14 cores", 0, 14, 7},
+		{"auto 8 cores", 0, 8, 4},
+		{"auto 5 cores rounds up", 0, 5, 3},
+		{"auto 3 cores rounds up", 0, 3, 2},
+		{"auto 2 cores", 0, 2, 1},
+		{"auto 1 core rounds up", 0, 1, 1},
+		{"auto 0 cores rounds up", 0, 0, 1},
+		{"explicit 1", 1, 22, 1},
+		{"explicit 4", 4, 22, 4},
+		{"explicit 8", 8, 22, 8},
+		{"explicit overrides auto", 16, 2, 16},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveThreadCount(tc.requested, tc.numCPU); got != tc.want {
+				t.Errorf("resolveThreadCount(%d, %d) = %d, want %d",
+					tc.requested, tc.numCPU, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSpawnArgs_ThreadsAndGPU covers the Bug-10 fix: the
+// spawnWhisperServerOnce path must pass --threads and, when the user
+// opts out of GPU, --no-gpu to whisper-server. The test uses a tiny
+// shell script as a fake whisper-server that records its argv to a
+// file before exiting; waitForListening's readiness poll never
+// succeeds against it (the script does not listen on the port), so
+// the function returns an error — that is fine, we only care about
+// the argv capture.
+//
+// whisper-server exposes GPU control as a single --no-gpu boolean
+// flag (no value); it has no --use-gpu flag and rejects
+// --use-gpu=true/false as "unknown argument". The upstream default is
+// GPU-on, so the daemon emits --no-gpu only when the user opted out
+// and emits nothing when GPU is requested.
+//
+// The test runs twice: once with threads=0 (auto) and useGPU=true
+// asserting --no-gpu is ABSENT, once with an explicit thread count
+// and useGPU=false asserting --no-gpu is present. In both cases the
+// test additionally asserts --use-gpu is NEVER in argv, guarding
+// against a regression back to the broken flag name.
+func TestSpawnArgs_ThreadsAndGPU(t *testing.T) {
+	// Skip on builders that cannot run /bin/sh (very unusual; the
+	// rest of the test suite already assumes a POSIX shell).
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skipf("no /bin/sh available: %v", err)
+	}
+
+	cases := []struct {
+		name         string
+		threads      int
+		useGPU       bool
+		wantThreads  int
+		wantNoGPUArg bool
+	}{
+		{
+			name:         "auto threads, gpu on",
+			threads:      0,
+			useGPU:       true,
+			wantThreads:  resolveThreadCount(0, runtime.NumCPU()),
+			wantNoGPUArg: false,
+		},
+		{
+			name:         "explicit 8 threads, gpu off",
+			threads:      8,
+			useGPU:       false,
+			wantThreads:  8,
+			wantNoGPUArg: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			argsOut := filepath.Join(dir, "argv.txt")
+			bin := filepath.Join(dir, "whisper-server")
+			// The stub writes every argument on its own line and
+			// exits 0 so spawnWhisperServerOnce's readiness poll
+			// observes an early exit rather than a hang.
+			script := "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> " + argsOut + "; done\nexit 0\n"
+			if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+				t.Fatalf("write stub binary: %v", err)
+			}
+			model := fakeModel(t)
+
+			b, err := New(transcribe.Config{
+				WhisperServerPath: bin,
+				ModelPath:         model,
+				WhisperThreads:    tc.threads,
+				WhisperUseGPU:     tc.useGPU,
+				Language:          "en",
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer b.Close()
+
+			// spawnWhisperServerOnce will start the stub, observe
+			// its immediate exit inside waitForListening, and
+			// return an error. That is expected — the argv file
+			// on disk is our source of truth.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = b.ensureServer(ctx)
+
+			data, err := os.ReadFile(argsOut)
+			if err != nil {
+				t.Fatalf("read argv file: %v", err)
+			}
+			lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+
+			// Helper: index of flag in the captured argv.
+			indexOf := func(flag string) int {
+				for i, l := range lines {
+					if l == flag {
+						return i
+					}
+				}
+				return -1
+			}
+
+			if idx := indexOf("--threads"); idx < 0 || idx+1 >= len(lines) {
+				t.Fatalf("--threads flag missing from argv: %v", lines)
+			} else if got := lines[idx+1]; got != strconv.Itoa(tc.wantThreads) {
+				t.Errorf("--threads value = %q, want %q (full argv: %v)",
+					got, strconv.Itoa(tc.wantThreads), lines)
+			}
+			// GPU flag: --no-gpu present iff useGPU=false.
+			hasNoGPU := indexOf("--no-gpu") >= 0
+			if hasNoGPU != tc.wantNoGPUArg {
+				t.Errorf("--no-gpu present = %v, want %v (full argv: %v)",
+					hasNoGPU, tc.wantNoGPUArg, lines)
+			}
+			// Regression guard: --use-gpu=* is an invented flag
+			// whisper-server rejects. It must never appear in argv
+			// regardless of the useGPU setting.
+			for _, l := range lines {
+				if strings.HasPrefix(l, "--use-gpu") {
+					t.Errorf("argv contains forbidden %q; whisper-server rejects --use-gpu and the daemon must use --no-gpu", l)
+				}
+			}
+			// Guard the always-present flags so a future refactor
+			// cannot silently drop them.
+			for _, want := range []string{"--model", "--host", "--port", "--language"} {
+				if indexOf(want) < 0 {
+					t.Errorf("expected %q in argv, got %v", want, lines)
+				}
+			}
+		})
+	}
+}
+
+// TestSpawnArgs_AcceptedByRealWhisperServer is the smoke test that
+// closes the gap the shell stub cannot: it runs the real
+// whisper-server binary if one is discoverable on $PATH with
+// --help and our real argv (minus --model so the binary exits
+// early without trying to load a model). The point is to catch a
+// regression where we reintroduce a flag whisper-server rejects.
+// The binary prints "error: unknown argument: ..." to stdout on an
+// unknown flag, so the test fails if that string appears.
+//
+// When whisper-server is not on PATH (no whisper-cpp installed),
+// the test is skipped — the stub test above still guards the
+// argv shape.
+func TestSpawnArgs_AcceptedByRealWhisperServer(t *testing.T) {
+	bin, err := exec.LookPath("whisper-server")
+	if err != nil {
+		t.Skip("whisper-server not on PATH; skipping real-binary smoke test")
+	}
+
+	cases := []struct {
+		name   string
+		useGPU bool
+	}{
+		{name: "gpu on", useGPU: true},
+		{name: "gpu off", useGPU: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{
+				"--model", "/nonexistent.bin",
+				"--host", "127.0.0.1",
+				"--port", "1",
+				"--threads", "1",
+			}
+			if !tc.useGPU {
+				args = append(args, "--no-gpu")
+			}
+			args = append(args, "--language", "en")
+			// Run with a short timeout so a binary that actually
+			// tries to serve does not wedge the test.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, bin, args...)
+			out, _ := cmd.CombinedOutput()
+			if bytes.Contains(out, []byte("unknown argument")) {
+				t.Fatalf("whisper-server rejected an argument in argv %v:\n%s", args, out)
+			}
+		})
 	}
 }
 

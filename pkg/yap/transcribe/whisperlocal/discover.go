@@ -1,28 +1,14 @@
 package whisperlocal
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
 )
-
-// ggmlMagic is the 4-byte prefix of every whisper.cpp model file.
-// The bytes are the little-endian uint32 0x67676d6c — "ggml" in
-// ASCII. whisper.cpp source pins this as GGML_FILE_MAGIC and rejects
-// any model whose first uint32 differs; we mirror the check at
-// resolveModel time so users who drop a 404 HTML body or a renamed
-// ZIP into the cache get a clear error up front instead of a
-// cryptic "subprocess exited during startup" thirty seconds later.
-//
-// The byte order (lmgg) is the on-disk representation on
-// little-endian hosts, which covers every platform yap targets.
-const ggmlMagic = "lmgg"
 
 // envServerPath is the environment variable users set to override the
 // whisper-server binary location without writing it into config.
@@ -138,6 +124,11 @@ func (d discoverer) checkExecutable(path string) error {
 // at the manifest hint when the name is not pinned, and at a
 // "redownload via yap models download" hint when the file exists
 // but is not a real whisper.cpp model (e.g. a saved 404 HTML body).
+//
+// Magic-byte validation is delegated to models.VerifyGGMLMagic, the
+// single source of truth for the ggml file-format check. The same
+// function backs models.Installed and models.List so a file the
+// resolver rejects is also hidden from `yap models list`.
 func resolveModel(cfg transcribe.Config) (string, error) {
 	if cfg.ModelPath != "" {
 		info, err := os.Stat(cfg.ModelPath)
@@ -149,8 +140,8 @@ func resolveModel(cfg transcribe.Config) (string, error) {
 			return "", fmt.Errorf("whisperlocal: transcription.model_path %q is a directory",
 				cfg.ModelPath)
 		}
-		if err := verifyGGMLMagic(cfg.ModelPath); err != nil {
-			return "", err
+		if err := models.VerifyGGMLMagic(cfg.ModelPath); err != nil {
+			return "", fmt.Errorf("whisperlocal: %w", err)
 		}
 		return cfg.ModelPath, nil
 	}
@@ -177,35 +168,8 @@ func resolveModel(cfg transcribe.Config) (string, error) {
 	if info.IsDir() {
 		return "", fmt.Errorf("whisperlocal: cached model path %s is a directory", p)
 	}
-	if err := verifyGGMLMagic(p); err != nil {
-		return "", err
+	if err := models.VerifyGGMLMagic(p); err != nil {
+		return "", fmt.Errorf("whisperlocal: %w", err)
 	}
 	return p, nil
-}
-
-// verifyGGMLMagic opens path, reads the first four bytes, and
-// returns nil if they match the ggml magic prefix. Any other state
-// (read error, short file, wrong magic) returns an error that
-// tells the user exactly how to recover.
-//
-// The check is cheap (one open, one 4-byte read, one close) so it
-// runs on every resolveModel call rather than being cached.
-func verifyGGMLMagic(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("whisperlocal: open %s: %w", path, err)
-	}
-	defer f.Close()
-	var head [4]byte
-	if _, err := io.ReadFull(f, head[:]); err != nil {
-		return fmt.Errorf(
-			"whisperlocal: %s is not a whisper.cpp model file (file too short to read magic bytes); redownload via yap models download <name>",
-			path)
-	}
-	if !bytes.Equal(head[:], []byte(ggmlMagic)) {
-		return fmt.Errorf(
-			"whisperlocal: %s is not a whisper.cpp model file (expected ggml magic bytes); redownload via yap models download <name>",
-			path)
-	}
-	return nil
 }

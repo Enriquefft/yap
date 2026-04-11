@@ -28,33 +28,48 @@ type Manifest struct {
 // resolve.
 func (m Manifest) Filename() string { return "ggml-" + m.Name + ".bin" }
 
-// known is the pinned manifest of every English-only whisper.cpp model
-// yap supports out of the box. Each entry's SHA256 was computed live
-// against the canonical Hugging Face download; mismatches are rejected
-// at install time. Users who want a model not on this list — for
-// example a multilingual variant or a custom fine-tune — can point
-// transcription.model_path at a hand-downloaded ggml-*.bin file and
-// bypass the manifest entirely.
+// known is the pinned manifest of whisper.cpp models yap supports out
+// of the box. Each entry's SHA256 was computed live against the
+// canonical Hugging Face download; mismatches are rejected at install
+// time. Users who want a model not on this list — for example a
+// custom fine-tune — can point transcription.model_path at a
+// hand-downloaded ggml-*.bin file and bypass the manifest entirely.
+//
+// The manifest includes both English-only (.en suffix) and multilingual
+// variants. English-only models are slightly faster and smaller;
+// multilingual models support transcription.language and auto-detect.
 //
 // Reproduction recipe (run from any throwaway directory):
 //
-//	for name in tiny.en base.en small.en medium.en; do
+//	for name in tiny tiny.en base base.en small small.en medium medium.en; do
 //	  curl -fL -o "ggml-${name}.bin" \
 //	    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${name}.bin"
 //	  sha256sum "ggml-${name}.bin"
 //	done
 //
-// The four hashes below are the lowercase hex SHA256 of those files
-// and the SizeMB values are round(bytes / 1024 / 1024).
+// The hashes below are the lowercase hex SHA256 of those files and the
+// SizeMB values are round(bytes / 1024 / 1024).
 //
 // known is the production manifest. Tests construct their own Manager
 // via NewManager(WithManifest(...)) and never touch this slice.
 var known = []Manifest{
 	{
+		Name:   "tiny",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+		SHA256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+		SizeMB: 74,
+	},
+	{
 		Name:   "tiny.en",
 		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
 		SHA256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
 		SizeMB: 74,
+	},
+	{
+		Name:   "base",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+		SHA256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+		SizeMB: 141,
 	},
 	{
 		Name:   "base.en",
@@ -63,10 +78,22 @@ var known = []Manifest{
 		SizeMB: 142,
 	},
 	{
+		Name:   "small",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+		SHA256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+		SizeMB: 465,
+	},
+	{
 		Name:   "small.en",
 		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
 		SHA256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
 		SizeMB: 465,
+	},
+	{
+		Name:   "medium",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+		SHA256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+		SizeMB: 1463,
 	},
 	{
 		Name:   "medium.en",
