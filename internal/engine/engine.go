@@ -125,6 +125,10 @@ type RunOptions struct {
 	// batches the entire transcription into a single IsFinal chunk
 	// before handing it to the injector.
 	StreamPartials bool
+	// OnRecordingStop is called after the recorder stops and before
+	// the stop chime plays. The daemon uses this to transition state
+	// from "recording" to "processing". Optional; nil is safe.
+	OnRecordingStop func()
 }
 
 // Run executes one recording → transcribe → transform → inject pipeline
@@ -161,6 +165,10 @@ func (e *Engine) Run(ctx context.Context, opts RunOptions) error {
 		!errors.Is(err, context.DeadlineExceeded) {
 		e.logger.ErrorContext(ctx, "recorder error", "error", err)
 		return fmt.Errorf("record: %w", err)
+	}
+
+	if opts.OnRecordingStop != nil {
+		opts.OnRecordingStop()
 	}
 
 	e.playChime(opts.StopChime)

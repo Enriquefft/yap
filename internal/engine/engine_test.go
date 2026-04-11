@@ -564,3 +564,37 @@ func TestEngineRun_StartAndStopChimesPlay(t *testing.T) {
 	// (TimeoutSec - 10) and the test returns long before then.
 	assert.Equal(t, 2, chime.Plays())
 }
+
+func TestEngineRun_OnRecordingStopCallback(t *testing.T) {
+	// OnRecordingStop fires exactly once, after recording ends and
+	// before the stop chime plays.
+	rec := &mockRecorder{wavData: []byte("fake-wav")}
+	chime := &mockChime{}
+	injector := &recordingInjector{}
+	backend := mock.New(transcribe.TranscriptChunk{Text: "ok", IsFinal: true})
+
+	eng := newEngine(t, rec, chime, backend, injector)
+
+	var callbackState string
+	var callbackChimeCount int
+
+	err := eng.Run(context.Background(), engine.RunOptions{
+		RecordCtx:  preCancelledRecCtx(),
+		StartChime: silentChime(),
+		StopChime: func() (io.Reader, error) {
+			callbackChimeCount = chime.Plays()
+			return strings.NewReader(""), nil
+		},
+		StreamPartials: false,
+		OnRecordingStop: func() {
+			callbackState = "called"
+			// The callback fires AFTER recording stops but BEFORE the
+			// stop chime — so at this point only the start chime has
+			// played.
+			callbackChimeCount = chime.Plays()
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "called", callbackState, "OnRecordingStop should be called")
+	assert.Equal(t, 1, callbackChimeCount, "callback should fire after start chime but before stop chime")
+}

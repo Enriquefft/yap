@@ -19,6 +19,7 @@ import (
 	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/hybridz/yap/internal/platform"
 	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	"github.com/hybridz/yap/pkg/yap/silence"
 	"github.com/hybridz/yap/pkg/yap/transcribe"
 	// Register every transcribe backend the daemon can select at
 	// runtime. Side-effect imports are the Phase 3 contract.
@@ -41,14 +42,18 @@ import (
 //
 // Path resolution is intentionally not pluggable: the daemon, the
 // CLI, and tests all go through internal/pidfile's path helpers,
-// which honor XDG environment variables (XDG_DATA_HOME) tests
-// already set via t.Setenv. Routing every path through one helper
-// package is the project's single-source-of-truth rule for runtime
-// file layout.
+// which honor XDG environment variables (XDG_RUNTIME_DIR) tests
+// already set via t.Setenv + xdg.Reload. Routing every path through
+// one helper package is the project's single-source-of-truth rule
+// for runtime file layout.
 type Deps struct {
-	Platform     platform.Platform
-	PIDWrite     func(string) error
-	PIDRemove    func(string)
+	Platform platform.Platform
+	// PIDLock acquires the daemon's exclusive pidfile lock. On
+	// success the returned Handle's Close method releases the flock
+	// and removes the file — callers defer it for the lifetime of
+	// the daemon process. Tests substitute this field with a stub
+	// that returns an in-memory Handle instead of touching disk.
+	PIDLock      func(string) (*pidfile.Handle, error)
 	NewIPCServer func(string) (*ipc.Server, error)
 }
 
@@ -56,8 +61,7 @@ type Deps struct {
 func DefaultDeps(p platform.Platform) Deps {
 	return Deps{
 		Platform:     p,
-		PIDWrite:     pidfile.Write,
-		PIDRemove:    pidfile.Remove,
+		PIDLock:      pidfile.Acquire,
 		NewIPCServer: ipc.NewServer,
 	}
 }
@@ -86,6 +90,8 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 		Prompt:            tc.Prompt,
 		ModelPath:         tc.ModelPath,
 		WhisperServerPath: tc.WhisperServerPath,
+		WhisperThreads:    tc.WhisperThreads,
+		WhisperUseGPU:     tc.WhisperUseGPU,
 		Timeout:           pcfg.DefaultTimeout,
 	})
 }
@@ -268,25 +274,52 @@ func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptio
 	return out
 }
 
+// State machine constants for the recording lifecycle.
+const (
+	stateIdle       = "idle"
+	stateRecording  = "recording"
+	stateProcessing = "processing"
+)
+
 // recordState holds the recording state machine.
 type recordState struct {
 	mu     sync.Mutex
-	active bool
+	st     string // "idle", "recording", "processing"
 	cancel context.CancelFunc
 }
 
-// isActive returns true if recording is active.
+// state returns the current state string. The zero value ("") is
+// treated as idle so the recordState zero-value is usable without
+// explicit initialization.
+func (rs *recordState) state() string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.st == "" {
+		return stateIdle
+	}
+	return rs.st
+}
+
+// setState transitions to the given state.
+func (rs *recordState) setState(s string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.st = s
+}
+
+// isActive returns true when in recording or processing state.
+// The zero value ("") is treated as idle.
 func (rs *recordState) isActive() bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	return rs.active
+	return rs.st != "" && rs.st != stateIdle
 }
 
-// setIsActive sets the recording active state.
-func (rs *recordState) setIsActive(active bool) {
+// isRecording returns true only when in the recording state.
+func (rs *recordState) isRecording() bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	rs.active = active
+	return rs.st == stateRecording
 }
 
 // setCancel sets the cancel function for the current recording.
@@ -296,7 +329,10 @@ func (rs *recordState) setCancel(cancel context.CancelFunc) {
 	rs.cancel = cancel
 }
 
-// cancelRecording cancels the current recording if active.
+// cancelRecording cancels the current recording context. It does NOT
+// change the state — state transitions are handled by OnRecordingStop
+// (recording → processing) and the deferred cleanup in startRecording
+// (processing → idle).
 func (rs *recordState) cancelRecording() {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
@@ -304,7 +340,6 @@ func (rs *recordState) cancelRecording() {
 		rs.cancel()
 		rs.cancel = nil
 	}
-	rs.active = false
 }
 
 // Daemon represents the background process.
@@ -313,6 +348,8 @@ type Daemon struct {
 	ctx      context.Context
 	state    recordState
 	eng      *engine.Engine
+	recorder platform.Recorder
+	chime    platform.ChimePlayer
 	notifier platform.Notifier
 }
 
@@ -329,10 +366,19 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("resolve pid path: %w", err)
 	}
 
-	if err := deps.PIDWrite(pidPath); err != nil {
-		return fmt.Errorf("write pid file: %w", err)
+	// Take the exclusive flock for the daemon pidfile. The kernel
+	// releases the lock automatically if this process dies — stale
+	// locks are impossible, which means systemd Restart=on-failure
+	// can never loop on a "pid file already exists" error.
+	pidHandle, err := deps.PIDLock(pidPath)
+	if err != nil {
+		return fmt.Errorf("lock pid file: %w", err)
 	}
-	defer deps.PIDRemove(pidPath)
+	defer func() {
+		if cerr := pidHandle.Close(); cerr != nil {
+			slog.Default().Warn("pid file close error", "err", cerr)
+		}
+	}()
 
 	// Create recorder for this session.
 	rec, err := deps.Platform.NewRecorder(cfg.General.AudioDevice)
@@ -440,6 +486,8 @@ func Run(cfg *config.Config, deps Deps) error {
 		cfg:      cfg,
 		ctx:      ctx,
 		eng:      eng,
+		recorder: rec,
+		chime:    deps.Platform.Chime,
 		notifier: deps.Platform.Notifier,
 	}
 
@@ -458,13 +506,9 @@ func Run(cfg *config.Config, deps Deps) error {
 	srv.SetShutdownFn(stop)
 	srv.SetToggleFn(d.toggleRecording)
 	srv.SetStatusFn(func() ipc.Response {
-		state := "idle"
-		if d.state.isActive() {
-			state = "recording"
-		}
 		return ipc.Response{
 			Ok:         true,
-			State:      state,
+			State:      d.state.state(),
 			Mode:       cfg.General.Mode,
 			ConfigPath: configPath,
 			Version:    config.Version,
@@ -482,19 +526,42 @@ func Run(cfg *config.Config, deps Deps) error {
 	}
 
 	onPress := func() {
-		d.startRecording(timeoutSec)
+		if cfg.General.Mode == "toggle" {
+			d.toggleRecording()
+		} else {
+			d.startRecording(timeoutSec)
+		}
 	}
 
 	onRelease := func() {
-		if !d.state.isActive() {
-			return
+		if cfg.General.Mode == "hold" {
+			if !d.state.isRecording() {
+				return
+			}
+			d.state.cancelRecording()
 		}
-		d.state.cancelRecording()
+		// toggle mode: onRelease is a no-op
 	}
 
 	go listener.Listen(ctx, hotkeyCode, onPress, onRelease)
 
+	// Emit a single startup line so operators running under systemd
+	// (or `yap listen --foreground`) see the daemon is alive without
+	// having to trigger a recording first. Every field here is what
+	// an operator needs to diagnose a "daemon appears dead" report
+	// without shelling into the box.
+	slog.Default().Info("yap daemon started",
+		"socket", sockPath,
+		"pid", os.Getpid(),
+		"config", configPath,
+		"backend", cfg.Transcription.Backend,
+		"model", cfg.Transcription.Model,
+		"hotkey", cfg.General.Hotkey,
+		"mode", cfg.General.Mode,
+	)
+
 	<-ctx.Done()
+	slog.Default().Info("yap daemon stopped")
 	return nil
 }
 
@@ -518,10 +585,48 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 
 	recCtx, recCancel := context.WithTimeout(d.ctx, time.Duration(timeoutSec)*time.Second)
 	d.state.setCancel(recCancel)
-	d.state.setIsActive(true)
+	slog.Default().Info("state", "from", stateIdle, "to", stateRecording)
+	d.state.setState(stateRecording)
+
+	// Wire silence detection into the recorder's frame callback when
+	// enabled. The detector fires onWarning ~1s before silence auto-stop
+	// and onSilence to cancel the recording context.
+	if d.cfg.General.SilenceDetection {
+		if fn, ok := d.recorder.(platform.FrameNotifier); ok {
+			silenceDur := d.cfg.General.SilenceDuration
+			warningBefore := 1.0 // seconds before auto-stop
+			if silenceDur < warningBefore+0.1 {
+				warningBefore = silenceDur * 0.5
+			}
+			detector := silence.New(
+				d.cfg.General.SilenceThreshold,
+				silenceDur,
+				warningBefore,
+				func() { // onWarning
+					if d.chime != nil {
+						if r, err := assets.WarningChime(); err == nil {
+							d.chime.Play(r)
+						}
+					}
+				},
+				func() { // onSilence
+					d.state.cancelRecording()
+				},
+			)
+			fn.SetOnFrame(detector.Process)
+		}
+	}
 
 	go func() {
-		defer d.state.setIsActive(false)
+		defer func() {
+			// Clear the frame notifier callback so the detector is inert.
+			if fn, ok := d.recorder.(platform.FrameNotifier); ok {
+				fn.SetOnFrame(nil)
+			}
+			slog.Default().Info("state", "from", stateProcessing, "to", stateIdle)
+			d.state.setState(stateIdle)
+		}()
+
 		err := d.eng.Run(d.ctx, engine.RunOptions{
 			RecordCtx:      recCtx,
 			StartChime:     assets.StartChime,
@@ -529,6 +634,10 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 			WarningChime:   assets.WarningChime,
 			TimeoutSec:     timeoutSec,
 			StreamPartials: d.cfg.General.StreamPartials,
+			OnRecordingStop: func() {
+				slog.Default().Info("state", "from", stateRecording, "to", stateProcessing)
+				d.state.setState(stateProcessing)
+			},
 		})
 		if err != nil &&
 			!errors.Is(err, context.Canceled) &&
@@ -540,17 +649,18 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 	return true
 }
 
-// toggleRecording toggles recording state for the IPC toggle command.
-// Returns the new state: "recording" or "idle".
+// toggleRecording toggles recording state for the IPC toggle command
+// and the toggle hotkey mode. Returns the intended new state:
+// "recording" if starting, "idle" if stopping.
 func (d *Daemon) toggleRecording() string {
 	if d.state.isActive() {
 		d.state.cancelRecording()
-		return "idle"
+		return stateIdle
 	}
 	timeoutSec := d.cfg.General.MaxDuration
 	if timeoutSec == 0 {
 		timeoutSec = 60
 	}
 	d.startRecording(timeoutSec)
-	return "recording"
+	return stateRecording
 }
