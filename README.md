@@ -93,7 +93,11 @@ yap transcribe <file.wav>        # transcribe an audio file (--json for structur
 yap transform "text"             # run the LLM transform on text (stdin or arg)
 yap paste "text"                 # exercise the injection layer directly
 yap devices                      # list audio input devices
+yap init                         # generate .yap.toml with project vocabulary terms
+yap init --ai --backend claude   # LLM-extracted terms via Claude Code (zero config)
 yap hint                         # debug: show resolved target, provider, and vocabulary
+yap resolve                      # debug: show injection strategy resolution
+yap config overrides             # show per-project .yap.toml overrides
 ```
 
 ## Configuration
@@ -121,10 +125,7 @@ model = "base.en"               # whisperlocal: base.en (only pinned). remote: b
 model_path = ""                 # explicit local model path; empty auto-resolves from the cache
 whisper_server_path = ""        # explicit whisper-server binary; empty resolves via PATH
 language = ""                   # empty = auto-detect
-prompt = ""
-
-# Used by remote backends:
-api_url = ""                    # empty = backend default
+api_url = ""                    # empty = backend default (remote backends only)
 api_key = ""                    # or env: YAP_API_KEY / GROQ_API_KEY
 
 [transform]
@@ -139,6 +140,7 @@ api_key = ""                    # or env: YAP_TRANSFORM_API_KEY
 prefer_osc52 = true             # OSC52 for terminals when supported
 bracketed_paste = true          # wrap multi-line text for shells
 electron_strategy = "clipboard" # "clipboard" | "keystroke"
+default_strategy = ""           # empty = auto-detect; or force "tmux"/"osc52"/"wayland"/"x11"
 # app_overrides = [
 #   { match = "firefox", strategy = "clipboard" },
 #   { match = "kitty",   strategy = "osc52" },
@@ -148,9 +150,16 @@ electron_strategy = "clipboard" # "clipboard" | "keystroke"
 enabled = true                  # context-aware transcription (reads project docs + app state)
 vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project docs to read for domain terms
 providers = ["claudecode", "termscroll"]                       # conversation context providers, first-match wins
-vocabulary_max_chars = 1000     # Whisper prompt budget (~250 tokens)
+vocabulary_max_chars = 250      # Whisper prompt budget
 conversation_max_chars = 8000   # transform context budget
 timeout_ms = 300                # max wall-time for provider fetch
+
+[audio]
+high_pass_filter = true         # remove sub-speech rumble (<80Hz)
+high_pass_cutoff = 80           # Hz; speech fundamentals start at ~85Hz
+trim_silence = true             # trim leading/trailing silence (prevents Whisper hallucinations)
+trim_threshold = 0.01           # RMS amplitude threshold for silence detection
+trim_margin_ms = 200            # ms of silence to keep around speech
 
 [tray]
 enabled = false
@@ -193,21 +202,27 @@ yap reads project docs and application state to bias Whisper toward your domain 
 enabled = true                                              # master switch
 vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project doc filenames, walked from cwd to git root
 providers = ["claudecode", "termscroll"]                     # conversation providers, first-match wins
-vocabulary_max_chars = 1000                                  # Whisper prompt budget (~250 tokens)
+vocabulary_max_chars = 250                                   # Whisper prompt budget
 conversation_max_chars = 8000                                # transform context budget
 timeout_ms = 300                                             # max ms for provider fetch before recording starts
 ```
 
-**Per-project config:** drop a `.yap.toml` in your repo root. It overrides global hint settings for that project:
+**Per-project config:** run `yap init` to generate a `.yap.toml` in your repo root with extracted domain vocabulary:
+
+```bash
+yap init                         # heuristic term extraction from project docs
+yap init --ai --backend claude   # LLM-extracted terms via Claude Code CLI (zero config)
+```
+
+The generated file overrides global hint settings for that project:
 
 ```toml
 # .yap.toml (in repo root, committed or gitignored — your call)
-[hint]
-vocabulary_files = ["GLOSSARY.md", "CLAUDE.md", "API.md"]
-vocabulary_max_chars = 2000
+vocabulary_terms = ["yap", "whisperlocal", "OSC52", "malgo", "biquad"]
+vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]
 ```
 
-Any field not set in `.yap.toml` keeps its global default. yap walks from cwd to the nearest `.git` root to find this file.
+You can also override any `[hint]` field. Any field not set keeps its global default. yap walks from cwd to the nearest `.git` root to find this file.
 
 **Disable:** `yap config set hint.enabled false` (global) or set `enabled = false` in `.yap.toml` (per-project)
 
@@ -228,8 +243,8 @@ yap has no accounts, no telemetry, no analytics, and no cloud sync. Ever.
 | Platform | Status |
 |---|---|
 | Linux   | Supported. |
-| macOS   | Coming soon ([`ROADMAP.md`](ROADMAP.md) phase 14). |
-| Windows | Planned ([`ROADMAP.md`](ROADMAP.md) phase 15). |
+| macOS   | Coming soon ([`ROADMAP.md`](ROADMAP.md) phase 15). |
+| Windows | Planned ([`ROADMAP.md`](ROADMAP.md) phase 16). |
 
 ## Contributing
 
