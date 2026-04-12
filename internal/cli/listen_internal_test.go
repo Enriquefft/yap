@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,6 +174,47 @@ func TestSpawnDaemonChild_TimeoutIncludesStderr(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("no banner expected on failure; got %q", out.String())
+	}
+}
+
+// TestOsSpawnDaemon_UsesFileForChildStderr guards the listen-fork
+// SIGPIPE regression: osSpawnDaemon must route the detached daemon
+// child's stderr to a real file at pidfile.DaemonLogPath(), not into
+// an in-memory pipe backed by a parent goroutine. If the child's
+// stderr were a pipe, the parent's exit after the readiness wait
+// would close the read end and the daemon's next stderr write would
+// trigger SIGPIPE — killing the daemon silently before it processed
+// a single event.
+//
+// The test overrides daemonChildCommand so the spawned child is
+// /bin/true instead of the test binary re-execing with YAP_DAEMON=1
+// (which would recursively run the entire test suite and never
+// terminate). The assertion is structural: after osSpawnDaemon
+// returns, the log file exists at the canonical path regardless of
+// whether /bin/true actually wrote anything. A missing file means
+// the stderr sink reverted to an in-memory writer and the
+// regression is back.
+func TestOsSpawnDaemon_UsesFileForChildStderr(t *testing.T) {
+	withScratchListenEnv(t)
+
+	prev := daemonChildCommand
+	daemonChildCommand = func() (*exec.Cmd, error) {
+		return exec.Command("/bin/true"), nil
+	}
+	t.Cleanup(func() { daemonChildCommand = prev })
+
+	handle, err := osSpawnDaemon()
+	if err != nil {
+		t.Fatalf("osSpawnDaemon: %v", err)
+	}
+	t.Cleanup(handle.Release)
+
+	logPath, err := pidfile.DaemonLogPath()
+	if err != nil {
+		t.Fatalf("resolve daemon log path: %v", err)
+	}
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		t.Fatalf("daemon log file missing at %s: %v — osSpawnDaemon did not route child stderr to a file", logPath, statErr)
 	}
 }
 

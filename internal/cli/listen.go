@@ -1,12 +1,12 @@
 package cli
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"sync"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -202,46 +202,99 @@ func spawnDaemonChild(out io.Writer) error {
 
 // osSpawnDaemon is the production spawnFunc. It re-execs the current
 // binary with YAP_DAEMON=1 set, detaches it via setsid, and routes
-// the child's stderr through a thread-safe buffer so the readiness
-// loop can quote it on a timeout failure.
+// the child's stderr to a real file so the readiness loop can quote
+// the tail on a timeout failure AND the daemon survives once this
+// parent exits.
+//
+// Child stderr is redirected to pidfile.DaemonLogPath via an *os.File
+// passed on cmd.Stderr. Go's exec package detects *os.File and dups
+// its fd directly into the child at fork+exec instead of routing
+// writes through an in-memory pipe + parent goroutine. This matters
+// because the `yap listen` (non-foreground) flow spawns the daemon,
+// waits for the readiness signals, then RETURNS — at which point the
+// parent Go process exits and every parent-owned goroutine dies. If
+// the child's stderr were a pipe backed by a parent goroutine, the
+// pipe's read end would close on parent exit and the daemon's next
+// stderr write would trigger SIGPIPE, which Go's runtime converts
+// into an immediate process exit for any write on fd 1 or 2. The
+// daemon would die silently before it serviced its first hotkey
+// event — same failure mode that the toggle→record spawn hit. The
+// file-backed fd survives parent exit because the child keeps its
+// own independent open fd after the fork+exec dup.
+//
+// The readiness-failure paths read back the log file tail via
+// readDaemonLogTail so the operator still sees the daemon's
+// diagnostic on "did not start within 3s" errors.
 func osSpawnDaemon() (spawnHandle, error) {
-	self, err := os.Executable()
+	logPath, err := pidfile.DaemonLogPath()
 	if err != nil {
-		return nil, fmt.Errorf("resolve executable: %w", err)
+		return nil, fmt.Errorf("resolve daemon log path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return nil, fmt.Errorf("mkdir daemon log dir: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open daemon log: %w", err)
 	}
 
-	// Spawn detached daemon child. The YAP_DAEMON env sentinel is
-	// picked up by cmd/yap/main.go BEFORE cobra parses os.Args, so
-	// the child never sees any listen-specific flags.
-	childCmd := exec.Command(self)
-	childCmd.Env = append(os.Environ(), "YAP_DAEMON=1")
+	childCmd, err := daemonChildCommand()
+	if err != nil {
+		_ = logFile.Close()
+		return nil, err
+	}
 
 	// Detach from parent: new session, no controlling terminal.
 	childCmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	childCmd.Stdin = nil
 	childCmd.Stdout = nil
-
-	// Tee the child's stderr through a thread-safe buffer for the
-	// duration of the readiness wait. If the daemon fails to start
-	// within the deadline its diagnostic surfaces in the error
-	// returned to the user instead of being silently lost.
-	stderrBuf := &lockedBuffer{}
-	childCmd.Stderr = stderrBuf
+	childCmd.Stderr = logFile
 
 	if err := childCmd.Start(); err != nil {
+		_ = logFile.Close()
 		return nil, err
 	}
-	return &osSpawnHandle{cmd: childCmd, stderr: stderrBuf}, nil
+	// The parent's write-end handle is redundant once Start dups the
+	// fd into the child. Close it here so the parent does not hold
+	// an extra fd open for the lifetime of the process.
+	_ = logFile.Close()
+
+	return &osSpawnHandle{cmd: childCmd, logPath: logPath}, nil
 }
 
-// osSpawnHandle wraps the live exec.Cmd plus its stderr buffer so
-// spawnDaemonChild can read both through the spawnHandle interface.
+// daemonChildCommand builds the *exec.Cmd that osSpawnDaemon forks
+// into the detached daemon child. The package-level function-valued
+// variable exists as a test seam: without it, unit tests that drive
+// osSpawnDaemon end-to-end would re-exec the go-test binary with
+// YAP_DAEMON=1, which the test binary would not recognise and would
+// instead re-run the entire test suite — a recursive fork that never
+// terminates. Tests override daemonChildCommand with a fast-exiting
+// stub (e.g. /bin/true) so the file-descriptor plumbing is still
+// exercised without the recursion. Production always goes through
+// defaultDaemonChildCommand, which resolves os.Executable and sets
+// YAP_DAEMON=1 in the child's environment so cmd/yap/main.go routes
+// into daemon.Run directly.
+var daemonChildCommand = defaultDaemonChildCommand
+
+func defaultDaemonChildCommand() (*exec.Cmd, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve executable: %w", err)
+	}
+	cmd := exec.Command(self)
+	cmd.Env = append(os.Environ(), "YAP_DAEMON=1")
+	return cmd, nil
+}
+
+// osSpawnHandle wraps the live exec.Cmd plus its stderr log path so
+// spawnDaemonChild can read the diagnostic tail through the
+// spawnHandle interface without keeping a parent fd alive.
 type osSpawnHandle struct {
-	cmd    *exec.Cmd
-	stderr *lockedBuffer
+	cmd     *exec.Cmd
+	logPath string
 }
 
-func (h *osSpawnHandle) Stderr() string { return h.stderr.String() }
+func (h *osSpawnHandle) Stderr() string { return readDaemonLogTail(h.logPath) }
 
 func (h *osSpawnHandle) Release() {
 	if h.cmd != nil && h.cmd.Process != nil {
@@ -249,25 +302,21 @@ func (h *osSpawnHandle) Release() {
 	}
 }
 
-// lockedBuffer is a small thread-safe wrapper around bytes.Buffer
-// suitable for assignment to exec.Cmd.Stderr. The child process
-// writes from its own goroutine while the parent reads from the
-// readiness-wait loop, so unsynchronized access would race.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *lockedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
+// readDaemonLogTail returns the last daemonLogTailBytes bytes of the
+// daemon log, or an empty string if the file cannot be read. The
+// readiness-failure paths call this to quote the child's diagnostic
+// back to the user. Bounded reads prevent a pathological log from
+// blowing up the error message.
+func readDaemonLogTail(path string) string {
+	const daemonLogTailBytes = 8192
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(data) > daemonLogTailBytes {
+		data = data[len(data)-daemonLogTailBytes:]
+	}
+	return strings.TrimRight(string(data), "\x00\n") + "\n"
 }
 
 // needsWizard checks if the first-run wizard should be launched.

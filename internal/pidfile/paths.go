@@ -11,6 +11,7 @@ import (
 // single edit, not a grep across the CLI and daemon packages.
 const (
 	daemonPIDFile = "yap/yap.pid"
+	daemonLogFile = "yap/yap.log"
 	recordPIDFile = "yap/yap-record.pid"
 	recordLogFile = "yap/yap-record.log"
 	socketFile    = "yap/yap.sock"
@@ -22,6 +23,21 @@ const (
 // error on resolution failure so the caller can chain it into a
 // higher-level command error.
 func DaemonPath() (string, error) { return xdgRuntime(daemonPIDFile) }
+
+// DaemonLogPath resolves the absolute path of the detached yap
+// daemon's stderr log. `yap listen` (the non-foreground background
+// fork path) opens this file as the child's stderr so the daemon
+// keeps a real fd on its log destination after the spawning parent
+// exits. If listen piped the child's stderr into an in-memory
+// buffer instead, the parent goroutine holding the pipe's read end
+// would die when the listen parent returned from the readiness
+// wait, the read end would close, and the daemon's next stderr
+// write would trigger SIGPIPE — killing the daemon before it
+// processed a single hotkey. Same failure mode as the record child
+// spawned by `yap toggle`; using a file here is the single source
+// of truth for "where do detached daemon logs go" and sidesteps the
+// failure entirely.
+func DaemonLogPath() (string, error) { return xdgRuntime(daemonLogFile) }
 
 // RecordPath resolves the absolute path of the standalone `yap record`
 // process PID file. Co-located with the daemon PID file in
