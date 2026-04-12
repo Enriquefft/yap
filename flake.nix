@@ -10,19 +10,13 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # pkgsStatic exposes a musl-libc package set used for the
-        # fully-static build. malgo (the only CGo audio dep) bundles
-        # miniaudio as a single C header — no system C audio library
-        # is linked into the binary, so the static build only needs a
-        # musl libc and -ldl.
-        pkgsS = pkgs.pkgsStatic;
 
-        # Shared package definition; withStatic toggles static linker flags.
-        yapPkg = { buildGoModule, pkg-config, lib, withStatic ? false }:
+        # Dynamic build for NixOS consumers. Static curl-install
+        # binaries are produced via `nix develop .#static --command
+        # make build-static`, which routes through the Makefile — the
+        # single source of truth for release build flags.
+        yapPkg = { buildGoModule, pkg-config }:
           let
-            # Single source of truth for the Nix-built version string.
-            # Threaded into the Go binary via -ldflags so `yap status`
-            # reports the same value the flake declares.
             version = "0.1.0";
           in
           buildGoModule {
@@ -30,55 +24,22 @@
             inherit version;
             src = ./.;
 
-            # vendorHash: set to null on first build; replace with sha256 from error output.
-            # Example: vendorHash = "sha256-abc123...";
             vendorHash = null;
 
-            # CGO is required for malgo (audio) and whisper.cpp
-            # bindings — the only CGo boundaries in yap.
-            # Use env attrset to pass environment variables to avoid overlap with derivation args.
             env.CGO_ENABLED = "1";
 
-            # nativeBuildInputs: tools needed at build time (not linked into binary).
             nativeBuildInputs = [ pkg-config ];
-
-            # buildInputs: C libraries linked into the binary. malgo
-            # vendors miniaudio.h directly, so no system audio library
-            # is required at link time.
             buildInputs = [ ];
 
-            # -s -w: strip debug symbols and DWARF (reduces binary size).
-            # -X ...Version=${version}: thread the flake-declared version
-            #   into internal/config.Version so `yap status` reports the
-            #   same value the package metadata advertises.
-            # Static flags only added when withStatic = true.
             ldflags = [
               "-s" "-w"
-              "-X" "github.com/hybridz/yap/internal/config.Version=${version}"
-            ]
-              ++ lib.optionals withStatic [
-                "-linkmode external"
-                "-extldflags \"-static\""
-              ];
-
-            # netgo: pure-Go DNS resolver (avoids glibc dynamic dep via CGo DNS).
-            # osusergo: pure-Go user lookup (avoids glibc dynamic dep via CGo os/user).
-            # Both required for fully static binary even with musl-gcc.
-            tags = lib.optionals withStatic [ "netgo" "osusergo" ];
+              "-X" "github.com/Enriquefft/yap/internal/config.Version=${version}"
+            ];
           };
       in {
         packages = {
-          # Dynamic build: for NixOS users who install via nix profile or home-manager.
           default = pkgs.callPackage yapPkg {};
-
-          # Alias for NixOS module reference
           yap = pkgs.callPackage yapPkg {};
-
-          # Static build: for curl install on any Linux distro.
-          # Uses pkgsStatic so the toolchain links against musl libc.
-          # malgo provides miniaudio inline, so no audio C library needs
-          # a static rebuild.
-          static = pkgsS.callPackage yapPkg { withStatic = true; };
         };
 
         # Development shell: provides all tools needed for local development.
@@ -124,9 +85,8 @@
 
           shellHook = ''
             echo "yap dev shell — go $(go version | awk '{print $3}')"
-            echo "  make build              — dynamic build"
-            echo "  nix build .#static      — static musl build"
-            echo "  nix develop .#static    — shell with musl-gcc for make build-static"
+            echo "  make build                                        — dynamic build"
+            echo "  nix develop .#static --command make build-static  — static musl build"
           '';
         };
       }) // {
