@@ -38,16 +38,6 @@ type flatLegacy struct {
 // resetMigrationNoticeForTest in the _test.go file via export_test.go.
 var migrationNoticeOnce sync.Once
 
-// groqDeprecationNoticeOnce gates the Phase 6 informational notice
-// that prints when a user has `transcription.backend = "groq"`
-// explicitly set in their config file. The default flipped to
-// "whisperlocal" in Phase 6, so users who left their old groq line in
-// place are now opting in to the remote backend rather than getting it
-// by default. The notice tells them they can switch to the local
-// backend if they want to. Like the migration notice, it prints at
-// most once per process.
-var groqDeprecationNoticeOnce sync.Once
-
 // printMigrationNotice writes the deprecation notice exactly once.
 // w is the destination (os.Stderr in production, a *bytes.Buffer in
 // tests). The function is a no-op on subsequent calls in the same
@@ -55,17 +45,6 @@ var groqDeprecationNoticeOnce sync.Once
 func printMigrationNotice(w io.Writer, path string) {
 	migrationNoticeOnce.Do(func() {
 		fmt.Fprintf(w, "yap: migrated legacy flat config at %s to nested schema (in memory). Save the file via `yap config set ...` or the wizard to persist the new format.\n", path)
-	})
-}
-
-// printGroqDeprecationNotice writes the Phase 6 informational notice
-// exactly once per process. It is informational, not a deprecation:
-// the groq backend remains supported. The notice exists so users who
-// left a long-standing `backend = "groq"` line in place know they
-// have the option of switching to the local default.
-func printGroqDeprecationNotice(w io.Writer) {
-	groqDeprecationNoticeOnce.Do(func() {
-		fmt.Fprintln(w, "yap: transcription.backend = \"groq\" is set explicitly. The default in Phase 6+ is \"whisperlocal\" (local whisper.cpp). Run `yap config set transcription.backend whisperlocal && yap models download base.en` to switch.")
 	})
 }
 
@@ -139,14 +118,6 @@ func decodeAndMigrate(notices io.Writer, path string, data []byte, cfg pcfg.Conf
 	md, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&nested)
 	if err == nil && !looksLegacy(md, data) {
 		warnUndecoded(notices, path, md)
-		// Phase 6 informational notice: an explicit groq backend
-		// in a Phase-6+ config tells the user the local backend is
-		// available. md.IsDefined is the right discriminator: it
-		// returns true only when the file actually contained the
-		// key, not when DefaultConfig() supplied the value.
-		if md.IsDefined("transcription", "backend") && nested.Transcription.Backend == "groq" {
-			printGroqDeprecationNotice(notices)
-		}
 		return nested, nil
 	}
 

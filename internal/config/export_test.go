@@ -9,12 +9,6 @@ func ResetMigrationNoticeForTest() {
 	migrationNoticeOnce = sync.Once{}
 }
 
-// ResetGroqDeprecationNoticeForTest restores the one-shot Phase 6
-// deprecation notice guard. Production code never calls this.
-func ResetGroqDeprecationNoticeForTest() {
-	groqDeprecationNoticeOnce = sync.Once{}
-}
-
 // ResetShadowWarningForTest and SetSystemConfigPathForTest live in
 // testhooks.go (a non-_test.go file) because they must be callable
 // from cross-package tests such as internal/cli. Go's _test.go
