@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Enriquefft/yap/pkg/yap/audioprep"
+
 	"github.com/Enriquefft/yap/internal/assets"
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/engine"
@@ -280,6 +282,23 @@ func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptio
 	return out
 }
 
+// NewAudioPreprocessor bridges pcfg.AudioConfig into the runtime
+// audioprep.Processor. Returns nil when both preprocessing features
+// are disabled — the engine treats nil as "skip preprocessing".
+func NewAudioPreprocessor(ac pcfg.AudioConfig) engine.AudioProcessor {
+	proc := audioprep.New(audioprep.Options{
+		HighPassFilter: ac.HighPassFilter,
+		HighPassCutoff: ac.HighPassCutoff,
+		TrimSilence:    ac.TrimSilence,
+		TrimThreshold:  ac.TrimThreshold,
+		TrimMarginMS:   ac.TrimMarginMS,
+	})
+	if proc == nil {
+		return nil // explicit untyped nil — avoids typed-nil interface trap
+	}
+	return proc
+}
+
 // State machine constants for the recording lifecycle.
 const (
 	stateIdle       = "idle"
@@ -480,6 +499,7 @@ func Run(cfg *config.Config, deps Deps) error {
 	eng, err := engine.New(
 		rec,
 		deps.Platform.Chime,
+		NewAudioPreprocessor(cfg.Audio),
 		transcriber,
 		transformer,
 		injector,

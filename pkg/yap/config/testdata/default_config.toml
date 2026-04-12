@@ -43,5 +43,12 @@
   conversation_max_chars = 8000
   timeout_ms = 300
 
+[audio]
+  high_pass_filter = true
+  high_pass_cutoff = 80
+  trim_silence = true
+  trim_threshold = 0.01
+  trim_margin_ms = 200
+
 [tray]
   enabled = false

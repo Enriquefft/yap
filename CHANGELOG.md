@@ -871,8 +871,8 @@ behavior change for end users.
 
 ### Deferred to later phases
 - `internal/platform/darwin/` and `internal/platform/windows/` adapters
-  remain unimplemented. They land with the macOS work in Phase 13 and
-  the Windows work in Phase 14 of `ROADMAP.md`.
+  remain unimplemented. They land with the macOS work in Phase 15 and
+  the Windows work in Phase 16 of `ROADMAP.md`.
 
 ### Inherited debt (closed in later phases)
 - `internal/transcribe/transcribe.go` still has package-level mutable

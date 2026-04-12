@@ -165,7 +165,7 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 		}
 	}
 
-	eng, err := engine.New(rec, p.Chime, transcriber, transformer, injector, slog.Default())
+	eng, err := engine.New(rec, p.Chime, daemon.NewAudioPreprocessor(eff.Audio), transcriber, transformer, injector, slog.Default())
 	if err != nil {
 		return fmt.Errorf("record: engine init: %w", err)
 	}

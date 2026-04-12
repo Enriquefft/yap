@@ -3,6 +3,9 @@
 /yap
 /gen-nixos
 
+# Audioprep manual test output
+*.processed.wav
+
 # Local secrets and workspace state
 .env
 .env.*

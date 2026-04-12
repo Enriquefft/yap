@@ -13,6 +13,7 @@ type Config struct {
 	Transform     TransformConfig     `toml:"transform"`
 	Injection     InjectionConfig     `toml:"injection"`
 	Hint          HintConfig          `toml:"hint"`
+	Audio         AudioConfig         `toml:"audio"`
 	Tray          TrayConfig          `toml:"tray"`
 }
 
@@ -108,9 +109,22 @@ type HintConfig struct {
 	TimeoutMS            int      `toml:"timeout_ms"             yap:"min=0;max=5000;doc=Max wall time in ms for hint provider fetch"`
 }
 
-// TrayConfig controls the optional system tray icon (Phase 15).
+// AudioConfig configures the Phase 13 audio preprocessing stage that
+// runs between recording and transcription. Both features are safe
+// defaults: the high-pass filter removes sub-speech rumble that cannot
+// contain speech fundamentals (which start at ~85Hz), and silence
+// trimming prevents Whisper hallucinations on leading/trailing dead air.
+type AudioConfig struct {
+	HighPassFilter bool    `toml:"high_pass_filter" yap:"doc=Apply a high-pass biquad filter to remove sub-speech rumble before transcription"`
+	HighPassCutoff int     `toml:"high_pass_cutoff" yap:"min=20;max=500;doc=High-pass filter cutoff frequency in Hz (speech fundamentals start at ~85Hz)"`
+	TrimSilence    bool    `toml:"trim_silence"     yap:"doc=Trim leading and trailing silence to prevent Whisper hallucinations on dead air"`
+	TrimThreshold  float64 `toml:"trim_threshold"   yap:"min=0.0;max=1.0;doc=RMS amplitude threshold for silence trimming (0..1 normalized)"`
+	TrimMarginMS   int     `toml:"trim_margin_ms"   yap:"min=0;max=2000;doc=Milliseconds of silence to preserve around speech after trimming"`
+}
+
+// TrayConfig controls the optional system tray icon (Phase 17).
 type TrayConfig struct {
-	Enabled bool `toml:"enabled" yap:"doc=Show system tray icon (Phase 15)"`
+	Enabled bool `toml:"enabled" yap:"doc=Show system tray icon (Phase 17)"`
 }
 
 // DefaultConfig returns a Config populated with the defaults documented
@@ -169,6 +183,13 @@ func DefaultConfig() Config {
 			VocabularyMaxChars:   250,
 			ConversationMaxChars: 8000,
 			TimeoutMS:            300,
+		},
+		Audio: AudioConfig{
+			HighPassFilter: true,
+			HighPassCutoff: 80,
+			TrimSilence:    true,
+			TrimThreshold:  0.01,
+			TrimMarginMS:   200,
 		},
 		Tray: TrayConfig{Enabled: false},
 	}

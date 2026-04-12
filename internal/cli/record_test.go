@@ -113,6 +113,10 @@ func withRecordConfig(t *testing.T) {
 
 [injection]
   prefer_osc52 = true
+
+[audio]
+  high_pass_filter = false
+  trim_silence = false
 `)
 }
 

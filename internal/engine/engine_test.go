@@ -227,7 +227,7 @@ func silentChime() engine.ChimeSource {
 // layer based on the wrapped error returned from Engine.Run.
 func newEngine(t *testing.T, rec *mockRecorder, chime *mockChime, transcriber transcribe.Transcriber, injector yinject.Injector) *engine.Engine {
 	t.Helper()
-	eng, err := engine.New(rec, chime, transcriber, passthrough.New(), injector, nil)
+	eng, err := engine.New(rec, chime, nil, transcriber, passthrough.New(), injector, nil)
 	require.NoError(t, err)
 	return eng
 }
@@ -363,7 +363,7 @@ func TestEngineRun_CancelDrainsCleanly(t *testing.T) {
 	chime := &mockChime{}
 	injector := &blockingInjector{}
 
-	eng, err := engine.New(rec, chime, stuckTranscriber{}, passthrough.New(), injector, nil)
+	eng, err := engine.New(rec, chime, nil, stuckTranscriber{}, passthrough.New(), injector, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -394,7 +394,7 @@ func TestEngineRun_CancelDrainsCleanly_BatchMode(t *testing.T) {
 	chime := &mockChime{}
 	injector := &blockingInjector{}
 
-	eng, err := engine.New(rec, chime, stuckTranscriber{}, passthrough.New(), injector, nil)
+	eng, err := engine.New(rec, chime, nil, stuckTranscriber{}, passthrough.New(), injector, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -463,30 +463,123 @@ func TestEngineRun_NilTransformer_Rejected(t *testing.T) {
 	injector := &recordingInjector{}
 	backend := mock.New()
 
-	_, err := engine.New(rec, chime, backend, nil, injector, nil)
+	_, err := engine.New(rec, chime, nil, backend, nil, injector, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Transformer")
 }
 
 func TestEngineRun_NilRecorder_Rejected(t *testing.T) {
 	chime := &mockChime{}
-	_, err := engine.New(nil, chime, mock.New(), passthrough.New(), &recordingInjector{}, nil)
+	_, err := engine.New(nil, chime, nil, mock.New(), passthrough.New(), &recordingInjector{}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Recorder")
 }
 
 func TestEngineRun_NilTranscriber_Rejected(t *testing.T) {
 	rec := &mockRecorder{}
-	_, err := engine.New(rec, &mockChime{}, nil, passthrough.New(), &recordingInjector{}, nil)
+	_, err := engine.New(rec, &mockChime{}, nil, nil, passthrough.New(), &recordingInjector{}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Transcriber")
 }
 
 func TestEngineRun_NilInjector_Rejected(t *testing.T) {
 	rec := &mockRecorder{}
-	_, err := engine.New(rec, &mockChime{}, mock.New(), passthrough.New(), nil, nil)
+	_, err := engine.New(rec, &mockChime{}, nil, mock.New(), passthrough.New(), nil, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Injector")
+}
+
+// mockAudioProcessor is a test fake for engine.AudioProcessor.
+type mockAudioProcessor struct {
+	mu        sync.Mutex
+	called    bool
+	inputWAV  []byte
+	outputWAV []byte
+	err       error
+}
+
+func (m *mockAudioProcessor) ProcessWAV(wav []byte) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = true
+	m.inputWAV = append([]byte(nil), wav...)
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.outputWAV != nil {
+		return m.outputWAV, nil
+	}
+	return wav, nil
+}
+
+func TestEngineRun_AudioProcessor_Called(t *testing.T) {
+	defer goroutineLeakGuard(t)()
+
+	wavData := []byte("test-wav-data")
+	rec := &mockRecorder{wavData: wavData}
+	chime := &mockChime{}
+	injector := &recordingInjector{}
+	backend := mock.New()
+
+	// AudioProcessor that returns modified data.
+	modifiedWAV := []byte("modified-wav")
+	proc := &mockAudioProcessor{outputWAV: modifiedWAV}
+
+	eng, err := engine.New(rec, chime, proc, backend, passthrough.New(), injector, nil)
+	require.NoError(t, err)
+
+	err = eng.Run(context.Background(), engine.RunOptions{
+		RecordCtx:      preCancelledRecCtx(),
+		StreamPartials: true,
+	})
+	require.NoError(t, err)
+
+	// Verify the processor was called with the recorder's WAV.
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	require.True(t, proc.called, "AudioProcessor.ProcessWAV should have been called")
+	require.Equal(t, wavData, proc.inputWAV, "AudioProcessor should receive the encoder's WAV")
+}
+
+func TestEngineRun_AudioProcessorError_Wrapped(t *testing.T) {
+	defer goroutineLeakGuard(t)()
+
+	rec := &mockRecorder{wavData: []byte("wav")}
+	chime := &mockChime{}
+	injector := &recordingInjector{}
+	backend := mock.New()
+
+	proc := &mockAudioProcessor{err: errors.New("preprocessing failed")}
+
+	eng, err := engine.New(rec, chime, proc, backend, passthrough.New(), injector, nil)
+	require.NoError(t, err)
+
+	err = eng.Run(context.Background(), engine.RunOptions{
+		RecordCtx:      preCancelledRecCtx(),
+		StreamPartials: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "audioprep:")
+}
+
+func TestEngineRun_NilAudioProcessor_Passthrough(t *testing.T) {
+	defer goroutineLeakGuard(t)()
+
+	wavData := []byte("original-wav")
+	rec := &mockRecorder{wavData: wavData}
+	chime := &mockChime{}
+	injector := &recordingInjector{}
+	backend := mock.New()
+
+	// nil audioProc — WAV should pass through unchanged.
+	eng, err := engine.New(rec, chime, nil, backend, passthrough.New(), injector, nil)
+	require.NoError(t, err)
+
+	err = eng.Run(context.Background(), engine.RunOptions{
+		RecordCtx:      preCancelledRecCtx(),
+		StreamPartials: true,
+	})
+	require.NoError(t, err)
 }
 
 func TestEngineRun_AudioDeviceError_IsWrapped(t *testing.T) {
@@ -577,7 +670,7 @@ func TestEngineRun_OptionsThreadedThroughPipeline(t *testing.T) {
 	injector := &recordingInjector{}
 	tx := &capturingTransformer{}
 
-	eng, err := engine.New(rec, chime, backend, tx, injector, nil)
+	eng, err := engine.New(rec, chime, nil, backend, tx, injector, nil)
 	require.NoError(t, err)
 
 	guard := goroutineLeakGuard(t)

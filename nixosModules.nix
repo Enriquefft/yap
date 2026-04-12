@@ -298,11 +298,38 @@ in {
           description = "Max wall time in ms for hint provider fetch";
         };
       };
+      audio = {
+        high_pass_filter = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Apply a high-pass biquad filter to remove sub-speech rumble before transcription";
+        };
+        high_pass_cutoff = lib.mkOption {
+          type = lib.types.int;
+          default = 80;
+          description = "High-pass filter cutoff frequency in Hz (speech fundamentals start at ~85Hz)";
+        };
+        trim_silence = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Trim leading and trailing silence to prevent Whisper hallucinations on dead air";
+        };
+        trim_threshold = lib.mkOption {
+          type = lib.types.float;
+          default = 0.01;
+          description = "RMS amplitude threshold for silence trimming (0..1 normalized)";
+        };
+        trim_margin_ms = lib.mkOption {
+          type = lib.types.int;
+          default = 200;
+          description = "Milliseconds of silence to preserve around speech after trimming";
+        };
+      };
       tray = {
         enabled = lib.mkOption {
           type = lib.types.bool;
           default = false;
-          description = "Show system tray icon (Phase 15)";
+          description = "Show system tray icon (Phase 17)";
         };
       };
     };

@@ -178,6 +178,17 @@ func (c Config) Validate(keyValidator KeyValidator) error {
 		}
 	}
 
+	// audio
+	if c.Audio.HighPassCutoff < 20 || c.Audio.HighPassCutoff > 500 {
+		errs = append(errs, fmt.Errorf("audio.high_pass_cutoff: must be in [20,500], got %d", c.Audio.HighPassCutoff))
+	}
+	if c.Audio.TrimThreshold < 0 || c.Audio.TrimThreshold > 1 {
+		errs = append(errs, fmt.Errorf("audio.trim_threshold: must be in [0,1], got %g", c.Audio.TrimThreshold))
+	}
+	if c.Audio.TrimMarginMS < 0 || c.Audio.TrimMarginMS > 2000 {
+		errs = append(errs, fmt.Errorf("audio.trim_margin_ms: must be in [0,2000], got %d", c.Audio.TrimMarginMS))
+	}
+
 	return errors.Join(errs...)
 }
 

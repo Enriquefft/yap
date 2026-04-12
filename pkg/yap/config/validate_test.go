@@ -440,6 +440,64 @@ func TestValidate_TableDriven(t *testing.T) {
 			validator: knownKeys,
 			wantErr:   "injection.app_overrides[0].strategy",
 		},
+
+		// audio
+		{
+			name:      "high_pass_cutoff too low",
+			mutate:    func(c *config.Config) { c.Audio.HighPassCutoff = 19 },
+			validator: knownKeys,
+			wantErr:   "audio.high_pass_cutoff",
+		},
+		{
+			name:      "high_pass_cutoff too high",
+			mutate:    func(c *config.Config) { c.Audio.HighPassCutoff = 501 },
+			validator: knownKeys,
+			wantErr:   "audio.high_pass_cutoff",
+		},
+		{
+			name:      "high_pass_cutoff at lower boundary ok",
+			mutate:    func(c *config.Config) { c.Audio.HighPassCutoff = 20 },
+			validator: knownKeys,
+		},
+		{
+			name:      "high_pass_cutoff at upper boundary ok",
+			mutate:    func(c *config.Config) { c.Audio.HighPassCutoff = 500 },
+			validator: knownKeys,
+		},
+		{
+			name:      "trim_threshold negative",
+			mutate:    func(c *config.Config) { c.Audio.TrimThreshold = -0.01 },
+			validator: knownKeys,
+			wantErr:   "audio.trim_threshold",
+		},
+		{
+			name:      "trim_threshold above 1",
+			mutate:    func(c *config.Config) { c.Audio.TrimThreshold = 1.1 },
+			validator: knownKeys,
+			wantErr:   "audio.trim_threshold",
+		},
+		{
+			name:      "trim_threshold at boundaries ok",
+			mutate:    func(c *config.Config) { c.Audio.TrimThreshold = 0 },
+			validator: knownKeys,
+		},
+		{
+			name:      "trim_margin_ms negative",
+			mutate:    func(c *config.Config) { c.Audio.TrimMarginMS = -1 },
+			validator: knownKeys,
+			wantErr:   "audio.trim_margin_ms",
+		},
+		{
+			name:      "trim_margin_ms too high",
+			mutate:    func(c *config.Config) { c.Audio.TrimMarginMS = 2001 },
+			validator: knownKeys,
+			wantErr:   "audio.trim_margin_ms",
+		},
+		{
+			name:      "trim_margin_ms at upper boundary ok",
+			mutate:    func(c *config.Config) { c.Audio.TrimMarginMS = 2000 },
+			validator: knownKeys,
+		},
 	}
 
 	for _, tc := range cases {

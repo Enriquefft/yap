@@ -35,7 +35,15 @@ import (
 // lazy loading and re-use across multiple recording sessions.
 type ChimeSource func() (io.Reader, error)
 
-// Engine owns the record → transcribe → transform → inject pipeline.
+// AudioProcessor applies preprocessing to recorded WAV audio before
+// transcription. The engine treats it as an opaque bytes-in/bytes-out
+// transform. A nil AudioProcessor in [New] skips preprocessing
+// entirely — the WAV flows straight to the transcriber unchanged.
+type AudioProcessor interface {
+	ProcessWAV(wav []byte) ([]byte, error)
+}
+
+// Engine owns the record → [preprocess] → transcribe → transform → inject pipeline.
 // All dependencies are injected at construction time. The engine does
 // not touch transcription credentials: the Transcriber is constructed
 // by the caller with its credentials already baked in. Likewise the
@@ -53,6 +61,7 @@ type ChimeSource func() (io.Reader, error)
 type Engine struct {
 	recorder    platform.Recorder
 	chime       platform.ChimePlayer
+	audioProc   AudioProcessor
 	transcriber transcribe.Transcriber
 	transformer transform.Transformer
 	injector    inject.Injector
@@ -62,13 +71,15 @@ type Engine struct {
 // New creates an Engine with all dependencies injected. recorder,
 // transcriber, transformer, and injector are all required and a nil
 // value for any of them returns an error so misconfiguration surfaces
-// at construction time. logger is optional — a nil logger is replaced
-// with slog.New(slog.DiscardHandler) so audit calls never panic and
-// tests opt-in to capture by passing a real handler. chime may be
-// nil; the engine guards every call site.
+// at construction time. audioProc is optional — nil skips audio
+// preprocessing (the WAV flows straight to the transcriber). logger
+// is optional — a nil logger is replaced with slog.New(slog.DiscardHandler)
+// so audit calls never panic and tests opt-in to capture by passing a
+// real handler. chime may be nil; the engine guards every call site.
 func New(
 	recorder platform.Recorder,
 	chime platform.ChimePlayer,
+	audioProc AudioProcessor,
 	transcriber transcribe.Transcriber,
 	transformer transform.Transformer,
 	injector inject.Injector,
@@ -92,6 +103,7 @@ func New(
 	return &Engine{
 		recorder:    recorder,
 		chime:       chime,
+		audioProc:   audioProc,
 		transcriber: transcriber,
 		transformer: transformer,
 		injector:    injector,
@@ -189,6 +201,14 @@ func (e *Engine) Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		e.logger.ErrorContext(ctx, "encode error", "error", err)
 		return fmt.Errorf("encode: %w", err)
+	}
+
+	if e.audioProc != nil {
+		wav, err = e.audioProc.ProcessWAV(wav)
+		if err != nil {
+			e.logger.ErrorContext(ctx, "audioprep error", "error", err)
+			return fmt.Errorf("audioprep: %w", err)
+		}
 	}
 
 	return e.runPipeline(ctx, wav, opts, started)

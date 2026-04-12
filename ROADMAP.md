@@ -22,10 +22,11 @@
 | 10 | Hotkey Combos | pending |
 | 11 | Press-to-Toggle + Silence | done |
 | 12 | Context-Aware Pipeline (Linux) | pending |
-| 13 | Transcription History | pending |
-| 14 | macOS Support | pending |
-| 15 | Windows Support | pending |
-| 16 | System Tray | pending |
+| 13 | Audio Preprocessing | pending |
+| 14 | Transcription History | pending |
+| 15 | macOS Support | pending |
+| 16 | Windows Support | pending |
+| 17 | System Tray | pending |
 | — | Distribution + CI | continuous |
 
 ---
@@ -71,8 +72,8 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [x] All tests pass with no behavior change
 
 **Deferred from this phase (intentional):**
-- `internal/platform/darwin/` stub → Phase 13
-- `internal/platform/windows/` stub → Phase 14
+- `internal/platform/darwin/` stub → Phase 15
+- `internal/platform/windows/` stub → Phase 16
 
 **Inherited debt closed in later phases:**
 - `internal/transcribe/transcribe.go` package-level mutable state → closed in Phase 3
@@ -693,7 +694,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [x] Reimplement `internal/platform/linux/chime.go` on malgo
 - [x] Remove `github.com/gordonklaus/portaudio` from `go.mod`
 - [x] Drop `portaudio` from `flake.nix` buildInputs
-- [ ] Stage `darwin/audio.go` and `windows/audio.go` behind build tags — **deferred to Phase 13/14**
+- [ ] Stage `darwin/audio.go` and `windows/audio.go` behind build tags — **deferred to Phase 15/16**
 - [x] ~~Benchmark: latency and memory match or beat PortAudio~~ Portaudio is gone; no baseline to compare against. Audio works correctly — sufficient.
 
 **Done when:**
@@ -708,7 +709,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
   `portaudio` is fully removed from `go.mod` and `flake.nix`. malgo
   bundles miniaudio.h directly — no system audio C library needed.
 - **darwin/windows audio stubs deferred.** The malgo backend is
-  Linux-only for now; Phase 13 and 14 will add `darwin/audio.go`
+  Linux-only for now; Phase 15 and 16 will add `darwin/audio.go`
   and `windows/audio.go` with the appropriate build tags.
 - **Static build fixed alongside Phase 9.** Two fixes applied: (1)
   `xdg.Reload()` added to test helpers that set XDG env vars, so
@@ -864,14 +865,40 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Requires a nontrivial DBus protocol implementation on top of `github.com/godbus/dbus/v5`; most useful target apps (Electron, browsers) have poor a11y tree coverage anyway. Revisit after a user asks for it.
 - **Compositor-specific providers** (KWin / GNOME Shell extension hooks). Niche, low leverage.
 - **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
-- **macOS AX provider** — rides with Phase 14 (macOS Support).
-- **Windows UIA provider** — rides with Phase 15 (Windows Support).
+- **macOS AX provider** — rides with Phase 15 (macOS Support).
+- **Windows UIA provider** — rides with Phase 16 (Windows Support).
 - **Per-project config overlay** (`.yap.toml` in repo root merged with user config). Enables truly per-repo `vocabulary_files` and `providers` without editing the global config. Revisit when multiple-project usage becomes common.
 - **Terminals with no scrollback API** (foot, alacritty, st): vocabulary-only coverage permanently. These terminals are deliberately minimal and will never expose a scrollback read API. Users get CLAUDE.md/README.md vocabulary bias, which fixes the core "yap → jump" problem. No conversation context.
 
 ---
 
-## Phase 13 — Transcription History
+## Phase 13 — Audio Preprocessing
+
+**Depends on:** Phase 5, Phase 9
+**Goal:** Apply safe, empirically validated audio preprocessing between recording and transcription. Research (arXiv:2512.17562) shows noise reduction preprocessing degrades Whisper accuracy by up to 46.6%. Only two operations are safe: high-pass filtering (removes sub-speech rumble) and silence trimming (prevents hallucinations on dead air).
+
+- [ ] `pkg/yap/audioprep/` — pure Go, zero CGo, cross-platform
+- [ ] 2nd-order Butterworth high-pass biquad filter at configurable cutoff (default 80Hz)
+- [ ] Leading/trailing silence trimmer via windowed RMS amplitude detection
+- [ ] Self-contained WAV parser/builder (no go-audio dependency)
+- [ ] `engine.AudioProcessor` interface (defined in engine, satisfied by audioprep)
+- [ ] Engine pipeline: record → encode → **audioprep** → transcribe → transform → inject
+- [ ] `[audio]` config section: `high_pass_filter`, `high_pass_cutoff`, `trim_silence`, `trim_threshold`, `trim_margin_ms`
+- [ ] Both features enabled by default (`DefaultConfig`)
+- [ ] Daemon and CLI wiring via `NewAudioPreprocessor` bridge function
+- [ ] NixOS/Home Manager module regeneration
+- [ ] Full test suite: WAV round-trip, biquad sine attenuation, trim edge cases, engine integration, noglobals AST guard
+
+**Done when:**
+- [ ] 40Hz sine wave attenuated >70% by HPF; 440Hz preserved >95%
+- [ ] Leading/trailing silence trimmed with configurable margin
+- [ ] `audio.high_pass_filter = false` + `audio.trim_silence = false` restores pre-Phase-13 behavior
+- [ ] `go test ./...` passes with zero new failures
+- [ ] No CGo dependencies introduced
+
+---
+
+## Phase 14 — Transcription History
 
 **Depends on:** Phase 3, Phase 4
 
@@ -891,7 +918,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 14 — macOS Support
+## Phase 15 — macOS Support
 
 **Depends on:** Phase 1, Phase 4, Phase 9
 
@@ -914,7 +941,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 15 — Windows Support
+## Phase 16 — Windows Support
 
 **Depends on:** Phase 1, Phase 4, Phase 9
 
@@ -938,9 +965,9 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 16 — System Tray
+## Phase 17 — System Tray
 
-**Depends on:** Phase 14, Phase 15
+**Depends on:** Phase 15, Phase 16
 
 - [ ] Evaluate tray libraries: `fyne.io/systray`, `getlantern/systray`, `energye/systray`
 - [ ] Pick based on static-linking friendliness across all three platforms
@@ -976,7 +1003,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 **Backfill schedule:**
 - Phase 0 fixes the `install.sh` location and the stale README
 - Phase 9 (malgo) unlocks cross-compilation; CI matrix expands beyond Linux at that point
-- Phase 13/14 turn the matrix green on macOS and Windows
+- Phase 15/16 turn the matrix green on macOS and Windows
 - NixOS module regeneration happens alongside Phase 2
 
 ---
@@ -1011,11 +1038,13 @@ Phase 1 (Platform) — DONE ──┐                      │
                                         ▼      ▼
                                  Phase 12 (Context-Aware Pipeline)
                                         │
+              Phase 5 + 9 ──► Phase 13 (Audio Preprocessing)
+                                        │
                                         ▼
-                                 Phase 13 (History)
+                                 Phase 14 (History)
 
-       Phase 9 (malgo) ✓ ──► Phase 14 (macOS) ──┐
-                            ──► Phase 15 (Windows) ─┼──► Phase 16 (Tray)
+       Phase 9 (malgo) ✓ ──► Phase 15 (macOS) ──┐
+                            ──► Phase 16 (Windows) ─┼──► Phase 17 (Tray)
                                                    │
            Distribution + CI (continuous) ─────┘
 ```
@@ -1034,7 +1063,8 @@ Phase 1 (Platform) — DONE ──┐                      │
 10. **Phase 10** — hotkey combos (small, independent)
 11. **Phase 11** — toggle + silence detection
 12. **Phase 12** — context-aware pipeline (Linux) — fixes domain-vocabulary misses at source
-13. **Phase 13** — history
-14. **Phase 14 + 15** — macOS and Windows in parallel
-15. **Phase 16** — tray, after both desktop platforms ship
-16. **Continuous** — distribution + CI catches up to every phase
+13. **Phase 13** — audio preprocessing (high-pass filter + silence trimming)
+14. **Phase 14** — history
+15. **Phase 15 + 16** — macOS and Windows in parallel
+16. **Phase 17** — tray, after both desktop platforms ship
+17. **Continuous** — distribution + CI catches up to every phase
