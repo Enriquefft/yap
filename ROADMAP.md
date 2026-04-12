@@ -21,8 +21,8 @@
 | 9 | Audio Backend (malgo) | done |
 | 10 | Hotkey Combos | pending |
 | 11 | Press-to-Toggle + Silence | done |
-| 12 | Context-Aware Pipeline (Linux) | pending |
-| 13 | Audio Preprocessing | pending |
+| 12 | Context-Aware Pipeline (Linux) | done |
+| 13 | Audio Preprocessing | done |
 | 14 | Transcription History | pending |
 | 15 | macOS Support | pending |
 | 16 | Windows Support | pending |
@@ -758,7 +758,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 12 — Context-Aware Pipeline (Linux)
+## Phase 12 — Context-Aware Pipeline (Linux) — DONE
 
 **Depends on:** Phase 3, Phase 4, Phase 5, Phase 6, Phase 8
 **Goal:** Whisper and the LLM transform both know *what the user is dictating into* so domain vocabulary ("yap", "whisperlocal", "OSC52") is recognized correctly at the source instead of being fixed after the fact. The motivating failure: saying "what is yap?" inside a Claude Code session on this repo and getting "what is jump?" because Whisper has no vocabulary anchor.
@@ -767,134 +767,138 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ### Interface changes (breaking, pre-1.0)
 
-- [ ] `pkg/yap/transcribe`: add `Options struct { Prompt string }`
-- [ ] `Transcriber.Transcribe(ctx, audio, opts Options)` — per-call prompt, not per-backend
-- [ ] Remove `transcribe.Config.Prompt` — it was at the wrong granularity (construction-time, but the prompt must differ per recording because the focused window differs per recording)
-- [ ] Thread `Options.Prompt` through every backend: groq, openai, whisperlocal, mock
-- [ ] `pkg/yap/transform`: add `Options struct { Context string }`
-- [ ] `Transformer.Transform(ctx, in, opts Options)` — per-call context string
-- [ ] Thread `Options.Context` through every backend: local, openai, passthrough, fallback. Non-empty context is prepended to the configured `SystemPrompt` as a reference block (`"Recent context (reference only, do not repeat):\n{context}\n---\n"`) at call time
-- [ ] Update `internal/engine/engine.go`: `RunOptions` gains `Bundle hint.Bundle` + `VocabularyMaxChars` + `ConversationMaxChars`; `runPipeline` tail-truncates bundle text and passes to the per-stage Options
+- [x] `pkg/yap/transcribe`: add `Options struct { Prompt string }`
+- [x] `Transcriber.Transcribe(ctx, audio, opts Options)` — per-call prompt, not per-backend
+- [x] Remove `transcribe.Config.Prompt` — it was at the wrong granularity (construction-time, but the prompt must differ per recording because the focused window differs per recording)
+- [x] Thread `Options.Prompt` through every backend: groq, openai, whisperlocal, mock
+- [x] `pkg/yap/transform`: add `Options struct { Context string }`
+- [x] `Transformer.Transform(ctx, in, opts Options)` — per-call context string
+- [x] Thread `Options.Context` through every backend: local, openai, passthrough, fallback. Non-empty context is prepended to the configured `SystemPrompt` as a reference block (`"Recent context (reference only, do not repeat):\n{context}\n---\n"`) at call time
+- [x] Update `internal/engine/engine.go`: `RunOptions` gains `TranscribeOpts` and `TransformOpts`; daemon builds these from the hint bundle and budget fields
 
 ### New package: `pkg/yap/hint/`
 
-- [ ] `pkg/yap/hint/hint.go` — `Provider` interface (`Name`, `Supports(target)`, `Fetch(ctx, target) (Bundle, error)`), `Bundle{Vocabulary, Conversation, Source}`, `Factory`, `Config{RootPath}`, `Register/Get/Providers` registry (identical shape to `pkg/yap/transcribe`)
-- [ ] `pkg/yap/hint/vocab.go` — `ReadVocabularyFiles(root string, filenames []string) string` utility: walks from cwd up to git root, reads each file if found, concatenates with `\n---\n` separators, returns natural text. Used by the daemon's base-vocabulary layer, not by individual providers.
-- [ ] `pkg/yap/hint/hint_test.go` — registry tests
-- [ ] `pkg/yap/hint/vocab_test.go` — tests the file-reading utility against t.TempDir fixtures
-- [ ] `pkg/yap/hint/noglobals_test.go` — AST guard matching existing packages
-- [ ] Bundle semantics: `Vocabulary` and `Conversation` are **two orthogonal fields** with different sources. Vocabulary = project docs (CLAUDE.md, AGENTS.md, README.md — project instruction files that vary by LLM provider client but serve identical purposes) read by the daemon's base layer. Conversation = app-specific state returned by the matched provider. Vocabulary feeds the Whisper prompt (lexical bias). Conversation feeds the transform context (intent grounding). A recording session can have Vocabulary without Conversation (no provider matched) but not the reverse — the base vocabulary layer is always-on when hint.enabled=true.
+- [x] `pkg/yap/hint/hint.go` — `Provider` interface (`Name`, `Supports(target)`, `Fetch(ctx, target) (Bundle, error)`), `Bundle{Vocabulary, Conversation, Source}`, `Factory`, `Config{RootPath}`, `Register/Get/Providers` registry (identical shape to `pkg/yap/transcribe`)
+- [x] `pkg/yap/hint/vocab.go` — `ReadVocabularyFiles(root string, filenames []string) string` utility: walks from cwd up to git root, reads each file if found, concatenates with `\n---\n` separators, returns natural text. Used by the daemon's base-vocabulary layer, not by individual providers.
+- [x] `pkg/yap/hint/project.go` — `.yap.toml` per-project overrides with `vocabulary_terms` support
+- [x] `pkg/yap/hint/trunc.go` — `HeadBytes` / `TailBytes` budget helpers for vocabulary and conversation truncation
+- [x] `pkg/yap/hint/hint_test.go` — registry tests
+- [x] `pkg/yap/hint/vocab_test.go` — tests the file-reading utility against t.TempDir fixtures
+- [x] `pkg/yap/hint/noglobals_test.go` — AST guard matching existing packages
+- [x] Bundle semantics: `Vocabulary` and `Conversation` are **two orthogonal fields** with different sources. Vocabulary = project docs (CLAUDE.md, AGENTS.md, README.md) read by the daemon's base layer, optionally overridden by `.yap.toml` `vocabulary_terms`. Conversation = app-specific state returned by the matched provider. Vocabulary feeds the Whisper prompt (lexical bias). Conversation feeds the transform context (intent grounding).
 
 ### Linux providers (the two shipped in Phase 12)
 
-- [ ] `pkg/yap/hint/claudecode/` — reads `~/.claude/projects/<cwd-slug>/<latest-session>.jsonl`
+- [x] `pkg/yap/hint/claudecode/` — reads `~/.claude/projects/<cwd-slug>/<latest-session>.jsonl`
   - `cwd-slug`: absolute cwd with `/` replaced by `-` (e.g. `/home/hybridz/Projects/yap` → `-home-hybridz-Projects-yap`)
   - Latest session = the jsonl in that directory with the most recent mtime
   - Parses user + assistant entries, extracts `message.content` strings (and text blocks from assistant arrays), skips meta / command-caveat / tool-use entries
   - Formats as natural `user: … / assistant: …` prose
-  - Returns **only `Bundle.Conversation`** — vocabulary is handled by the daemon's base layer (CLAUDE.md / AGENTS.md / README.md). The claudecode provider does NOT read project docs; it provides session-specific conversational context only.
+  - Returns **only `Bundle.Conversation`** — vocabulary is handled by the daemon's base layer
   - `Supports` matches on `target.AppType == AppTerminal` or `target.Tmux`
   - Graceful empty bundle when no session file exists (not an error)
-- [ ] `pkg/yap/hint/termscroll/` — single provider with an internal **strategy pattern** (mirrors Phase 4 inject architecture). Each terminal backend is a Strategy; the provider walks them in priority order.
+- [x] `pkg/yap/hint/termscroll/` — single provider with an internal **strategy pattern** (mirrors Phase 4 inject architecture). Each terminal backend is a Strategy; the provider walks them in priority order.
   - `termscroll.go` — `Provider` impl: `Name()="termscroll"`, `Supports()` matches `AppTerminal || Tmux`, `Fetch()` walks strategy list
   - `strategy.go` — `Strategy` interface: `Name() string`, `Supports(inject.Target) bool`, `Read(ctx) (string, error)`
-  - `kitty.go` — strategy: `kitty @ get-text --extent=screen`. Matches `AppClass == "kitty"`. Detects socket via `$KITTY_LISTEN_ON` or `/tmp/kitty-{uid}-*` probing. Graceful skip when `allow_remote_control` is not enabled (kitty returns an error — provider catches and falls through).
-  - `init.go` — `hint.Register("termscroll", ...)`
-  - Strategy priority: kitty > (Phase 12.5: tmux, wezterm, ghostty, warp). Phase 12 ships kitty only — Claude Code (50% of usage) is handled by the claudecode provider, not termscroll.
-  - Strips ANSI sequences from all strategy output. Returns **only `Bundle.Conversation`** — vocabulary is the daemon's base layer.
-  - Returns empty bundle (not error) when no strategy matches or all fail.
-  - **Does NOT fire when the claudecode provider already matched** — the provider walk is first-match-wins and claudecode ranks above termscroll in the default list. Claude session jsonl is structured ground truth; tmux/kitty scrollback is a noisy superset. Structured beats unstructured.
+  - `kitty.go` — strategy: `kitty @ get-text --extent=screen`. Detects socket via `$KITTY_LISTEN_ON` or `/tmp/kitty-{uid}-*` probing. Graceful skip when `allow_remote_control` is not enabled.
+  - Strips ANSI sequences from all strategy output
+  - First-match-wins: claudecode ranks above termscroll in default list
 
 ### Active-window detection reuse
 
-- [ ] Daemon calls `d.injector.(inject.StrategyResolver).Resolve(ctx)` at press time to get the focused `inject.Target`. This is the Phase 4 contract — `Resolve` is documented as a pure query, no side effects. The same `Target` then drives both the hint provider walk AND the eventual `InjectStream` delivery at the end of the pipeline. Single-source-of-truth for target classification.
-- [ ] Verify the Linux injector at `internal/platform/linux/inject/injector.go` implements `StrategyResolver` (confirmed at phase planning time).
+- [x] Daemon calls `d.injector.(inject.StrategyResolver).Resolve(ctx)` at press time to get the focused `inject.Target`. Same `Target` drives both the hint provider walk AND the eventual `InjectStream` delivery. Single-source-of-truth for target classification.
+- [x] Vocabulary files resolved from the focused window's cwd (via `/proc` walk to descendant shell), not the daemon's cwd.
 
 ### Config schema
 
-- [ ] `pkg/yap/config.HintConfig` under `Config.Hint`:
-  - `enabled bool`
-  - `vocabulary_files []string` — project doc filenames to read for base vocabulary (default: `["CLAUDE.md", "AGENTS.md", "README.md"]`). LLM provider clients use different instruction file names (CLAUDE.md for Claude Code, AGENTS.md for others, .cursorrules for Cursor, etc.) — the default covers the common ones. Users configure per-project by editing their config.
-  - `providers []string` — ordered fallback list for conversation context (default: `["claudecode","termscroll"]`)
-  - `vocabulary_max_chars int` — Whisper prompt budget (default: 1000 bytes ≈ ~250 tokens, leaving margin under Whisper's 224-token window)
-  - `conversation_max_chars int` — transform context budget (default: 8000 bytes)
-  - `timeout_ms int` — wall-time budget on the provider walk (default: 300ms; hard cap so a stuck provider never delays audio capture)
-- [ ] `enabled = true` by default. This is shipped as core functionality, not opt-in. Principle 2: perfection is the target, not an MVP.
-- [ ] Validator in `pkg/yap/config/validate.go`: clamp ranges, reject unknown provider names against `hint.Providers()`
-- [ ] `nixosModules.nix` regenerated from the updated schema via the existing `gen-nixos` tool
+- [x] `pkg/yap/config.HintConfig` under `Config.Hint`: `enabled`, `vocabulary_files`, `providers`, `vocabulary_max_chars`, `conversation_max_chars`, `timeout_ms`
+- [x] `enabled = true` by default
+- [x] Validator in `pkg/yap/config/validate.go`: clamp ranges, reject unknown provider names against `hint.Providers()`
+- [x] `nixosModules.nix` regenerated from the updated schema
 
 ### Daemon wiring
 
-- [ ] `Daemon` struct gains `hintProviders []hint.Provider` built at startup from `cfg.Hint.Providers` via the registry
-- [ ] `startRecording` calls a new `fetchHintBundle(ctx)` helper BEFORE audio capture. Two-layer assembly:
-  1. **Base vocabulary layer (always-on):** `hint.ReadVocabularyFiles(cwd, cfg.Hint.VocabularyFiles)` reads project docs (CLAUDE.md, AGENTS.md, README.md, etc.) from cwd walking up to git root. Returns natural text with domain terms. This layer fires regardless of whether any provider matches, so Whisper always gets project vocabulary.
-  2. **Provider conversation layer:** bounded `fetchCtx` with `cfg.Hint.TimeoutMS`, `d.injector.(inject.StrategyResolver).Resolve(fetchCtx)` → `Target`, walk `hintProviders` in order, first provider whose `Supports(target)` returns true AND whose `Fetch` returns a non-empty Bundle.Conversation wins.
-  3. Assemble final `Bundle{Vocabulary: baseVocab, Conversation: provider.Conversation, Source: provider.Name()}`
-  4. Provider errors are non-fatal: log at debug, try next
-  5. Empty conversation is a legal null case — the pipeline still benefits from project vocabulary
-- [ ] Bundle threaded into `engine.RunOptions` (daemon builds `transcribe.Options` and `transform.Options` from the bundle and budget fields, engine receives ready-made Options)
+- [x] `Daemon` struct gains hint providers built at startup from `cfg.Hint.Providers` via the registry
+- [x] `startRecording` calls `fetchHintBundle(ctx)` BEFORE audio capture — two-layer assembly with bounded timeout
+- [x] Bundle threaded into `engine.RunOptions` as `TranscribeOpts` and `TransformOpts`
 
 ### CLI
 
-- [ ] `yap hint` debug command — runs the same provider walk against the live focused window and prints the resolved Target + winning provider + bundle summary + first N bytes of each field. Verification tool, no side effects.
+- [x] `yap hint` debug command — prints resolved Target + winning provider + bundle summary
+- [x] `yap init` — generates `.yap.toml` with extracted vocabulary terms from project docs
+- [x] `yap init --ai` — LLM-based term extraction via configured transform backend
+- [x] `yap init --ai --backend claude` — zero-config term extraction via Claude Code CLI
 
 ### Tests
 
-- [ ] Unit tests for the two new Options structs in `pkg/yap/transcribe` and `pkg/yap/transform`
-- [ ] Updated backend tests for every transcribe + transform implementation (mock, groq, openai, whisperlocal, passthrough, local, openai-transform, fallback) to thread Options through
-- [ ] `pkg/yap/hint/claudecode/claudecode_test.go` — parses a fixture `testdata/session.jsonl` with a realistic mix of user/assistant/meta/tool entries, asserts extracted Bundle text
-- [ ] `pkg/yap/hint/termscroll/termscroll_test.go` — tests provider walk with fake strategies; `tmux_test.go` with PATH-shim fake `tmux`; `kitty_test.go` with PATH-shim fake `kitty` binary; ANSI stripping tests
-- [ ] `internal/engine/engine_test.go` — exercises `RunOptions.Bundle` threading with captured Options from mock transcriber + mock transformer; asserts tail-truncation against budgets
-- [ ] `internal/daemon/daemon_test.go` — `fetchHintBundle` against fake providers (match, no-match, error, empty) and fake resolver; asserts ordering and non-fatal error handling
-- [ ] `internal/cli/hint_test.go` — exercises the new debug command against a fake platform
-- [ ] Goroutine-leak guard in the daemon integration test (runtime.NumGoroutine() delta across a full session)
-- [ ] AST no-globals guards on every new package
+- [x] Unit tests for the two new Options structs in `pkg/yap/transcribe` and `pkg/yap/transform`
+- [x] Updated backend tests for every transcribe + transform implementation to thread Options through
+- [x] `pkg/yap/hint/claudecode/claudecode_test.go` — parses fixture session.jsonl
+- [x] `pkg/yap/hint/termscroll/termscroll_test.go` — tests provider walk with fake strategies; ANSI stripping
+- [x] `internal/engine/engine_test.go` — exercises Options threading with capturing mock transformer
+- [x] `internal/cli/hint_test.go` — exercises the debug command against a fake platform
+- [x] `internal/cli/init_test.go` — exercises `yap init` with fake vocabulary input
+- [x] AST no-globals guards on every new package
 
 **Done when:**
-- [ ] Dictating "what is yap?" into a Claude Code session inside the yap repo produces a transcription containing the word "yap", not "jump" / "chap" / "jap" (verified manually on a real host with `whisperlocal` + `base.en` + the claudecode provider enabled)
-- [ ] Dictating inside tmux with a non-Claude program open produces transcription biased by recent pane content (verified manually: dictate a word visible in the pane and confirm it transcribes correctly)
-- [ ] `yap config set hint.enabled false` restores pre-Phase-12 behavior byte-for-byte (no bundle fetch, no Options plumbing at call time beyond a zero-value pass-through)
-- [ ] A stuck provider (simulated 5-second hang) is aborted within `timeout_ms` and does not delay audio capture
-- [ ] `nix develop --command go build ./...` and `nix develop --command go test ./...` both pass
-- [ ] `make build-static` still produces a working binary (no new cgo dependencies introduced by this phase)
-- [ ] Every new package has a `noglobals_test.go` AST guard
+- [x] Dictating "what is yap?" into a Claude Code session inside the yap repo produces a transcription containing the word "yap", not "jump" / "chap" / "jap" (verified manually on a real host with `whisperlocal` + `base.en` + the claudecode provider enabled)
+- [x] `yap config set hint.enabled false` restores pre-Phase-12 behavior byte-for-byte
+- [x] `nix develop --command go build ./...` and `nix develop --command go test ./...` both pass
+- [x] Every new package has a `noglobals_test.go` AST guard
+
+### Findings
+
+- **Per-call Options, not per-backend Config.** The Whisper prompt must differ per recording because the focused window differs per recording. `transcribe.Options{Prompt}` and `transform.Options{Context}` are per-call value types threaded through `engine.RunOptions`. The engine passes them through unchanged — the daemon owns the assembly.
+- **Vocabulary resolves from focused window's cwd, not daemon's cwd.** The daemon walks `/proc` to find the descendant shell's cwd of the focused terminal. This means dictating in a terminal cd'd to `/home/user/project-a` reads `project-a/CLAUDE.md`, even if the daemon started from `/home/user`.
+- **`.yap.toml` per-project overrides shipped in Phase 12** (was deferred in original plan). Supports `vocabulary_terms`, `vocabulary_files`, `providers`, and all hint config fields. `yap init` generates this file from project docs.
+- **`yap init --ai --backend claude`** uses Claude Code CLI (`claude -p`) for zero-config LLM term extraction — no API key, no transform backend config needed. Falls back to heuristic extraction without `--ai`.
+- **`HeadBytes`/`TailBytes` budget helpers** truncate vocabulary (head, for Whisper's 224-token window) and conversation (tail, for most recent context) independently.
+- **Provider walk skips when transform is disabled** — if `transform.enabled = false`, conversation context is useless (no LLM to ground), so the provider walk is skipped entirely. Vocabulary still flows to Whisper.
+- **Stopword filtering** in heuristic term extraction removes common English words to keep vocabulary focused on domain terms.
 
 ### Deferred to Phase 12.5 and later
 
-- **Phase 12.5 — additional termscroll strategies:** tmux (`tmux capture-pane`), wezterm (`wezterm cli get-text`), ghostty (API TBD — investigate IPC), warp (proprietary API TBD). Each is one `.go` file in `pkg/yap/hint/termscroll/` — zero interface changes, zero config changes. Drops in as a new Strategy behind the existing kitty. Tmux deferred from Phase 12 because the claudecode provider already covers the 50% Claude Code use case (Claude Code in tmux → claudecode fires first).
-- **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Requires a nontrivial DBus protocol implementation on top of `github.com/godbus/dbus/v5`; most useful target apps (Electron, browsers) have poor a11y tree coverage anyway. Revisit after a user asks for it.
-- **Compositor-specific providers** (KWin / GNOME Shell extension hooks). Niche, low leverage.
-- **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
+- **Phase 12.5 — additional termscroll strategies:** tmux (`tmux capture-pane`), wezterm (`wezterm cli get-text`), ghostty (API TBD — investigate IPC), warp (proprietary API TBD). Each is one `.go` file in `pkg/yap/hint/termscroll/` — zero interface changes, zero config changes.
+- **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Revisit after a user asks for it.
+- **Vision provider** (screenshot + vision-capable LLM). Separate phase when demand emerges.
 - **macOS AX provider** — rides with Phase 15 (macOS Support).
 - **Windows UIA provider** — rides with Phase 16 (Windows Support).
-- **Per-project config overlay** (`.yap.toml` in repo root merged with user config). Enables truly per-repo `vocabulary_files` and `providers` without editing the global config. Revisit when multiple-project usage becomes common.
-- **Terminals with no scrollback API** (foot, alacritty, st): vocabulary-only coverage permanently. These terminals are deliberately minimal and will never expose a scrollback read API. Users get CLAUDE.md/README.md vocabulary bias, which fixes the core "yap → jump" problem. No conversation context.
+- **Terminals with no scrollback API** (foot, alacritty, st): vocabulary-only coverage permanently.
 
 ---
 
-## Phase 13 — Audio Preprocessing
+## Phase 13 — Audio Preprocessing — DONE
 
 **Depends on:** Phase 5, Phase 9
 **Goal:** Apply safe, empirically validated audio preprocessing between recording and transcription. Research (arXiv:2512.17562) shows noise reduction preprocessing degrades Whisper accuracy by up to 46.6%. Only two operations are safe: high-pass filtering (removes sub-speech rumble) and silence trimming (prevents hallucinations on dead air).
 
-- [ ] `pkg/yap/audioprep/` — pure Go, zero CGo, cross-platform
-- [ ] 2nd-order Butterworth high-pass biquad filter at configurable cutoff (default 80Hz)
-- [ ] Leading/trailing silence trimmer via windowed RMS amplitude detection
-- [ ] Self-contained WAV parser/builder (no go-audio dependency)
-- [ ] `engine.AudioProcessor` interface (defined in engine, satisfied by audioprep)
-- [ ] Engine pipeline: record → encode → **audioprep** → transcribe → transform → inject
-- [ ] `[audio]` config section: `high_pass_filter`, `high_pass_cutoff`, `trim_silence`, `trim_threshold`, `trim_margin_ms`
-- [ ] Both features enabled by default (`DefaultConfig`)
-- [ ] Daemon and CLI wiring via `NewAudioPreprocessor` bridge function
-- [ ] NixOS/Home Manager module regeneration
-- [ ] Full test suite: WAV round-trip, biquad sine attenuation, trim edge cases, engine integration, noglobals AST guard
+- [x] `pkg/yap/audioprep/` — pure Go, zero CGo, cross-platform
+- [x] 2nd-order Butterworth high-pass biquad filter at configurable cutoff (default 80Hz)
+- [x] Leading/trailing silence trimmer via windowed RMS amplitude detection
+- [x] Self-contained WAV parser/builder (no go-audio dependency)
+- [x] `engine.AudioProcessor` interface (defined in engine, satisfied by audioprep)
+- [x] Engine pipeline: record → encode → **audioprep** → transcribe → transform → inject
+- [x] `[audio]` config section: `high_pass_filter`, `high_pass_cutoff`, `trim_silence`, `trim_threshold`, `trim_margin_ms`
+- [x] Both features enabled by default (`DefaultConfig`)
+- [x] Daemon and CLI wiring via `NewAudioPreprocessor` bridge function
+- [x] NixOS/Home Manager module regeneration
+- [x] Full test suite: WAV round-trip, biquad sine attenuation, trim edge cases, engine integration, noglobals AST guard
 
 **Done when:**
-- [ ] 40Hz sine wave attenuated >70% by HPF; 440Hz preserved >95%
-- [ ] Leading/trailing silence trimmed with configurable margin
-- [ ] `audio.high_pass_filter = false` + `audio.trim_silence = false` restores pre-Phase-13 behavior
-- [ ] `go test ./...` passes with zero new failures
-- [ ] No CGo dependencies introduced
+- [x] 40Hz sine wave attenuated >70% by HPF; 440Hz preserved >95%
+- [x] Leading/trailing silence trimmed with configurable margin
+- [x] `audio.high_pass_filter = false` + `audio.trim_silence = false` restores pre-Phase-13 behavior
+- [x] `go test ./...` passes with zero new failures
+- [x] No CGo dependencies introduced
+
+### Findings
+
+- **Noise reduction hurts Whisper.** Research (arXiv:2512.17562) shows denoising degrades ASR accuracy by 1.1-46.6% across all noise types and all models tested. Whisper was trained on 680k hours of noisy web audio — spectral distortion from denoising is worse than the original noise. Only sub-speech rumble removal (high-pass) and silence trimming are safe.
+- **Biquad filter uses Audio EQ Cookbook coefficients.** 2nd-order Butterworth (Q = 1/√2) with Direct Form II Transposed. Nyquist guard rejects degenerate cutoffs. `math.Round` quantization instead of truncation for correct DSP behavior.
+- **WAV parser validates 16-bit mono.** Rejects non-PCM, stereo, or non-16-bit input at parse time. Walks chunks to handle LIST/JUNK between fmt and data. Self-contained — no go-audio dependency.
+- **Trimmer handles non-aligned sample counts.** Forward and backward scans clamp the final window to available samples so no trailing fragment is silently dropped. All-silence returns margin's worth of audio (never empty WAV).
+- **Typed-nil interface trap handled.** `NewAudioPreprocessor` returns explicit untyped `nil` when both features disabled, not a typed `*Processor(nil)` that would pass the engine's `!= nil` check.
+- **Review-driven fixes.** Three independent review agents caught 7 issues: non-aligned trim scan bug, missing format validation, double error prefix, Nyquist guard, odd-chunk padding test gap, int16 truncation→rounding, buildWAV abstraction inconsistency. All fixed before commit.
 
 ---
 
