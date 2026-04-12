@@ -3,6 +3,7 @@ package hint
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -60,5 +61,38 @@ func ReadVocabularyFiles(startDir string, filenames []string) string {
 		dir = parent
 	}
 
-	return strings.Join(parts, "\n---\n")
+	return stripMarkdown(strings.Join(parts, "\n"))
+}
+
+var (
+	reCodeBlock  = regexp.MustCompile("(?s)```[^`]*```")
+	reHeading    = regexp.MustCompile(`(?m)^#{1,6}\s+`)
+	reBullet     = regexp.MustCompile(`(?m)^[\s]*[-*+]\s+`)
+	reNumbered   = regexp.MustCompile(`(?m)^[\s]*\d+\.\s+`)
+	reLink       = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`)
+	reInlineCode = regexp.MustCompile("`[^`]+`")
+	reEmphasis   = regexp.MustCompile(`[*_]{1,3}([^*_]+)[*_]{1,3}`)
+	reHTMLTag    = regexp.MustCompile(`<[^>]+>`)
+	reMultiSpace = regexp.MustCompile(`[^\S\n]{2,}`)
+	reMultiLine  = regexp.MustCompile(`\n{3,}`)
+)
+
+// stripMarkdown removes markdown formatting so the text reads as
+// natural prose suitable for a Whisper prompt. Whisper's prompt
+// parameter expects "previous transcript" style text — markdown
+// headers, bullets, and code blocks confuse the model.
+func stripMarkdown(s string) string {
+	s = reCodeBlock.ReplaceAllString(s, "")
+	s = reHeading.ReplaceAllString(s, "")
+	s = reBullet.ReplaceAllString(s, "")
+	s = reNumbered.ReplaceAllString(s, "")
+	s = reLink.ReplaceAllLiteralString(s, "$1")
+	s = reInlineCode.ReplaceAllStringFunc(s, func(m string) string {
+		return strings.Trim(m, "`")
+	})
+	s = reEmphasis.ReplaceAllString(s, "$1")
+	s = reHTMLTag.ReplaceAllString(s, "")
+	s = reMultiSpace.ReplaceAllString(s, " ")
+	s = reMultiLine.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
 }

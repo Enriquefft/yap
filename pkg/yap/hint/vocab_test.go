@@ -32,9 +32,8 @@ func TestReadVocabularyFiles_BasicProject(t *testing.T) {
 	if strings.Contains(got, "AGENTS.md") {
 		t.Errorf("AGENTS.md should be skipped (doesn't exist)")
 	}
-	// Two files found -> one separator.
-	if strings.Count(got, "\n---\n") != 1 {
-		t.Errorf("expected 1 separator, got %d in %q", strings.Count(got, "\n---\n"), got)
+	if strings.Contains(got, "#") {
+		t.Errorf("markdown heading should be stripped in %q", got)
 	}
 }
 

@@ -24,6 +24,16 @@ func TestNoPackageLevelMutableState(t *testing.T) {
 		"registryMu":         {},
 		"registry":           {},
 		"ErrUnknownProvider": {},
+		"reCodeBlock":        {},
+		"reHeading":          {},
+		"reBullet":           {},
+		"reNumbered":         {},
+		"reLink":             {},
+		"reInlineCode":       {},
+		"reEmphasis":         {},
+		"reHTMLTag":          {},
+		"reMultiSpace":       {},
+		"reMultiLine":        {},
 	}
 
 	entries, err := os.ReadDir(wd)
