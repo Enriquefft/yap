@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -23,6 +24,7 @@ import (
 // overwrites vocabulary_terms while preserving other .yap.toml fields.
 func newInitCmd(cfg *config.Config, _ platform.Platform) *cobra.Command {
 	var useAI bool
+	var aiBackend string
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "generate .yap.toml with project vocabulary for speech recognition",
@@ -31,24 +33,27 @@ that Whisper needs help recognizing. The terms are written to .yap.toml
 in the current directory.
 
 Without --ai, terms are extracted via heuristic filtering (stopwords,
-deduplication). With --ai, the configured transform backend (Ollama,
-OpenAI) picks the most significant terms via a single LLM call.
+deduplication). With --ai, an LLM picks the most significant terms:
+
+  yap init --ai                   # uses configured transform backend
+  yap init --ai --backend claude  # uses Claude Code CLI (zero config)
 
 Run this once per project. Review and edit .yap.toml as needed.
 The file can be committed to the repository.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runInit(cmd, cfg, useAI)
+			return runInit(cmd, cfg, useAI, aiBackend)
 		},
 	}
-	cmd.Flags().BoolVar(&useAI, "ai", false, "use LLM to extract terms (requires configured transform backend)")
+	cmd.Flags().BoolVar(&useAI, "ai", false, "use LLM to extract terms")
+	cmd.Flags().StringVar(&aiBackend, "backend", "", "LLM backend for --ai: 'claude' (Claude Code CLI) or empty (transform config)")
 	return cmd
 }
 
 // runInit is the implementation of `yap init`. It reads project
 // documentation, extracts terms (heuristic or LLM), and writes them
 // to .yap.toml in the current directory.
-func runInit(cmd *cobra.Command, cfg *config.Config, useAI bool) error {
+func runInit(cmd *cobra.Command, cfg *config.Config, useAI bool, aiBackend string) error {
 	out := cmd.OutOrStdout()
 
 	cwd, err := os.Getwd()
@@ -78,7 +83,12 @@ func runInit(cmd *cobra.Command, cfg *config.Config, useAI bool) error {
 
 	var terms []string
 
-	if useAI {
+	if useAI && aiBackend == "claude" {
+		terms, err = extractTermsClaude(cmd, startDir, vocabFiles)
+		if err != nil {
+			return fmt.Errorf("init: claude extraction: %w", err)
+		}
+	} else if useAI {
 		terms, err = extractTermsAI(cmd, cfg, startDir, vocabFiles)
 		if err != nil {
 			return fmt.Errorf("init: ai extraction: %w", err)
@@ -134,6 +144,64 @@ func extractTermsHeuristic(startDir string, vocabFiles []string) ([]string, erro
 	return splitTerms(csv), nil
 }
 
+// aiExtractionPrompt is the system prompt used by both --backend claude
+// and the transform backend path for term extraction.
+const aiExtractionPrompt = `You are configuring Whisper speech recognition. Whisper has a "prompt" parameter that biases token probabilities toward specific words.
+
+Extract 10-15 project-specific terms from the documentation below. These terms will be injected into Whisper's prompt so it recognizes them during voice dictation.
+
+INCLUDE (words Whisper would likely MISRECOGNIZE without help):
+- The project name (MOST IMPORTANT — always first)
+- Custom tool names, internal library names, invented words
+- Project-specific acronyms and compound terms
+- Proper nouns unique to this project
+
+EXCLUDE (words Whisper already knows from training data):
+- Common English words (lightweight, daemon, record, transcribe, hotkey)
+- Well-known tech terms (API, HTTP, JSON, CLI, Docker, Git)
+- Popular language/framework names (Go, Python, React, Linux, macOS)
+- Generic programming concepts (function, variable, config, error)
+
+Rule: if you'd find the word in a general-purpose dictionary or on the first page of a popular tech tutorial, Whisper already knows it. Don't include it.
+
+Output ONLY a comma-separated list. No explanations, no quotes, no numbering.
+
+Documentation:
+`
+
+// extractTermsClaude pipes project documentation through the Claude
+// Code CLI (`claude --print -p`). Zero config — if claude is on PATH,
+// it works. The prompt is sent as the -p argument and the docs as stdin.
+func extractTermsClaude(cmd *cobra.Command, startDir string, vocabFiles []string) ([]string, error) {
+	claudePath, err := exec.LookPath("claude")
+	if err != nil {
+		return nil, fmt.Errorf("claude CLI not found on PATH; install Claude Code or use --backend without 'claude'")
+	}
+
+	raw := hint.ReadRawVocabularyFiles(startDir, vocabFiles)
+	if raw == "" {
+		return nil, nil
+	}
+	const maxDocChars = 4000
+	if len(raw) > maxDocChars {
+		raw = raw[:maxDocChars]
+	}
+
+	prompt := aiExtractionPrompt + raw
+
+	c := exec.CommandContext(cmd.Context(), claudePath, "--print", "-p", prompt)
+	c.Stdin = nil
+	var stdout, stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+
+	if err := c.Run(); err != nil {
+		return nil, fmt.Errorf("claude CLI: %w\nstderr: %s", err, stderr.String())
+	}
+
+	return splitTerms(stdout.String()), nil
+}
+
 // extractTermsAI sends project documentation to the configured
 // transform backend and parses the comma-separated term list from the
 // LLM response.
@@ -157,28 +225,7 @@ func extractTermsAI(cmd *cobra.Command, cfg *config.Config, startDir string, voc
 		raw = raw[:maxDocChars]
 	}
 
-	prompt := `You are configuring Whisper speech recognition. Whisper has a "prompt" parameter that biases token probabilities toward specific words.
-
-Extract 10-15 project-specific terms from the documentation below. These terms will be injected into Whisper's prompt so it recognizes them during voice dictation.
-
-INCLUDE (words Whisper would likely MISRECOGNIZE without help):
-- The project name (MOST IMPORTANT — always first)
-- Custom tool names, internal library names, invented words
-- Project-specific acronyms and compound terms
-- Proper nouns unique to this project
-
-EXCLUDE (words Whisper already knows from training data):
-- Common English words (lightweight, daemon, record, transcribe, hotkey)
-- Well-known tech terms (API, HTTP, JSON, CLI, Docker, Git)
-- Popular language/framework names (Go, Python, React, Linux, macOS)
-- Generic programming concepts (function, variable, config, error)
-
-Rule: if you'd find the word in a general-purpose dictionary or on the first page of a popular tech tutorial, Whisper already knows it. Don't include it.
-
-Output ONLY a comma-separated list. No explanations, no quotes, no numbering.
-
-Documentation:
-` + raw
+	prompt := aiExtractionPrompt + raw
 
 	// Build a fresh transform config with our extraction prompt as
 	// the system prompt.
