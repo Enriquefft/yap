@@ -117,10 +117,17 @@ type InjectionOptions struct {
 }
 
 // AppOverride pairs a WM_CLASS / process-name substring with the
-// strategy name to force when it matches.
+// strategy name to force when it matches. When AppendEnter is true,
+// the injector appends a trailing newline to the (already trimmed)
+// text before handing it to the strategy, so keystroke strategies
+// type the Enter key at the end — the explicit opt-in for terminals
+// and form fields that want auto-submit behavior. Clipboard
+// strategies also receive the appended newline; whether paste fires
+// it depends on the terminal's bracketed-paste handling.
 type AppOverride struct {
-	Match    string
-	Strategy string
+	Match       string
+	Strategy    string
+	AppendEnter bool
 }
 
 // NewInjectorFunc constructs an Injector for the given options. The

@@ -266,8 +266,9 @@ func InjectionOptionsFromConfig(ic pcfg.InjectionConfig) platform.InjectionOptio
 		out.AppOverrides = make([]platform.AppOverride, 0, len(ic.AppOverrides))
 		for _, ov := range ic.AppOverrides {
 			out.AppOverrides = append(out.AppOverrides, platform.AppOverride{
-				Match:    ov.Match,
-				Strategy: ov.Strategy,
+				Match:       ov.Match,
+				Strategy:    ov.Strategy,
+				AppendEnter: ov.AppendEnter,
 			})
 		}
 	}

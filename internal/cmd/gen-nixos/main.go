@@ -31,6 +31,13 @@ type FieldInfo struct {
 	Kind    reflect.Kind // underlying kind (bool, string, int, float, slice)
 	Default interface{} // default value from DefaultConfig()
 	Meta    TagMeta     // parsed yap:"..." metadata
+	// ElemFields is populated only when Kind is Slice AND the slice
+	// element is a struct — it carries the recursive FieldInfo for
+	// each exported element field so the generator can emit a
+	// NixOS submodule type instead of a loose attrsOf str. A generic
+	// slice (e.g. []string) leaves this nil and falls back to the
+	// attrsOf-str rendering.
+	ElemFields []FieldInfo
 }
 
 // SectionInfo describes one TOML section (one top-level struct field).
@@ -142,18 +149,22 @@ func buildTemplateData(cfg pcfg.Config) TemplateData {
 			meta := parseTagMeta(f.Tag.Get("yap"))
 			fv := sectionValue.Field(j)
 
-			// Slices are rendered as a comment marker — Nix users
-			// manage injection.app_overrides via the CLI or by
-			// editing the generated /etc/yap/config.toml directly
-			// through services.yap.settings.injection.app_overrides.
-			// For Phase 2 we expose the slice as an empty default
-			// with an informative description.
-			fields = append(fields, FieldInfo{
+			fi := FieldInfo{
 				Key:     key,
 				Kind:    fv.Kind(),
 				Default: fv.Interface(),
 				Meta:    meta,
-			})
+			}
+			// When the field is a slice whose element is a struct,
+			// recursively walk the element type to collect the
+			// per-field schema so the generator can emit a
+			// listOf submodule in Nix. Empty slices still have a
+			// reachable element type via reflect.Type.Elem(), so the
+			// walk works even when the default is an empty slice.
+			if fv.Kind() == reflect.Slice && fv.Type().Elem().Kind() == reflect.Struct {
+				fi.ElemFields = collectStructFields(fv.Type().Elem())
+			}
+			fields = append(fields, fi)
 		}
 
 		sections = append(sections, SectionInfo{
@@ -170,6 +181,32 @@ func tomlName(tag string) string {
 		return tag[:i]
 	}
 	return tag
+}
+
+// collectStructFields walks a struct type and returns one FieldInfo
+// per exported, toml-tagged field, mirroring the top-level section
+// walk in buildTemplateData. Defaults are the zero value of each
+// field — slice-of-struct element defaults are not configurable
+// from DefaultConfig() because the canonical empty default applies
+// to the whole slice, not per-element.
+func collectStructFields(t reflect.Type) []FieldInfo {
+	zero := reflect.Zero(t)
+	var out []FieldInfo
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		key := tomlName(f.Tag.Get("toml"))
+		if key == "" || key == "-" {
+			continue
+		}
+		meta := parseTagMeta(f.Tag.Get("yap"))
+		out = append(out, FieldInfo{
+			Key:     key,
+			Kind:    f.Type.Kind(),
+			Default: zero.Field(i).Interface(),
+			Meta:    meta,
+		})
+	}
+	return out
 }
 
 // parseTagMeta parses a `yap:"..."` struct tag into TagMeta.
@@ -251,7 +288,12 @@ func parseTagMeta(tag string) TagMeta {
 
 // nixType returns the Nix type expression for a FieldInfo. Enums are
 // rendered as `enum [ "a" "b" ]`; strings, bools, ints and floats map
-// to their obvious Nix counterparts.
+// to their obvious Nix counterparts. Struct-element slices recurse
+// into a submodule so each element field gets a strict type instead
+// of collapsing into a loose attrsOf-str bag — the strict type is
+// what lets Bool subfields (e.g. injection.app_overrides[].append_enter)
+// survive the round trip from NixOS → TOML → pkg/yap/config without
+// losing their kind.
 func nixType(f FieldInfo) string {
 	if len(f.Meta.Enum) > 0 {
 		sorted := append([]string(nil), f.Meta.Enum...)
@@ -272,10 +314,34 @@ func nixType(f FieldInfo) string {
 	case reflect.Float32, reflect.Float64:
 		return "lib.types.float"
 	case reflect.Slice:
+		if len(f.ElemFields) > 0 {
+			return renderSubmoduleType(f.ElemFields)
+		}
 		return "lib.types.listOf (lib.types.attrsOf lib.types.str)"
 	default:
 		return "lib.types.str"
 	}
+}
+
+// renderSubmoduleType emits a lib.types.listOf (lib.types.submodule
+// { options = { ... }; }) expression whose option set mirrors the
+// element struct's fields one-to-one. The rendered block lives inline
+// inside the parent mkOption so the generator stays a single-pass
+// writer with no ordering dependencies on other options.
+func renderSubmoduleType(elems []FieldInfo) string {
+	var b strings.Builder
+	b.WriteString("lib.types.listOf (lib.types.submodule {\n")
+	b.WriteString("          options = {\n")
+	for _, ef := range elems {
+		fmt.Fprintf(&b, "            %s = lib.mkOption {\n", ef.Key)
+		fmt.Fprintf(&b, "              type = %s;\n", nixType(ef))
+		fmt.Fprintf(&b, "              default = %s;\n", nixDefault(ef))
+		fmt.Fprintf(&b, "              description = %s;\n", nixDescription(ef))
+		b.WriteString("            };\n")
+	}
+	b.WriteString("          };\n")
+	b.WriteString("        })")
+	return b.String()
 }
 
 // nixDefault renders the default value for a FieldInfo in Nix syntax.

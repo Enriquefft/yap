@@ -46,6 +46,14 @@ type strategyOrder struct {
 	// branch of the selection logic produced strategies. See the
 	// reasonXxx constants below for the canonical values.
 	reason string
+	// appendEnter is true when the selection was driven by an
+	// app_override entry whose AppendEnter flag is set. The injector
+	// appends a trailing newline to the (already-trimmed) text before
+	// dispatching to the chosen strategy so keystroke strategies type
+	// Enter at the end — the explicit opt-in for terminals and form
+	// fields that want auto-submit. Only app_overrides can turn this
+	// on; the natural-order and default_strategy branches never do.
+	appendEnter bool
 }
 
 // Stable reason tokens emitted by buildStrategyOrder. Keeping them as
@@ -99,8 +107,9 @@ func buildStrategyOrder(ctx context.Context, logger *slog.Logger, strategies []S
 			continue
 		}
 		return strategyOrder{
-			strategies: prependUnique(forced, natural),
-			reason:     fmt.Sprintf("%s matched (%s -> %s)", reasonAppOverride, ov.Match, forced.Name()),
+			strategies:  prependUnique(forced, natural),
+			reason:      fmt.Sprintf("%s matched (%s -> %s)", reasonAppOverride, ov.Match, forced.Name()),
+			appendEnter: ov.AppendEnter,
 		}
 	}
 

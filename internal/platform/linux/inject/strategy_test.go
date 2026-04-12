@@ -165,6 +165,91 @@ func TestSelect_AppOverrideForcesNamedStrategyFirst(t *testing.T) {
 	}
 }
 
+// TestBuildStrategyOrder_AppOverrideAppendEnterPropagates guards the
+// AppendEnter plumbing that powers per-app auto-submit. The flag lives
+// on the config.AppOverride, is copied into platform.AppOverride by
+// daemon.InjectionOptionsFromConfig, and must surface on
+// strategyOrder.appendEnter so the injector can re-append a trailing
+// "\n" after trimming whisper's artifact newline. Every branch of
+// buildStrategyOrder is asserted so a future refactor cannot
+// accidentally leak appendEnter into natural-order / default-strategy
+// paths (which must never auto-submit — only explicit per-app
+// overrides opt in).
+func TestBuildStrategyOrder_AppOverrideAppendEnterPropagates(t *testing.T) {
+	target := yinject.Target{
+		DisplayServer: "wayland",
+		AppClass:      "kitty",
+		AppType:       yinject.AppTerminal,
+	}
+	strategies := makeStrategies(nil)
+
+	cases := []struct {
+		name string
+		opts platform.InjectionOptions
+		want bool
+	}{
+		{
+			name: "matched override with AppendEnter=true propagates",
+			opts: platform.InjectionOptions{
+				AppOverrides: []platform.AppOverride{
+					{Match: "kitty", Strategy: "wayland", AppendEnter: true},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "matched override with AppendEnter=false does not propagate",
+			opts: platform.InjectionOptions{
+				AppOverrides: []platform.AppOverride{
+					{Match: "kitty", Strategy: "wayland"},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "unmatched override never propagates even when AppendEnter=true",
+			opts: platform.InjectionOptions{
+				AppOverrides: []platform.AppOverride{
+					{Match: "firefox", Strategy: "wayland", AppendEnter: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "unsupported override falls through without propagating",
+			opts: platform.InjectionOptions{
+				AppOverrides: []platform.AppOverride{
+					// x11 on a wayland target is unsupported, the branch
+					// skips the override entirely and falls to natural
+					// order — AppendEnter must NOT leak.
+					{Match: "kitty", Strategy: "x11", AppendEnter: true},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "default_strategy never sets appendEnter",
+			opts: platform.InjectionOptions{
+				DefaultStrategy: "wayland",
+			},
+			want: false,
+		},
+		{
+			name: "natural order never sets appendEnter",
+			opts: platform.InjectionOptions{},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := buildStrategyOrder(context.Background(), nil, strategies, tc.opts, target)
+			if got.appendEnter != tc.want {
+				t.Errorf("appendEnter = %v, want %v (reason=%q)", got.appendEnter, tc.want, got.reason)
+			}
+		})
+	}
+}
+
 func TestSelect_OverrideAgainstUnknownStrategyIgnored(t *testing.T) {
 	opts := platform.InjectionOptions{
 		AppOverrides: []platform.AppOverride{

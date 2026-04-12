@@ -88,8 +88,9 @@ type InjectionConfig struct {
 // AppOverride maps a window class / process-name substring to an
 // explicit injection strategy.
 type AppOverride struct {
-	Match    string `toml:"match"    yap:"doc=WM_CLASS or process name substring"`
-	Strategy string `toml:"strategy" yap:"doc=Strategy name (osc52, clipboard, keystroke, tmux, wtype, xdotool)"`
+	Match       string `toml:"match"        yap:"doc=WM_CLASS or process name substring"`
+	Strategy    string `toml:"strategy"     yap:"doc=Strategy name (tmux, osc52, electron, wayland, x11)"`
+	AppendEnter bool   `toml:"append_enter" yap:"doc=Append a trailing newline after injection so keystroke strategies submit/execute the dictation; default false because whisper's trailing newline artifact is always stripped and auto-Enter must be an explicit per-app opt-in"`
 }
 
 // TrayConfig controls the optional system tray icon (Phase 15).

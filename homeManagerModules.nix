@@ -240,7 +240,25 @@ in {
           description = "Fallback strategy name (tmux|osc52|electron|wayland|x11) forced when no app_overrides entry matches; empty disables";
         };
         app_overrides = lib.mkOption {
-          type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+          type = lib.types.listOf (lib.types.submodule {
+          options = {
+            match = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "WM_CLASS or process name substring";
+            };
+            strategy = lib.mkOption {
+              type = lib.types.str;
+              default = "";
+              description = "Strategy name (tmux, osc52, electron, wayland, x11)";
+            };
+            append_enter = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Append a trailing newline after injection so keystroke strategies submit/execute the dictation; default false because whisper's trailing newline artifact is always stripped and auto-Enter must be an explicit per-app opt-in";
+            };
+          };
+        });
           default = [ ];
           description = "Per-app strategy overrides, first match wins";
         };
