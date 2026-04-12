@@ -136,7 +136,7 @@ func stripMarkdown(s string) string {
 	s = reHeading.ReplaceAllString(s, "")
 	s = reBullet.ReplaceAllString(s, "")
 	s = reNumbered.ReplaceAllString(s, "")
-	s = reLink.ReplaceAllLiteralString(s, "$1")
+	s = reLink.ReplaceAllString(s, "$1")
 	s = reInlineCode.ReplaceAllStringFunc(s, func(m string) string {
 		return strings.Trim(m, "`")
 	})

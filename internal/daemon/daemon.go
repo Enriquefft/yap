@@ -11,7 +11,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Enriquefft/yap/internal/assets"
 	"github.com/Enriquefft/yap/internal/config"
@@ -618,10 +617,10 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 	}
 
 	transcribeOpts := transcribe.Options{
-		Prompt: headBytes(bundle.Vocabulary, vocabMaxChars),
+		Prompt: hint.HeadBytes(bundle.Vocabulary, vocabMaxChars),
 	}
 	transformOpts := transform.Options{
-		Context: tailBytes(bundle.Conversation, convMaxChars),
+		Context: hint.TailBytes(bundle.Conversation, convMaxChars),
 	}
 
 	// Wire silence detection into the recorder's frame callback when
@@ -726,23 +725,44 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 	// daemon's own cwd is typically $HOME (launched from a keybind),
 	// but the vocabulary files live in the project the user is working
 	// in. The focused terminal's cwd IS the project directory.
-	rootPath := resolveTargetCwd(target)
+	rootPath := hint.ResolveTargetCwd(target)
 
-	// Apply per-project .yap.toml overrides using the focused cwd.
+	// Snapshot hint config so per-project overrides don't permanently
+	// mutate d.cfg across recordings (user might switch projects).
+	hintCfg := d.cfg.Hint
+
 	projectOv, err := hint.LoadProjectOverrides(rootPath)
 	if err != nil {
 		slog.Default().Debug("hint: project override load failed", "error", err)
 	} else {
-		pcfg.ApplyProjectOverrides(d.cfg, projectOv)
+		if ov := projectOv.VocabularyFiles; ov != nil {
+			hintCfg.VocabularyFiles = *ov
+		}
+		if ov := projectOv.Providers; ov != nil {
+			hintCfg.Providers = *ov
+		}
+		if ov := projectOv.VocabularyMaxChars; ov != nil {
+			hintCfg.VocabularyMaxChars = *ov
+		}
+		if ov := projectOv.ConversationMaxChars; ov != nil {
+			hintCfg.ConversationMaxChars = *ov
+		}
+		if ov := projectOv.TimeoutMS; ov != nil {
+			hintCfg.TimeoutMS = *ov
+		}
+		if ov := projectOv.Enabled; ov != nil {
+			hintCfg.Enabled = *ov
+		}
+	}
+
+	if !hintCfg.Enabled {
+		return hint.Bundle{}
 	}
 
 	// Layer 1: base vocabulary from project docs (always-on).
-	vocab := hint.ReadVocabularyFiles(rootPath, d.cfg.Hint.VocabularyFiles)
+	vocab := hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
 
 	// Layer 2: provider conversation context (first match wins).
-	// Only walk providers when we successfully resolved the target —
-	// without knowing which app is focused, we can't fetch
-	// app-specific context.
 	var conversation string
 	var source string
 
@@ -750,7 +770,7 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		return hint.Bundle{Vocabulary: vocab}
 	}
 
-	for _, name := range d.cfg.Hint.Providers {
+	for _, name := range hintCfg.Providers {
 		factory, fErr := hint.Get(name)
 		if fErr != nil {
 			continue
@@ -779,54 +799,6 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		Conversation: conversation,
 		Source:        source,
 	}
-}
-
-// resolveTargetCwd resolves the focused window's working directory via
-// /proc/<pid>/cwd. Falls back to os.Getwd() when the target has no
-// PID or /proc is unreadable.
-func resolveTargetCwd(target inject.Target) string {
-	if target.WindowID != "" {
-		link, err := os.Readlink("/proc/" + target.WindowID + "/cwd")
-		if err == nil {
-			return link
-		}
-	}
-	cwd, _ := os.Getwd()
-	return cwd
-}
-
-// headBytes returns the first n bytes of s, clipping on a UTF-8 rune
-// boundary. Used for vocabulary (project name/description is at the
-// start of the document).
-func headBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	end := n
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	return s[:end]
-}
-
-// tailBytes returns the last n bytes of s, clipping on a UTF-8 rune
-// boundary. Used for conversation (recent messages are at the end).
-func tailBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	// Start from len(s)-n and scan forward to the next valid rune start.
-	start := len(s) - n
-	for start < len(s) && !utf8.RuneStart(s[start]) {
-		start++
-	}
-	return s[start:]
 }
 
 // toggleRecording toggles recording state for the IPC toggle command

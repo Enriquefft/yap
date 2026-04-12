@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"unicode/utf8"
-
 	"github.com/Enriquefft/yap/internal/assets"
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/daemon"
@@ -409,7 +407,7 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		}
 	}
 
-	rootPath := resolveTargetCwdRecord(target)
+	rootPath := hint.ResolveTargetCwd(target)
 
 	// Apply per-project .yap.toml overrides.
 	projectOv, err := hint.LoadProjectOverrides(rootPath)
@@ -455,42 +453,7 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		convMax = 8000
 	}
 
-	return transcribe.Options{Prompt: headBytesRecord(vocab, vocabMax)},
-		transform.Options{Context: tailBytesRecord(conversation, convMax)}
+	return transcribe.Options{Prompt: hint.HeadBytes(vocab, vocabMax)},
+		transform.Options{Context: hint.TailBytes(conversation, convMax)}
 }
 
-func headBytesRecord(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	end := n
-	for end > 0 && !utf8.RuneStart(s[end]) {
-		end--
-	}
-	return s[:end]
-}
-
-func tailBytesRecord(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	start := len(s) - n
-	for start < len(s) && !utf8.RuneStart(s[start]) {
-		start++
-	}
-	return s[start:]
-}
-
-func resolveTargetCwdRecord(target inject.Target) string {
-	if target.WindowID != "" {
-		link, err := os.Readlink("/proc/" + target.WindowID + "/cwd")
-		if err == nil {
-			return link
-		}
-	}
-	cwd, _ := os.Getwd()
-	return cwd
-}

@@ -808,42 +808,42 @@ func TestCaptureHandler_WithAttrsGroup_RaceFree(t *testing.T) {
 // -- tailBytes tests ---------------------------------------------------
 
 func TestTailBytes_EmptyString(t *testing.T) {
-	if got := tailBytes("", 100); got != "" {
-		t.Errorf("tailBytes(\"\", 100) = %q, want \"\"", got)
+	if got := hint.TailBytes("", 100); got != "" {
+		t.Errorf("hint.TailBytes(\"\", 100) = %q, want \"\"", got)
 	}
 }
 
 func TestTailBytes_ShorterThanBudget(t *testing.T) {
 	s := "hello"
-	if got := tailBytes(s, 100); got != s {
-		t.Errorf("tailBytes(%q, 100) = %q, want %q", s, got, s)
+	if got := hint.TailBytes(s, 100); got != s {
+		t.Errorf("hint.TailBytes(%q, 100) = %q, want %q", s, got, s)
 	}
 }
 
 func TestTailBytes_ExactBudget(t *testing.T) {
 	s := "hello"
-	if got := tailBytes(s, 5); got != s {
-		t.Errorf("tailBytes(%q, 5) = %q, want %q", s, got, s)
+	if got := hint.TailBytes(s, 5); got != s {
+		t.Errorf("hint.TailBytes(%q, 5) = %q, want %q", s, got, s)
 	}
 }
 
 func TestTailBytes_LongerThanBudget(t *testing.T) {
 	s := "hello world"
-	got := tailBytes(s, 5)
+	got := hint.TailBytes(s, 5)
 	if got != "world" {
-		t.Errorf("tailBytes(%q, 5) = %q, want %q", s, got, "world")
+		t.Errorf("hint.TailBytes(%q, 5) = %q, want %q", s, got, "world")
 	}
 }
 
 func TestTailBytes_ZeroBudget(t *testing.T) {
-	if got := tailBytes("hello", 0); got != "" {
-		t.Errorf("tailBytes(\"hello\", 0) = %q, want \"\"", got)
+	if got := hint.TailBytes("hello", 0); got != "" {
+		t.Errorf("hint.TailBytes(\"hello\", 0) = %q, want \"\"", got)
 	}
 }
 
 func TestTailBytes_NegativeBudget(t *testing.T) {
-	if got := tailBytes("hello", -1); got != "" {
-		t.Errorf("tailBytes(\"hello\", -1) = %q, want \"\"", got)
+	if got := hint.TailBytes("hello", -1); got != "" {
+		t.Errorf("hint.TailBytes(\"hello\", -1) = %q, want \"\"", got)
 	}
 }
 
@@ -852,24 +852,24 @@ func TestTailBytes_MultiByte_UTF8_AtBoundary(t *testing.T) {
 	// Asking for 4 bytes: offset = 5-4 = 1 ('a'), which is a valid
 	// rune start, so we get "afé" (4 bytes).
 	s := "café"
-	got := tailBytes(s, 4)
+	got := hint.TailBytes(s, 4)
 	if got != "afé" {
-		t.Errorf("tailBytes(%q, 4) = %q, want %q", s, got, "afé")
+		t.Errorf("hint.TailBytes(%q, 4) = %q, want %q", s, got, "afé")
 	}
 
 	// Asking for 3 bytes: offset = 5-3 = 2 ('f'), which is a valid
 	// rune start, so we get "fé" (3 bytes).
-	got = tailBytes(s, 3)
+	got = hint.TailBytes(s, 3)
 	if got != "fé" {
-		t.Errorf("tailBytes(%q, 3) = %q, want %q", s, got, "fé")
+		t.Errorf("hint.TailBytes(%q, 3) = %q, want %q", s, got, "fé")
 	}
 
 	// Asking for 2 bytes: offset = 5-2 = 3, which lands inside the
 	// 2-byte 'é' sequence. tailBytes must skip forward to the next
 	// rune start (byte 4), yielding only "é" (2 bytes).
-	got = tailBytes(s, 2)
+	got = hint.TailBytes(s, 2)
 	if got != "é" {
-		t.Errorf("tailBytes(%q, 2) = %q, want %q", s, got, "é")
+		t.Errorf("hint.TailBytes(%q, 2) = %q, want %q", s, got, "é")
 	}
 }
 
@@ -878,9 +878,9 @@ func TestTailBytes_MultiByte_3Byte_Rune(t *testing.T) {
 	// Budget 4: offset = 7-4 = 3, lands at byte 3 which is inside '€' (byte 2 of 3).
 	// Skip forward to byte 5 ('c'), yielding "cd" (2 bytes).
 	s := "ab€cd"
-	got := tailBytes(s, 4)
+	got := hint.TailBytes(s, 4)
 	if got != "cd" {
-		t.Errorf("tailBytes(%q, 4) = %q, want %q", s, got, "cd")
+		t.Errorf("hint.TailBytes(%q, 4) = %q, want %q", s, got, "cd")
 	}
 }
 
