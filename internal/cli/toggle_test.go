@@ -117,10 +117,9 @@ func TestToggle_RecordSignalPath(t *testing.T) {
 //   - "resolve executable"         — os.Executable() failed (sandbox)
 //   - "did not register"           — child forked but never wrote the pidfile
 //     within the 500ms handshake deadline
-//   - "exited before registering"  — Bug 14 fix: non-blocking Wait4
-//     reaped the child early and surfaced the captured stderr tail
-//     (from the thread-safe lockedBuffer tee) instead of waiting the
-//     full 500ms for a silent timeout.
+//   - "exited before registering"  — non-blocking Wait4 reaped the child
+//     early and surfaced the captured stderr tail from the record
+//     log file instead of waiting the full 500ms for a silent timeout.
 func TestToggle_NothingRunning_StartsRecord(t *testing.T) {
 	withScratchXDG(t)
 	stdout, _, err := runCLI(t, "toggle")
@@ -133,5 +132,36 @@ func TestToggle_NothingRunning_StartsRecord(t *testing.T) {
 		}
 	} else if !strings.Contains(stdout, "Recording started") {
 		t.Errorf("expected recording start in stdout, got:\n%s", stdout)
+	}
+}
+
+// TestToggle_StartsRecord_CreatesRecordLog asserts that
+// startRecordProcess opens the record log file on disk before spawning
+// the child. This is load-bearing for the real deployment scenario:
+// Hyprland fires `yap toggle`, which exits after the handshake. If
+// the child's stderr were routed to an in-memory buffer (a pipe whose
+// read end lives in the parent goroutine), the parent's exit would
+// close the read end and the child's next stderr write would SIGPIPE
+// out of Go's runtime, killing the record process mid-pipeline before
+// it could transcribe and inject. Using a *os.File in cmd.Stderr
+// bypasses the pipe entirely — the fd is inherited at fork+exec and
+// survives parent exit.
+//
+// The assertion here is structural: after startRecordProcess has
+// opened the log file with O_CREATE|O_TRUNC, the file exists at the
+// canonical record log path regardless of whether the test-binary
+// child actually wrote anything to it. A missing file means the
+// stderr sink was never switched to a file and the regression has
+// returned.
+func TestToggle_StartsRecord_CreatesRecordLog(t *testing.T) {
+	withScratchXDG(t)
+	_, _, _ = runCLI(t, "toggle")
+
+	logPath, err := pidfile.RecordLogPath()
+	if err != nil {
+		t.Fatalf("resolve record log path: %v", err)
+	}
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		t.Fatalf("record log file missing at %s: %v — startRecordProcess did not route child stderr to a file", logPath, statErr)
 	}
 }

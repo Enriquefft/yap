@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,11 +16,6 @@ import (
 	"github.com/hybridz/yap/internal/pidfile"
 	"github.com/spf13/cobra"
 )
-
-// Import-level note: toggle reuses lockedBuffer from listen.go. Both
-// files live in package cli so the symbol is accessible here without
-// re-declaration — single source of truth for the thread-safe
-// bytes.Buffer wrapper assigned to exec.Cmd.Stderr.
 
 func newToggleCmd(cfg *config.Config) *cobra.Command {
 	return &cobra.Command{
@@ -109,23 +106,55 @@ func runToggle(out io.Writer) error {
 // fails before that point, Wait() returns so the parent reports a
 // clean "start record" error instead of hanging on the poll loop.
 //
-// Child stderr is teed into a thread-safe buffer for the duration
-// of the handshake so the two failure paths — "child exited before
-// writing pidfile" and "child is stuck / took too long" — can quote
-// the child's own diagnostic in the returned error. Without this
-// tee any crash message from the child is silently dropped and the
-// operator is left debugging a "did not register within 500ms"
-// generic timeout.
+// Child stderr is redirected to a real file (*os.File passed via
+// cmd.Stderr, which Go's exec package inherits into the child as a
+// dup'd fd rather than wrapping in a pipe+goroutine). This is
+// load-bearing: if we piped the child's stderr into an in-memory
+// buffer, the parent goroutine holding the pipe's read end would die
+// when this toggle process exits after the handshake, the read end
+// would close, and the child's next stderr write would trigger
+// SIGPIPE — which Go's runtime converts into a process exit for any
+// write on fd 2. The record child would die mid-pipeline before it
+// could transcribe and inject, leaving the user with "nothing
+// happened" and an orphaned whisper-server. The file-backed fd
+// survives parent exit because the child holds its own independent
+// open fd after fork+exec, so record logs keep flowing into the file
+// for the full pipeline duration.
+//
+// The handshake failure paths read the tail of the same file so the
+// operator still sees the child's diagnostic on "exited before
+// registering" and "did not register within 500ms" errors.
 func startRecordProcess(out io.Writer) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("toggle: resolve executable: %w", err)
 	}
+
+	logPath, err := pidfile.RecordLogPath()
+	if err != nil {
+		return fmt.Errorf("toggle: resolve record log path: %w", err)
+	}
+	// The parent of logPath (normally $XDG_RUNTIME_DIR/yap) is also
+	// created by pidfile.RecordPath callers, but the first ever
+	// invocation may race: if the toggle path runs before any
+	// pidfile.Read/Write, the directory may not yet exist.
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return fmt.Errorf("toggle: mkdir record log dir: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("toggle: open record log: %w", err)
+	}
+	// Close the parent's handle after Start. The child keeps its own
+	// dup'd fd via fork+exec inheritance, so closing here does not
+	// affect the child's writes. Diagnostics on the failure paths
+	// re-open the file for reading.
+	defer logFile.Close()
+
 	cmd := exec.Command(exe, "record")
 	cmd.Stdin = nil
 	cmd.Stdout = nil
-	stderrBuf := &lockedBuffer{}
-	cmd.Stderr = stderrBuf
+	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("toggle: start record: %w", err)
@@ -159,7 +188,7 @@ func startRecordProcess(out io.Writer) error {
 		// we can bail out of the poll loop with a precise error.
 		var ws syscall.WaitStatus
 		if wpid, werr := syscall.Wait4(cmd.Process.Pid, &ws, syscall.WNOHANG, nil); werr == nil && wpid == cmd.Process.Pid {
-			stderrTail := stderrBuf.String()
+			stderrTail := readRecordLogTail(logPath)
 			if stderrTail != "" {
 				return fmt.Errorf("toggle: record process exited before registering:\n%s", stderrTail)
 			}
@@ -174,9 +203,26 @@ func startRecordProcess(out io.Writer) error {
 	// load). Surface the captured stderr so the operator sees a loud
 	// error with the real diagnostic instead of a silent start-then-
 	// vanish.
-	stderrTail := stderrBuf.String()
+	stderrTail := readRecordLogTail(logPath)
 	if stderrTail != "" {
 		return fmt.Errorf("toggle: record process did not register within 500ms:\n%s", stderrTail)
 	}
 	return fmt.Errorf("toggle: record process did not register within 500ms")
+}
+
+// readRecordLogTail returns the last recordLogTailBytes bytes of the
+// record log, or an empty string if the file cannot be read. The
+// handshake failure paths call this to quote the child's diagnostic
+// back to the user. Bounded reads prevent an unlikely pathological
+// log from blowing up the error message.
+func readRecordLogTail(path string) string {
+	const recordLogTailBytes = 8192
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(data) > recordLogTailBytes {
+		data = data[len(data)-recordLogTailBytes:]
+	}
+	return strings.TrimRight(string(data), "\x00\n") + "\n"
 }

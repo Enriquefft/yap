@@ -12,6 +12,7 @@ import (
 const (
 	daemonPIDFile = "yap/yap.pid"
 	recordPIDFile = "yap/yap-record.pid"
+	recordLogFile = "yap/yap-record.log"
 	socketFile    = "yap/yap.sock"
 )
 
@@ -27,6 +28,19 @@ func DaemonPath() (string, error) { return xdgRuntime(daemonPIDFile) }
 // $XDG_RUNTIME_DIR/yap so `yap stop` and `yap toggle` can locate both
 // without a second configuration knob.
 func RecordPath() (string, error) { return xdgRuntime(recordPIDFile) }
+
+// RecordLogPath resolves the absolute path of the standalone `yap
+// record` process stderr log. `yap toggle` opens this file as the
+// child's stderr so the child keeps a real fd on its log destination
+// after the toggle parent exits. If toggle piped the child's stderr
+// into an in-memory buffer instead, the underlying Go runtime would
+// create a pipe whose read end lives in a parent goroutine; when the
+// parent exits that goroutine dies, the read end closes, and the next
+// child stderr write triggers SIGPIPE — killing the record process
+// mid-pipeline before it can transcribe and inject. Using a file here
+// is the single source of truth for "where do detached record logs
+// go" and sidesteps that failure mode entirely.
+func RecordLogPath() (string, error) { return xdgRuntime(recordLogFile) }
 
 // SocketPath resolves the absolute path of the daemon's IPC unix
 // socket. Lives in $XDG_RUNTIME_DIR/yap, which the OS wipes on reboot
