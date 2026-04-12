@@ -158,7 +158,7 @@ var _ yinject.Injector = (*recordingInjector)(nil)
 // API calls.
 type errorTranscriber struct{ err error }
 
-func (e errorTranscriber) Transcribe(_ context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+func (e errorTranscriber) Transcribe(_ context.Context, audio io.Reader, _ transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
 	if audio != nil {
 		_, _ = io.Copy(io.Discard, audio)
 	}
@@ -200,7 +200,7 @@ func (b *blockingInjector) InjectStream(ctx context.Context, in <-chan transcrib
 // chance to fire.
 type stuckTranscriber struct{}
 
-func (stuckTranscriber) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+func (stuckTranscriber) Transcribe(ctx context.Context, audio io.Reader, _ transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
 	if audio != nil {
 		_, _ = io.Copy(io.Discard, audio)
 	}

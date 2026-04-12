@@ -125,7 +125,7 @@ func TestTranscribe_FakeSubprocessReturnsText(t *testing.T) {
 		return stubProc(url), nil
 	}
 
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestTranscribe_PlainTextResponseFallback(t *testing.T) {
 		return stubProc(url), nil
 	}
 
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestTranscribe_5xxRetriesOnce(t *testing.T) {
 		return stubProc(url), nil
 	}
 
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestTranscribe_4xxDoesNotRetry(t *testing.T) {
 		return stubProc(url), nil
 	}
 
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestTranscribe_EmptyAudio(t *testing.T) {
 		return nil, nil
 	}
 
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestTranscribe_NilAudio(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	defer b.Close()
-	if _, err := b.Transcribe(context.Background(), nil); err == nil {
+	if _, err := b.Transcribe(context.Background(), nil, transcribe.Options{}); err == nil {
 		t.Fatal("expected error for nil audio reader")
 	}
 }
@@ -327,9 +327,9 @@ func TestClose_RejectsFurtherTranscribes(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
-	if err != nil {
-		t.Fatalf("Transcribe: %v", err)
+	chunks, tErr := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
+	if tErr != nil {
+		t.Fatalf("Transcribe: %v", tErr)
 	}
 	var got transcribe.TranscriptChunk
 	for c := range chunks {
@@ -432,9 +432,9 @@ func TestClose_DuringInflightTranscribe(t *testing.T) {
 	// Fire Transcribe in the background. It will block inside
 	// the HTTP request for the entire 2s fake-server handler
 	// unless Close cancels it first.
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
-	if err != nil {
-		t.Fatalf("Transcribe: %v", err)
+	chunks, tErr := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
+	if tErr != nil {
+		t.Fatalf("Transcribe: %v", tErr)
 	}
 
 	// Snapshot the baseline goroutine count so we can verify
@@ -558,7 +558,7 @@ func TestBackend_CircuitBreaker_TripsAfter3ConsecutiveFailures(t *testing.T) {
 	// Fire three calls: each one fails to spawn and bumps the
 	// failure counter. Every one must reach the spawn stub.
 	for i := 0; i < circuitBreakerThreshold; i++ {
-		chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+		chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 		if err != nil {
 			t.Fatalf("Transcribe #%d: %v", i, err)
 		}
@@ -582,7 +582,7 @@ func TestBackend_CircuitBreaker_TripsAfter3ConsecutiveFailures(t *testing.T) {
 
 	// The next Transcribe must short-circuit: the breaker
 	// error is delivered without calling spawn.
-	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")))
+	chunks, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("WAVE")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe after trip: %v", err)
 	}

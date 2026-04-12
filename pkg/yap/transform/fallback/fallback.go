@@ -36,8 +36,9 @@ func New(primary, fallback transform.Transformer, onError func(error)) (*Transfo
 
 // Transform drains the input into a slice, runs it through Primary,
 // and on primary failure replays the buffered slice through
-// Fallback. See the package doc for the full decision tree.
-func (t *Transformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+// Fallback. opts is threaded to both the primary and the fallback so
+// the context reference block reaches whichever stage runs.
+func (t *Transformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, opts transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	buffered, upstream, ok := drain(ctx, in)
 	if !ok {
 		// Context cancelled while draining the input.
@@ -56,19 +57,19 @@ func (t *Transformer) Transform(ctx context.Context, in <-chan transcribe.Transc
 	}
 
 	// Try the primary.
-	primaryOut, err := t.Primary.Transform(ctx, replay(buffered))
+	primaryOut, err := t.Primary.Transform(ctx, replay(buffered), opts)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return primaryOut, err
 		}
 		t.notify(err)
-		return t.Fallback.Transform(ctx, replay(buffered))
+		return t.Fallback.Transform(ctx, replay(buffered), opts)
 	}
 
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
 		defer close(out)
-		t.forwardPrimary(ctx, primaryOut, out, buffered)
+		t.forwardPrimary(ctx, primaryOut, out, buffered, opts)
 	}()
 	return out, nil
 }
@@ -89,6 +90,7 @@ func (t *Transformer) forwardPrimary(
 	primaryOut <-chan transcribe.TranscriptChunk,
 	out chan<- transcribe.TranscriptChunk,
 	buffered []transcribe.TranscriptChunk,
+	opts transform.Options,
 ) {
 	var staged []transcribe.TranscriptChunk
 	for {
@@ -114,7 +116,7 @@ func (t *Transformer) forwardPrimary(
 				// then run the fallback. Partial output is not mixed
 				// with fallback output.
 				drainRemaining(ctx, primaryOut)
-				t.runFallback(ctx, chunk.Err, buffered, out)
+				t.runFallback(ctx, chunk.Err, buffered, out, opts)
 				return
 			}
 			staged = append(staged, chunk)
@@ -132,9 +134,10 @@ func (t *Transformer) runFallback(
 	primaryErr error,
 	buffered []transcribe.TranscriptChunk,
 	out chan<- transcribe.TranscriptChunk,
+	opts transform.Options,
 ) {
 	t.notify(primaryErr)
-	fbOut, err := t.Fallback.Transform(ctx, replay(buffered))
+	fbOut, err := t.Fallback.Transform(ctx, replay(buffered), opts)
 	if err != nil {
 		select {
 		case <-ctx.Done():

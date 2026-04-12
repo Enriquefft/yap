@@ -18,8 +18,29 @@ import (
 // Implementations must close the output channel exactly once when
 // the input channel closes, when ctx is cancelled, or when they
 // deliver a terminal error chunk.
+//
+// opts carries per-call knobs the caller may supply on each invocation
+// (currently Options.Context, recent text from the focused application
+// that is prepended to the configured SystemPrompt as a reference
+// block). The zero-value Options is a legal null case: backends must
+// behave identically to a call made before the Options parameter
+// existed.
 type Transformer interface {
-	Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error)
+	Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, opts Options) (<-chan transcribe.TranscriptChunk, error)
+}
+
+// Options carries per-call knobs for a single Transform invocation.
+//
+// Context is recent natural-text content from the focused application,
+// prepended to the configured SystemPrompt as a "reference only" block.
+// Empty is valid (no extra context). The daemon fills this from the
+// Phase 12 hint-provider bundle; library consumers may also fill it
+// directly from any source they control.
+type Options struct {
+	// Context is recent text from the focused application. When
+	// non-empty, backends prepend it as a reference block to the
+	// system prompt so the LLM has grounding for domain vocabulary.
+	Context string
 }
 
 // Checker is an optional interface implemented by backends that

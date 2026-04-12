@@ -129,6 +129,18 @@ type RunOptions struct {
 	// the stop chime plays. The daemon uses this to transition state
 	// from "recording" to "processing". Optional; nil is safe.
 	OnRecordingStop func()
+
+	// TranscribeOpts carries per-call options for the Transcriber.
+	// The daemon builds these from the Phase 12 hint bundle; the
+	// engine passes them through unchanged. The zero value is a
+	// legal null case (no vocabulary bias).
+	TranscribeOpts transcribe.Options
+
+	// TransformOpts carries per-call options for the Transformer.
+	// The daemon builds these from the Phase 12 hint bundle; the
+	// engine passes them through unchanged. The zero value is a
+	// legal null case (no extra context).
+	TransformOpts transform.Options
 }
 
 // Run executes one recording → transcribe → transform → inject pipeline
@@ -191,7 +203,7 @@ func (e *Engine) runPipeline(ctx context.Context, wav []byte, opts RunOptions, s
 	pipeCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	transcribeChan, err := e.transcriber.Transcribe(pipeCtx, bytes.NewReader(wav))
+	transcribeChan, err := e.transcriber.Transcribe(pipeCtx, bytes.NewReader(wav), opts.TranscribeOpts)
 	if err != nil {
 		return fmt.Errorf("transcribe: %w", err)
 	}
@@ -205,7 +217,7 @@ func (e *Engine) runPipeline(ctx context.Context, wav []byte, opts RunOptions, s
 		inChan = e.batchChunks(pipeCtx, transcribeChan)
 	}
 
-	transformChan, err := e.transformer.Transform(pipeCtx, inChan)
+	transformChan, err := e.transformer.Transform(pipeCtx, inChan, opts.TransformOpts)
 	if err != nil {
 		return fmt.Errorf("transform: %w", err)
 	}

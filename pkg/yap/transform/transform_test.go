@@ -13,7 +13,7 @@ import (
 
 type fakeTransformer struct{}
 
-func (fakeTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (fakeTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	out := make(chan transcribe.TranscriptChunk)
 	close(out)
 	return out, nil
@@ -121,7 +121,7 @@ func TestRegistry_NonCheckerBackendWorks(t *testing.T) {
 	// output channel.
 	in := make(chan transcribe.TranscriptChunk)
 	close(in)
-	out, err := tr.Transform(context.Background(), in)
+	out, err := tr.Transform(context.Background(), in, transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

@@ -83,7 +83,7 @@ func TestTransform_StreamsSSEChunks(t *testing.T) {
 
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "helo", Language: "en"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestTransform_AuthorizationHeader(t *testing.T) {
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m", APIKey: "sk-test"})
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	drain(out)
 	if gotAuth != "Bearer sk-test" {
 		t.Errorf("Authorization = %q, want Bearer sk-test", gotAuth)
@@ -128,7 +128,7 @@ func TestTransform_SSEMalformed_Error(t *testing.T) {
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m"})
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	got := drain(out)
 	if len(got) != 1 || got[0].Err == nil {
 		t.Fatalf("got = %+v, want one error chunk", got)
@@ -150,7 +150,7 @@ func TestTransform_EmptyChoices_Skipped(t *testing.T) {
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m"})
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	got := drain(out)
 	if len(got) != 2 {
 		t.Fatalf("chunks = %d, want 2 (empty choices skipped): %+v", len(got), got)
@@ -175,7 +175,7 @@ func TestTransform_EmptyContentDelta_Skipped(t *testing.T) {
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m"})
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	got := drain(out)
 	if len(got) != 2 || got[0].Text != "Ok" {
 		t.Errorf("got = %+v, want [Ok, final]", got)
@@ -189,7 +189,7 @@ func TestTransform_EmptyInput_NoRequest(t *testing.T) {
 	defer srv.Close()
 
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m"})
-	out, _ := b.Transform(context.Background(), inputChunks())
+	out, _ := b.Transform(context.Background(), inputChunks(), transform.Options{})
 	got := drain(out)
 	if len(got) != 1 || !got[0].IsFinal {
 		t.Errorf("got = %+v, want single IsFinal chunk", got)
@@ -206,7 +206,7 @@ func TestTransform_UpstreamError_Propagates(t *testing.T) {
 	sentinel := errors.New("transcribe boom")
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Err: sentinel, IsFinal: true},
-	))
+	), transform.Options{})
 	got := drain(out)
 	if len(got) != 1 || !errors.Is(got[0].Err, sentinel) {
 		t.Errorf("got = %+v, want propagated upstream error", got)
@@ -225,7 +225,7 @@ func TestTransform_CtxCancelMidStream_ClosesCleanly(t *testing.T) {
 
 	b, _ := openai.New(transform.Config{APIURL: srv.URL + "/v1", Model: "m"})
 	ctx, cancel := context.WithCancel(context.Background())
-	out, err := b.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "hi"}))
+	out, err := b.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "hi"}), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

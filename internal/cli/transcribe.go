@@ -7,6 +7,7 @@ import (
 
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/daemon"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/spf13/cobra"
 )
 
@@ -51,7 +52,7 @@ func runTranscribe(cmd *cobra.Command, cfg *config.Config, path string, jsonOut 
 	}
 	defer closeIfCloser(tx, "transcriber")
 
-	chunks, err := tx.Transcribe(cmd.Context(), f)
+	chunks, err := tx.Transcribe(cmd.Context(), f, transcribe.Options{})
 	if err != nil {
 		return fmt.Errorf("transcribe: %w", err)
 	}

@@ -178,11 +178,6 @@ in {
           default = "en";
           description = "ISO language code; empty auto-detects";
         };
-        prompt = lib.mkOption {
-          type = lib.types.str;
-          default = "";
-          description = "Context hint passed to the backend when supported";
-        };
         api_url = lib.mkOption {
           type = lib.types.str;
           default = "";
@@ -269,6 +264,38 @@ in {
         });
           default = [ ];
           description = "Per-app strategy overrides, first match wins";
+        };
+      };
+      hint = {
+        enabled = lib.mkOption {
+          type = lib.types.bool;
+          default = true;
+          description = "Enable context-aware hint pipeline";
+        };
+        vocabulary_files = lib.mkOption {
+          type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+          default = [ ];
+          description = "Project doc filenames to read for base vocabulary (walks cwd to git root)";
+        };
+        providers = lib.mkOption {
+          type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+          default = [ ];
+          description = "Ordered hint provider list for conversation context; first match wins";
+        };
+        vocabulary_max_chars = lib.mkOption {
+          type = lib.types.int;
+          default = 1000;
+          description = "Max bytes of vocabulary passed to Whisper prompt";
+        };
+        conversation_max_chars = lib.mkOption {
+          type = lib.types.int;
+          default = 8000;
+          description = "Max bytes of conversation context passed to transform";
+        };
+        timeout_ms = lib.mkOption {
+          type = lib.types.int;
+          default = 300;
+          description = "Max wall time in ms for hint provider fetch";
         };
       };
       tray = {

@@ -84,7 +84,7 @@ func TestPostsToConfiguredURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openai.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestErrorResponseUnwrapsAPIError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openai.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestRetry5xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openai.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestNoRetry4xx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openai.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestEmptyWave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openai.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestContextCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestRetryBackoffCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}

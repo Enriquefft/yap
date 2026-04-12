@@ -101,7 +101,7 @@ type chatStreamChunk struct {
 // the request: streaming-in-streaming is not worth the complexity for
 // the dictation use case, where transcripts are short and LLM prompts
 // are one-shot. See plan §1.9.
-func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, opts transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	var sb strings.Builder
 	var lang string
 	for chunk := range in {
@@ -136,6 +136,9 @@ func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.Transcript
 	system := b.cfg.SystemPrompt
 	if system == "" {
 		system = DefaultSystemPrompt
+	}
+	if opts.Context != "" {
+		system = "Recent context (reference only, do not repeat):\n" + opts.Context + "\n---\n" + system
 	}
 
 	req := chatRequest{

@@ -25,7 +25,7 @@ type stubTransformer struct {
 	captureDone chan struct{}
 }
 
-func (s *stubTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (s *stubTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	atomic.AddInt32(&s.calls, 1)
 	// Drain and capture the input.
 	var input []transcribe.TranscriptChunk
@@ -87,7 +87,7 @@ type echoTransformer struct {
 	calls int32
 }
 
-func (e *echoTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (e *echoTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	atomic.AddInt32(&e.calls, 1)
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
@@ -126,7 +126,7 @@ func TestTransform_PrimarySuccess_NoFallback(t *testing.T) {
 
 	out, err := fbt.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "raw"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestTransform_PrimaryFactoryError_FallbackTakesOver(t *testing.T) {
 	})
 
 	raw := transcribe.TranscriptChunk{Text: "raw", IsFinal: true}
-	out, err := fbt.Transform(context.Background(), inputChunks(raw))
+	out, err := fbt.Transform(context.Background(), inputChunks(raw), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestTransform_PrimaryErrorChunk_FallbackTakesOver(t *testing.T) {
 
 	raw1 := transcribe.TranscriptChunk{Text: "raw-a"}
 	raw2 := transcribe.TranscriptChunk{Text: "raw-b", IsFinal: true}
-	out, err := fbt.Transform(context.Background(), inputChunks(raw1, raw2))
+	out, err := fbt.Transform(context.Background(), inputChunks(raw1, raw2), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestTransform_UpstreamError_NeitherRuns(t *testing.T) {
 	sentinel := errors.New("transcribe boom")
 	out, err := fbt.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Err: sentinel, IsFinal: true},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestTransform_OnErrorCalledExactlyOnce(t *testing.T) {
 	fbt, _ := fallback.New(primary, fb, func(error) { atomic.AddInt32(&onErrCalls, 1) })
 
 	raw := transcribe.TranscriptChunk{Text: "raw"}
-	out, err := fbt.Transform(context.Background(), inputChunks(raw))
+	out, err := fbt.Transform(context.Background(), inputChunks(raw), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestTransform_CancelledBeforePrimary_ReturnsErr(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := fbt.Transform(ctx, in)
+		_, err := fbt.Transform(ctx, in, transform.Options{})
 		done <- err
 	}()
 	// Let drain spin once.
@@ -297,7 +297,7 @@ func TestTransform_NilOnError_SilentlyRetries(t *testing.T) {
 
 	out, err := fbt.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "raw"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestTransform_CancelledDuringPrimary_NoFallback(t *testing.T) {
 	fbt, _ := fallback.New(primary, fb, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	out, err := fbt.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "raw"}))
+	out, err := fbt.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "raw"}), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

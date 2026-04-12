@@ -12,6 +12,7 @@ type Config struct {
 	Transcription TranscriptionConfig `toml:"transcription"`
 	Transform     TransformConfig     `toml:"transform"`
 	Injection     InjectionConfig     `toml:"injection"`
+	Hint          HintConfig          `toml:"hint"`
 	Tray          TrayConfig          `toml:"tray"`
 }
 
@@ -42,7 +43,6 @@ type TranscriptionConfig struct {
 	WhisperThreads    int    `toml:"whisper_threads"     yap:"min=0;max=64;doc=whisper.cpp thread count (whisperlocal only); 0 picks runtime.NumCPU()/2 rounded up to at least 1"`
 	WhisperUseGPU     bool   `toml:"whisper_use_gpu"     yap:"doc=use GPU backend for whisper.cpp when available (whisperlocal only)"`
 	Language          string `toml:"language"            yap:"doc=ISO language code; empty auto-detects"`
-	Prompt            string `toml:"prompt"              yap:"doc=Context hint passed to the backend when supported"`
 	APIURL            string `toml:"api_url"             yap:"doc=Remote endpoint URL; required when backend is remote"`
 	APIKey            string `toml:"api_key"             yap:"secret;doc=API key; env: YAP_API_KEY or GROQ_API_KEY"`
 }
@@ -93,6 +93,21 @@ type AppOverride struct {
 	AppendEnter bool   `toml:"append_enter" yap:"doc=Append a trailing newline after injection so keystroke strategies submit/execute the dictation; default false because whisper's trailing newline artifact is always stripped and auto-Enter must be an explicit per-app opt-in"`
 }
 
+// HintConfig configures the Phase 12 context-aware pipeline. When
+// enabled, the daemon reads project-level vocabulary files and queries
+// hint providers for conversation context on every recording. The
+// vocabulary biases Whisper's token probabilities (fixing domain-term
+// misrecognition at the source); the conversation context grounds the
+// LLM transform stage.
+type HintConfig struct {
+	Enabled              bool     `toml:"enabled"                yap:"doc=Enable context-aware hint pipeline"`
+	VocabularyFiles      []string `toml:"vocabulary_files"       yap:"doc=Project doc filenames to read for base vocabulary (walks cwd to git root)"`
+	Providers            []string `toml:"providers"              yap:"doc=Ordered hint provider list for conversation context; first match wins"`
+	VocabularyMaxChars   int      `toml:"vocabulary_max_chars"   yap:"min=0;max=8000;doc=Max bytes of vocabulary passed to Whisper prompt"`
+	ConversationMaxChars int      `toml:"conversation_max_chars" yap:"min=0;max=32000;doc=Max bytes of conversation context passed to transform"`
+	TimeoutMS            int      `toml:"timeout_ms"             yap:"min=0;max=5000;doc=Max wall time in ms for hint provider fetch"`
+}
+
 // TrayConfig controls the optional system tray icon (Phase 15).
 type TrayConfig struct {
 	Enabled bool `toml:"enabled" yap:"doc=Show system tray icon (Phase 15)"`
@@ -129,7 +144,6 @@ func DefaultConfig() Config {
 			WhisperThreads:    0,
 			WhisperUseGPU:     true,
 			Language:          "en",
-			Prompt:            "",
 			APIURL:            "",
 			APIKey:            "",
 		},
@@ -147,6 +161,14 @@ func DefaultConfig() Config {
 			ElectronStrategy: "clipboard",
 			DefaultStrategy:  "",
 			AppOverrides:     nil,
+		},
+		Hint: HintConfig{
+			Enabled:              true,
+			VocabularyFiles:      []string{"CLAUDE.md", "AGENTS.md", "README.md"},
+			Providers:            []string{"claudecode", "tmuxpane"},
+			VocabularyMaxChars:   1000,
+			ConversationMaxChars: 8000,
+			TimeoutMS:            300,
 		},
 		Tray: TrayConfig{Enabled: false},
 	}

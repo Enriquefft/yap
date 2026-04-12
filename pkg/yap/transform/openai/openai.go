@@ -88,7 +88,7 @@ type sseFrame struct {
 // stream, and emits one transcribe.TranscriptChunk per delta. The
 // final chunk has IsFinal=true. See the package doc for the wire
 // format.
-func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, opts transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	var sb strings.Builder
 	var lang string
 	for chunk := range in {
@@ -120,6 +120,9 @@ func (b *Backend) Transform(ctx context.Context, in <-chan transcribe.Transcript
 	system := b.cfg.SystemPrompt
 	if system == "" {
 		system = DefaultSystemPrompt
+	}
+	if opts.Context != "" {
+		system = "Recent context (reference only, do not repeat):\n" + opts.Context + "\n---\n" + system
 	}
 
 	req := chatRequest{

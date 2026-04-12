@@ -74,7 +74,11 @@ func NewFactory(cfg transcribe.Config) (transcribe.Transcriber, error) {
 // Transcribe reads the full audio stream into memory, POSTs it to the
 // configured endpoint, and emits the response as a single IsFinal
 // chunk on the returned channel.
-func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+//
+// opts.Prompt, when non-empty, is forwarded as the `prompt` multipart
+// field so the upstream Whisper-compatible endpoint biases its output
+// toward the supplied vocabulary.
+func (b *Backend) Transcribe(ctx context.Context, audio io.Reader, opts transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
 	if audio == nil {
 		return nil, errors.New("openai: audio reader is nil")
 	}
@@ -100,7 +104,7 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 			return
 		}
 
-		text, err := b.post(ctx, wavData)
+		text, err := b.post(ctx, wavData, opts.Prompt)
 		send(ctx, out, transcribe.TranscriptChunk{
 			Text:     text,
 			IsFinal:  true,
@@ -143,8 +147,11 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // post POSTs a multipart form to the configured endpoint and returns
 // the decoded transcription text. Retries on 5xx and client-timeout
-// errors with the same backoff as the Groq backend.
-func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
+// errors with the same backoff as the Groq backend. The prompt
+// parameter carries transcribe.Options.Prompt and is forwarded on
+// every retry so the retry path biases identically to the first
+// attempt.
+func (b *Backend) post(ctx context.Context, wavData []byte, prompt string) (string, error) {
 	const maxRetries = 3
 	backoffDelays := [maxRetries]time.Duration{
 		500 * time.Millisecond,
@@ -172,8 +179,8 @@ func (b *Backend) post(ctx context.Context, wavData []byte) (string, error) {
 		if err := writer.WriteField("language", b.cfg.Language); err != nil {
 			return "", fmt.Errorf("failed to write language field: %w", err)
 		}
-		if b.cfg.Prompt != "" {
-			if err := writer.WriteField("prompt", b.cfg.Prompt); err != nil {
+		if prompt != "" {
+			if err := writer.WriteField("prompt", prompt); err != nil {
 				return "", fmt.Errorf("failed to write prompt field: %w", err)
 			}
 		}

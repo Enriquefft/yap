@@ -79,7 +79,7 @@ func TestTransform_StreamsChunks(t *testing.T) {
 
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hello world", Language: "en"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestTransform_EmptyInput_EmitsFinalOnly(t *testing.T) {
 	b, _ := local.New(transform.Config{APIURL: srv.URL, Model: "llama3"})
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "   ", Language: "en"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestTransform_UpstreamError_Propagates(t *testing.T) {
 	upstreamErr := errors.New("transcribe failed")
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Err: upstreamErr, IsFinal: true},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestTransform_ServerError_SurfacesAsChunkError(t *testing.T) {
 	b, _ := local.New(transform.Config{APIURL: srv.URL, Model: "llama3"})
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestTransform_MalformedJSON_SurfacesAsError(t *testing.T) {
 	b, _ := local.New(transform.Config{APIURL: srv.URL, Model: "llama3"})
 	out, err := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestTransform_ServerReportedError_SurfacesAsError(t *testing.T) {
 	b, _ := local.New(transform.Config{APIURL: srv.URL, Model: "llama3"})
 	out, _ := b.Transform(context.Background(), inputChunks(
 		transcribe.TranscriptChunk{Text: "hi"},
-	))
+	), transform.Options{})
 	got := drain(out)
 	if len(got) != 1 || got[0].Err == nil {
 		t.Fatalf("got = %+v, want error chunk", got)
@@ -224,7 +224,7 @@ func TestTransform_CtxCancelMidStream_ClosesCleanly(t *testing.T) {
 	b, _ := local.New(transform.Config{APIURL: srv.URL, Model: "llama3"})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	out, err := b.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "hi"}))
+	out, err := b.Transform(ctx, inputChunks(transcribe.TranscriptChunk{Text: "hi"}), transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

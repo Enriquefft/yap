@@ -136,11 +136,11 @@ func (c *Client) TranscribeAll(ctx context.Context, audio io.Reader) ([]transcri
 // want streaming semantics (e.g. partial injection into a text field)
 // use this entry point directly.
 func (c *Client) TranscribeStream(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
-	chunks, err := c.transcriber.Transcribe(ctx, audio)
+	chunks, err := c.transcriber.Transcribe(ctx, audio, transcribe.Options{})
 	if err != nil {
 		return nil, err
 	}
-	transformed, err := c.transformer.Transform(ctx, chunks)
+	transformed, err := c.transformer.Transform(ctx, chunks, transform.Options{})
 	if err != nil {
 		return nil, err
 	}

@@ -589,7 +589,7 @@ func TestTOMLLiteralFor(t *testing.T) {
 		}
 	})
 	t.Run("string_escapes", func(t *testing.T) {
-		got, err := config.TOMLLiteralFor("transcription.prompt", `say "hi"\nthere`)
+		got, err := config.TOMLLiteralFor("transform.system_prompt", `say "hi"\nthere`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

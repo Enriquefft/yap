@@ -16,7 +16,7 @@ import (
 // the registry. It does not touch the network and produces no output.
 type fakeBackend struct{}
 
-func (fakeBackend) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+func (fakeBackend) Transcribe(ctx context.Context, audio io.Reader, opts transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
 	ch := make(chan transcribe.TranscriptChunk)
 	close(ch)
 	return ch, nil

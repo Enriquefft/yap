@@ -39,6 +39,14 @@ func ValidElectronStrategies() []string {
 	return []string{"clipboard", "keystroke"}
 }
 
+// ValidHintProviders returns the allowed values for hint.providers.
+// This list is maintained in the config package (not imported from
+// pkg/yap/hint) to avoid a dependency cycle. It must be kept in
+// lockstep with the providers registered in pkg/yap/hint.
+func ValidHintProviders() []string {
+	return []string{"claudecode", "tmuxpane"}
+}
+
 // ValidInjectionStrategies returns the allowed values for
 // injection.app_overrides[].strategy and injection.default_strategy.
 // The list MUST match the Name() values returned by the registered
@@ -150,6 +158,23 @@ func (c Config) Validate(keyValidator KeyValidator) error {
 			errs = append(errs, fmt.Errorf("injection.app_overrides[%d].strategy: required", i))
 		} else if !contains(injectionStrategies, strategy) {
 			errs = append(errs, fmt.Errorf("injection.app_overrides[%d].strategy: must be one of %v, got %q", i, injectionStrategies, ov.Strategy))
+		}
+	}
+
+	// hint
+	hintProviders := ValidHintProviders()
+	if c.Hint.VocabularyMaxChars < 0 || c.Hint.VocabularyMaxChars > 8000 {
+		errs = append(errs, fmt.Errorf("hint.vocabulary_max_chars: must be in [0,8000], got %d", c.Hint.VocabularyMaxChars))
+	}
+	if c.Hint.ConversationMaxChars < 0 || c.Hint.ConversationMaxChars > 32000 {
+		errs = append(errs, fmt.Errorf("hint.conversation_max_chars: must be in [0,32000], got %d", c.Hint.ConversationMaxChars))
+	}
+	if c.Hint.TimeoutMS < 0 || c.Hint.TimeoutMS > 5000 {
+		errs = append(errs, fmt.Errorf("hint.timeout_ms: must be in [0,5000], got %d", c.Hint.TimeoutMS))
+	}
+	for i, p := range c.Hint.Providers {
+		if !contains(hintProviders, p) {
+			errs = append(errs, fmt.Errorf("hint.providers[%d]: must be one of %v, got %q", i, hintProviders, p))
 		}
 	}
 

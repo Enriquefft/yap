@@ -296,7 +296,12 @@ func resolveThreadCount(requested, numCPU int) int {
 // call returns the breaker error immediately for circuitBreakerCooldown
 // without fork-execing the subprocess. A successful transcription
 // resets the breaker.
-func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+//
+// opts.Prompt, when non-empty, is forwarded as the `prompt` multipart
+// field to whisper-server's /inference endpoint so the local Whisper
+// instance biases its token probabilities toward the supplied
+// vocabulary. The same prompt is used on the retry path.
+func (b *Backend) Transcribe(ctx context.Context, audio io.Reader, opts transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
 	if audio == nil {
 		return nil, errors.New("whisperlocal: audio reader is nil")
 	}
@@ -345,6 +350,10 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 		return out, nil
 	}
 
+	// Capture the per-call prompt locally so the retry path uses the
+	// exact same value even if the caller mutates opts after return.
+	prompt := opts.Prompt
+
 	// Track this in-flight call so Close can drain it before
 	// tearing the subprocess down.
 	b.wg.Add(1)
@@ -359,11 +368,11 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 		reqCtx, cancel := mergeContexts(ctx, b.closeCtx)
 		defer cancel()
 
-		text, err := b.transcribeOnce(reqCtx, wavData)
+		text, err := b.transcribeOnce(reqCtx, wavData, prompt)
 		if err != nil && b.shouldRetry(err) {
 			// One retry: respawn the subprocess and try again.
 			b.killProc()
-			text, err = b.transcribeOnce(reqCtx, wavData)
+			text, err = b.transcribeOnce(reqCtx, wavData, prompt)
 		}
 		if err != nil {
 			b.recordFailure()
@@ -383,12 +392,15 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 // transcribeOnce ensures the subprocess is running, POSTs the audio,
 // and returns the transcribed text or an error. It does NOT retry on
 // its own — the retry decision lives one level up in Transcribe.
-func (b *Backend) transcribeOnce(ctx context.Context, wavData []byte) (string, error) {
+// prompt is the per-call Whisper prompt forwarded by the caller; the
+// same value is used on the retry path so retries bias identically to
+// the first attempt.
+func (b *Backend) transcribeOnce(ctx context.Context, wavData []byte, prompt string) (string, error) {
 	baseURL, err := b.ensureServer(ctx)
 	if err != nil {
 		return "", err
 	}
-	return b.postInference(ctx, baseURL, wavData)
+	return b.postInference(ctx, baseURL, wavData, prompt)
 }
 
 // shouldRetry decides whether an error from the subprocess is worth a
@@ -718,8 +730,10 @@ func (e *apiError) Error() string {
 
 // postInference POSTs wavData as a multipart/form-data request to the
 // subprocess's /inference endpoint and returns the decoded "text"
-// field of the JSON response.
-func (b *Backend) postInference(ctx context.Context, baseURL string, wavData []byte) (string, error) {
+// field of the JSON response. prompt is the per-call Whisper prompt
+// (from transcribe.Options.Prompt); it is forwarded as-is when
+// non-empty.
+func (b *Backend) postInference(ctx context.Context, baseURL string, wavData []byte, prompt string) (string, error) {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
@@ -735,8 +749,8 @@ func (b *Backend) postInference(ctx context.Context, baseURL string, wavData []b
 			return "", fmt.Errorf("whisperlocal: write language field: %w", err)
 		}
 	}
-	if b.cfg.Prompt != "" {
-		if err := writer.WriteField("prompt", b.cfg.Prompt); err != nil {
+	if prompt != "" {
+		if err := writer.WriteField("prompt", prompt); err != nil {
 			return "", fmt.Errorf("whisperlocal: write prompt field: %w", err)
 		}
 	}

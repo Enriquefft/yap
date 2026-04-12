@@ -186,7 +186,6 @@ const commentHeavyFixture = `# yap configuration — hand edited
     whisper_threads = 0
     whisper_use_gpu = true
     language = "en"
-    prompt = ""
     api_url = ""
     api_key = ""
 

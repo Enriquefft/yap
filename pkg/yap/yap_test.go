@@ -236,7 +236,7 @@ func TestClientCustomTransformer(t *testing.T) {
 // prove the WithTransformer hook is wired.
 type upperTransformer struct{}
 
-func (upperTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (upperTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
 		defer close(out)
@@ -323,7 +323,7 @@ type slowTransformer struct {
 	delay time.Duration
 }
 
-func (s slowTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+func (s slowTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
 		defer close(out)

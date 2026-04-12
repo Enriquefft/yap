@@ -87,7 +87,6 @@ func NewTranscriber(tc pcfg.TranscriptionConfig) (transcribe.Transcriber, error)
 		APIKey:            tc.APIKey,
 		Model:             tc.Model,
 		Language:          tc.Language,
-		Prompt:            tc.Prompt,
 		ModelPath:         tc.ModelPath,
 		WhisperServerPath: tc.WhisperServerPath,
 		WhisperThreads:    tc.WhisperThreads,
@@ -639,6 +638,8 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 				slog.Default().Info("state", "from", stateRecording, "to", stateProcessing)
 				d.state.setState(stateProcessing)
 			},
+			TranscribeOpts: transcribe.Options{},
+			TransformOpts:  transform.Options{},
 		})
 		if err != nil &&
 			!errors.Is(err, context.Canceled) &&

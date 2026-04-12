@@ -8,6 +8,7 @@ import (
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/daemon"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 	"github.com/spf13/cobra"
 )
 
@@ -88,7 +89,7 @@ func runTransform(cmd *cobra.Command, cfg *config.Config, args []string, backend
 	in <- transcribe.TranscriptChunk{Text: text, IsFinal: true}
 	close(in)
 
-	out, err := tr.Transform(cmd.Context(), in)
+	out, err := tr.Transform(cmd.Context(), in, transform.Options{})
 	if err != nil {
 		return fmt.Errorf("transform: run: %w", err)
 	}

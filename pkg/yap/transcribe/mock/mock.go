@@ -12,6 +12,7 @@ package mock
 import (
 	"context"
 	"io"
+	"sync"
 
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
@@ -21,8 +22,17 @@ import (
 // post-construction mutation: the goroutine spawned by Transcribe
 // reads from the slice, so post-Transcribe mutation would be a data
 // race. Tests that need a different sequence build a new Backend.
+//
+// LastOptions records the Options struct passed to the most recent
+// Transcribe call so tests can assert that per-call options (e.g. the
+// Phase 12 hint-bundle Prompt) are threaded through the pipeline. It
+// is protected by a mutex because Transcribe runs on a goroutine and
+// the test harness reads it from the caller goroutine.
 type Backend struct {
 	chunks []transcribe.TranscriptChunk
+
+	optsMu      sync.Mutex
+	lastOptions transcribe.Options
 }
 
 // New constructs a Backend that will emit the given chunks. If no
@@ -52,7 +62,13 @@ func NewFactory(cfg transcribe.Config) (transcribe.Transcriber, error) {
 // Transcribe drains audio, then emits the configured chunks in order.
 // The channel is closed when the last chunk has been delivered or
 // when ctx is cancelled, whichever comes first.
-func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan transcribe.TranscriptChunk, error) {
+//
+// opts is recorded on the Backend so tests can assert that the
+// pipeline forwarded the per-call Options through unchanged.
+func (b *Backend) Transcribe(ctx context.Context, audio io.Reader, opts transcribe.Options) (<-chan transcribe.TranscriptChunk, error) {
+	b.optsMu.Lock()
+	b.lastOptions = opts
+	b.optsMu.Unlock()
 	if audio != nil {
 		_, _ = io.Copy(io.Discard, audio)
 	}
@@ -68,4 +84,12 @@ func (b *Backend) Transcribe(ctx context.Context, audio io.Reader) (<-chan trans
 		}
 	}()
 	return out, nil
+}
+
+// LastOptions returns the Options struct passed to the most recent
+// Transcribe call. The zero value is returned before the first call.
+func (b *Backend) LastOptions() transcribe.Options {
+	b.optsMu.Lock()
+	defer b.optsMu.Unlock()
+	return b.lastOptions
 }

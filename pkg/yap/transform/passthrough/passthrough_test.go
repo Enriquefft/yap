@@ -17,7 +17,7 @@ func TestForwardsChunksUnchanged(t *testing.T) {
 	in <- transcribe.TranscriptChunk{Text: "c", IsFinal: true}
 	close(in)
 
-	out, err := passthrough.New().Transform(context.Background(), in)
+	out, err := passthrough.New().Transform(context.Background(), in, transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestClosesOnInputClose(t *testing.T) {
 	in := make(chan transcribe.TranscriptChunk)
 	close(in)
 
-	out, err := passthrough.New().Transform(context.Background(), in)
+	out, err := passthrough.New().Transform(context.Background(), in, transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRespectsContextCancel(t *testing.T) {
 	in := make(chan transcribe.TranscriptChunk)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	out, err := passthrough.New().Transform(ctx, in)
+	out, err := passthrough.New().Transform(ctx, in, transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

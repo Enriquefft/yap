@@ -286,7 +286,7 @@ func TestNewTransformerWithFallback_HealthCheckFailure_Notifies(t *testing.T) {
 	in := make(chan transcribe.TranscriptChunk, 1)
 	in <- transcribe.TranscriptChunk{Text: "hi", IsFinal: true}
 	close(in)
-	out, err := tr.Transform(context.Background(), in)
+	out, err := tr.Transform(context.Background(), in, transform.Options{})
 	if err != nil {
 		t.Fatalf("fallback Transform: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestNewTransformerWithFallback_StreamPartials_HealthCheckFailureSwapsToPass
 	in := make(chan transcribe.TranscriptChunk, 1)
 	in <- transcribe.TranscriptChunk{Text: "hi", IsFinal: true}
 	close(in)
-	out, err := tr.Transform(context.Background(), in)
+	out, err := tr.Transform(context.Background(), in, transform.Options{})
 	if err != nil {
 		t.Fatalf("Transform: %v", err)
 	}

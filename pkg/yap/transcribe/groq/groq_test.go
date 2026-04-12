@@ -71,7 +71,7 @@ func TestModelParam(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("fake wav data")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("fake wav data")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestModelParam_CustomModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("groq.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestAPIURLOverride_PostedHere(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestMultipartForm(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("fake wav data")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("fake wav data")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestHTTPTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("groq.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestRetryClassification_4xx(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestRetryClassification_5xx(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestRetryClassification_Timeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("groq.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestAPIKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("groq.New: %v", err)
 	}
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestSuccessResponse(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestErrorResponse(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestRetryBackoff(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestRetryBackoffCtxCancel(t *testing.T) {
 	defer cancel()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestTranscribeEmptyWave(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestContextCancellation(t *testing.T) {
 	cancel()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -550,7 +550,7 @@ func TestChannelClosedOnSuccess(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -577,7 +577,7 @@ func TestChannelClosedOnError(t *testing.T) {
 	defer srv.Close()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -613,7 +613,7 @@ func TestCtxCancelDrainsChannel(t *testing.T) {
 	defer cancel()
 
 	b := newTestBackend(t, srv)
-	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")))
+	ch, err := b.Transcribe(ctx, bytes.NewReader([]byte("wav")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}

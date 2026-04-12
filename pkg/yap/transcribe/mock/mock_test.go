@@ -13,7 +13,7 @@ func TestNewDefaultChunks(t *testing.T) {
 	// The default chunk sequence is observable through Transcribe
 	// rather than a public field — see mock.go for the rationale.
 	b := mock.New()
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestTranscribeEmitsChunksInOrder(t *testing.T) {
 	}
 	b := mock.New(chunks...)
 
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("any audio")))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader([]byte("any audio")), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestTranscribeEmitsChunksInOrder(t *testing.T) {
 
 func TestTranscribeClosesChannel(t *testing.T) {
 	b := mock.New()
-	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil))
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestTranscribeRespectsCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	ch, err := b.Transcribe(ctx, bytes.NewReader(nil))
+	ch, err := b.Transcribe(ctx, bytes.NewReader(nil), transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
@@ -99,11 +99,30 @@ func TestTranscribeRespectsCancel(t *testing.T) {
 
 func TestTranscribeNilAudio(t *testing.T) {
 	b := mock.New()
-	ch, err := b.Transcribe(context.Background(), nil)
+	ch, err := b.Transcribe(context.Background(), nil, transcribe.Options{})
 	if err != nil {
 		t.Fatalf("Transcribe: %v", err)
 	}
 	for range ch {
+	}
+}
+
+// TestTranscribeRecordsOptions asserts the Phase 12 contract: the mock
+// backend captures the per-call Options struct so pipeline tests can
+// verify that Options.Prompt (the Whisper hint-bundle vocabulary) was
+// threaded through unchanged.
+func TestTranscribeRecordsOptions(t *testing.T) {
+	b := mock.New()
+	opts := transcribe.Options{Prompt: "foo bar baz"}
+	ch, err := b.Transcribe(context.Background(), bytes.NewReader(nil), opts)
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	for range ch {
+	}
+	got := b.LastOptions()
+	if got.Prompt != opts.Prompt {
+		t.Errorf("LastOptions.Prompt = %q, want %q", got.Prompt, opts.Prompt)
 	}
 }
 

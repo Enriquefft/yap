@@ -35,7 +35,6 @@ func TestGetSet_EveryLeafField(t *testing.T) {
 		{"transcription.model", "whisper-1", "whisper-1"},
 		{"transcription.model_path", "/srv/models/base.en", "/srv/models/base.en"},
 		{"transcription.language", "fr", "fr"},
-		{"transcription.prompt", "yap dictation", "yap dictation"},
 		{"transcription.api_url", "https://api.example.test/v1", "https://api.example.test/v1"},
 		{"transcription.api_key", "sk-xyz", "sk-xyz"},
 		// transform
@@ -49,6 +48,11 @@ func TestGetSet_EveryLeafField(t *testing.T) {
 		{"injection.prefer_osc52", "false", "false"},
 		{"injection.bracketed_paste", "false", "false"},
 		{"injection.electron_strategy", "keystroke", "keystroke"},
+		// hint
+		{"hint.enabled", "false", "false"},
+		{"hint.vocabulary_max_chars", "2000", "2000"},
+		{"hint.conversation_max_chars", "16000", "16000"},
+		{"hint.timeout_ms", "500", "500"},
 		// tray
 		{"tray.enabled", "true", "true"},
 	}

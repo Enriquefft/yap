@@ -21,8 +21,33 @@ import (
 // cancelled. Errors are delivered on the channel via
 // TranscriptChunk.Err and terminate the stream; the implementation
 // must not send further chunks after an error.
+//
+// opts carries per-call knobs the caller may supply on each invocation
+// (currently Options.Prompt, the Whisper prompt / initial_prompt
+// parameter). The zero-value Options is a legal null case: backends
+// must behave identically to a call made before the Options parameter
+// existed. Per-call Options is deliberately separate from the
+// construction-time Config: Prompt depends on the focused application
+// at press time and therefore must vary per recording.
 type Transcriber interface {
-	Transcribe(ctx context.Context, audio io.Reader) (<-chan TranscriptChunk, error)
+	Transcribe(ctx context.Context, audio io.Reader, opts Options) (<-chan TranscriptChunk, error)
+}
+
+// Options carries per-call knobs for a single Transcribe invocation.
+//
+// Prompt is the Whisper `prompt` / `initial_prompt` parameter —
+// natural-text context that biases token probabilities toward the
+// vocabulary it contains. Empty is valid (no bias). The daemon fills
+// this from the Phase 12 hint-provider bundle; library consumers may
+// also fill it directly from any source they control.
+//
+// Options is intentionally a value type: backends that need to store
+// it must copy, not retain a reference, because the caller is free to
+// mutate or reuse the struct between calls.
+type Options struct {
+	// Prompt biases the transcription toward the vocabulary it
+	// contains. Empty means "no bias".
+	Prompt string
 }
 
 // TranscriptChunk is a single emission from a Transcriber.
@@ -45,6 +70,11 @@ type TranscriptChunk struct {
 // deliberately does not depend on pkg/yap/config — that package is
 // the on-disk schema, this one is the runtime library. Conversion
 // between them lives in the caller (e.g. the daemon).
+//
+// Config carries construction-time state only. Per-call knobs such as
+// the Whisper prompt live on the Options argument of Transcribe; see
+// Transcriber.Transcribe for the rationale (the prompt varies per
+// recording because the focused application varies per recording).
 type Config struct {
 	// APIURL is the full endpoint URL for remote backends. Backends
 	// may default this when empty.
@@ -55,9 +85,6 @@ type Config struct {
 	Model string
 	// Language is an ISO language code. Empty means auto-detect.
 	Language string
-	// Prompt is an optional context hint forwarded to backends that
-	// support it.
-	Prompt string
 	// ModelPath points at a local model file. Used by whisperlocal;
 	// ignored by remote backends.
 	ModelPath string

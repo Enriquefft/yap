@@ -29,7 +29,10 @@ func NewFactory(cfg transform.Config) (transform.Transformer, error) {
 // Transform copies chunks from in to the returned channel, respecting
 // ctx cancellation. The output channel is closed when in closes or
 // when ctx is cancelled.
-func (*Transformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk) (<-chan transcribe.TranscriptChunk, error) {
+//
+// The passthrough transformer is the identity function: opts.Context
+// is intentionally ignored because there is no LLM to consume it.
+func (*Transformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, _ transform.Options) (<-chan transcribe.TranscriptChunk, error) {
 	out := make(chan transcribe.TranscriptChunk)
 	go func() {
 		defer close(out)

@@ -57,7 +57,6 @@ func TestConfigGet_Dotnotation_EveryLeaf(t *testing.T) {
   model = "whisper-large-v3-turbo"
   model_path = "/models/custom"
   language = "de"
-  prompt = "hint"
   api_url = ""
   api_key = "sk-abc"
 
@@ -96,7 +95,6 @@ func TestConfigGet_Dotnotation_EveryLeaf(t *testing.T) {
 		{"transcription.model", "whisper-large-v3-turbo"},
 		{"transcription.model_path", "/models/custom"},
 		{"transcription.language", "de"},
-		{"transcription.prompt", "hint"},
 		{"transcription.api_key", "sk-abc"},
 		{"transform.enabled", "true"},
 		{"transform.backend", "local"},
