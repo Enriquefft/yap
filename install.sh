@@ -18,7 +18,10 @@ detect_os_arch() {
 
   case $arch in
     x86_64) arch="amd64" ;;
-    aarch64|arm64) arch="arm64" ;;
+    aarch64|arm64)
+      echo "arm64 builds are not yet available. Track progress at https://github.com/Enriquefft/yap"
+      exit 1
+      ;;
     *) echo "Unsupported architecture: $arch"; exit 1 ;;
   esac
 

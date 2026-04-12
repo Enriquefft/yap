@@ -39,25 +39,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install musl cross-compilers
+      - name: Install musl toolchain
         run: |
-          # amd64: musl-tools provides musl-gcc on Ubuntu.
           sudo apt-get update
           sudo apt-get install -y musl-tools
-
-          # Create the x86_64-linux-musl-gcc symlink GoReleaser expects.
           sudo ln -sf /usr/bin/musl-gcc /usr/local/bin/x86_64-linux-musl-gcc
-
-          # arm64: download pre-built aarch64-linux-musl cross-compiler
-          # from musl.cc (static toolchain, no host libc dependency).
-          curl -fsSL "https://musl.cc/aarch64-linux-musl-cross.tgz" \
-            | sudo tar -xz -C /opt
-          sudo ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc \
-            /usr/local/bin/aarch64-linux-musl-gcc
-
-          # Verify both compilers are reachable.
           x86_64-linux-musl-gcc --version
-          aarch64-linux-musl-gcc --version
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

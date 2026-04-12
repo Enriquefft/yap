@@ -1,12 +1,12 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # GoReleaser configuration for yap — voice-to-text daemon.
 #
-# Static musl-linked builds for Linux amd64/arm64. CGO is required
-# (malgo wraps miniaudio, evdev needs cgo). Cross-compilation uses
-# musl cross-compiler toolchains installed in the release workflow:
-#   amd64: musl-tools (Ubuntu), arm64: musl.cc pre-built toolchain.
+# Static musl-linked Linux amd64 build. CGO is required (malgo wraps
+# miniaudio, evdev needs cgo). musl-tools comes from Ubuntu repos.
 #
-# Run locally (amd64 only, snapshot):
+# arm64 build deferred until a reliable CI cross-compiler is available.
+#
+# Run locally (snapshot):
 #   goreleaser release --snapshot --clean
 #
 # CI trigger: push tag matching v*
@@ -39,24 +39,18 @@ builds:
       - -extldflags '-static'
       - -X github.com/Enriquefft/yap/internal/config.Version={{.Version}}
 
-  - id: yap-linux-arm64
-    main: ./cmd/yap
-    binary: yap
-    goos:
-      - linux
-    goarch:
-      - arm64
-    env:
-      - CGO_ENABLED=1
-      - CC=aarch64-linux-musl-gcc
-    tags:
-      - netgo
-      - osusergo
-    ldflags:
-      - -s -w
-      - -linkmode external
-      - -extldflags '-static'
-      - -X github.com/Enriquefft/yap/internal/config.Version={{.Version}}
+  # arm64 build deferred — musl.cc cross-compiler host is unreliable.
+  # Re-enable once a stable aarch64-linux-musl-gcc source is available.
+  # - id: yap-linux-arm64
+  #   main: ./cmd/yap
+  #   binary: yap
+  #   goos: [linux]
+  #   goarch: [arm64]
+  #   env: [CGO_ENABLED=1, CC=aarch64-linux-musl-gcc]
+  #   tags: [netgo, osusergo]
+  #   ldflags:
+  #     - -s -w -linkmode external -extldflags '-static'
+  #     - -X github.com/Enriquefft/yap/internal/config.Version={{.Version}}
 
 archives:
   - id: default
