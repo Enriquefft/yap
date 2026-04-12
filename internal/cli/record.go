@@ -389,21 +389,6 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		return transcribe.Options{}, transform.Options{}
 	}
 
-	cwd, _ := os.Getwd()
-
-	// Apply per-project .yap.toml overrides.
-	projectOv, err := hint.LoadProjectOverrides(cwd)
-	if err != nil {
-		slog.Default().Debug("hint: project override load failed", "error", err)
-	} else {
-		pcfg.ApplyProjectOverrides(cfg, projectOv)
-	}
-
-	// Layer 1: base vocabulary from project docs.
-	vocab := hint.ReadVocabularyFiles(cwd, cfg.Hint.VocabularyFiles)
-
-	// Layer 2: provider conversation context.
-	var conversation string
 	timeoutMS := cfg.Hint.TimeoutMS
 	if timeoutMS <= 0 {
 		timeoutMS = 300
@@ -411,19 +396,43 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 	fetchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
 	defer cancel()
 
+	// Resolve focused window target + cwd. yap record is typically
+	// spawned from a keybind whose cwd is $HOME, not the project.
+	// The focused terminal's /proc/<pid>/cwd IS the project directory.
+	var target inject.Target
+	inj, err := p.NewInjector(daemon.InjectionOptionsFromConfig(cfg.Injection))
+	if err == nil {
+		if resolver, ok := inj.(inject.StrategyResolver); ok {
+			if decision, err := resolver.Resolve(fetchCtx); err == nil {
+				target = decision.Target
+			}
+		}
+	}
+
+	rootPath := resolveTargetCwdRecord(target)
+
+	// Apply per-project .yap.toml overrides.
+	projectOv, err := hint.LoadProjectOverrides(rootPath)
+	if err != nil {
+		slog.Default().Debug("hint: project override load failed", "error", err)
+	} else {
+		pcfg.ApplyProjectOverrides(cfg, projectOv)
+	}
+
+	// Layer 1: base vocabulary from project docs.
+	vocab := hint.ReadVocabularyFiles(rootPath, cfg.Hint.VocabularyFiles)
+
+	// Layer 2: provider conversation context.
+	var conversation string
 	for _, name := range cfg.Hint.Providers {
 		factory, err := hint.Get(name)
 		if err != nil {
 			continue
 		}
-		prov, err := factory(hint.Config{RootPath: cwd})
+		prov, err := factory(hint.Config{RootPath: rootPath})
 		if err != nil {
 			continue
 		}
-		// yap record is always invoked from a terminal. Use a
-		// terminal-typed Target so providers that check for
-		// AppTerminal (claudecode, termscroll) match correctly.
-		target := inject.Target{AppType: inject.AppTerminal}
 		if !prov.Supports(target) {
 			continue
 		}
@@ -473,4 +482,15 @@ func tailBytesRecord(s string, n int) string {
 		start++
 	}
 	return s[start:]
+}
+
+func resolveTargetCwdRecord(target inject.Target) string {
+	if target.WindowID != "" {
+		link, err := os.Readlink("/proc/" + target.WindowID + "/cwd")
+		if err == nil {
+			return link
+		}
+	}
+	cwd, _ := os.Getwd()
+	return cwd
 }

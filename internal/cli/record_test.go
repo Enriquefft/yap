@@ -227,8 +227,8 @@ func TestRecord_Resolve_PrintsDecision(t *testing.T) {
 	if got := inj.lastText(); got != "" {
 		t.Errorf("underlying injector saw Inject(%q), want empty (resolve must not deliver)", got)
 	}
-	if inj.resolveCalls != 1 {
-		t.Errorf("resolveCalls = %d, want 1", inj.resolveCalls)
+	if inj.resolveCalls < 1 {
+		t.Errorf("resolveCalls = %d, want >= 1", inj.resolveCalls)
 	}
 	// The decision must render to stdout with every field the user
 	// asked for. Mirrors the paste --dry-run contract.

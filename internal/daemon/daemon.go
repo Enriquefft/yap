@@ -358,7 +358,6 @@ type Daemon struct {
 	chime         platform.ChimePlayer
 	notifier      platform.Notifier
 	injector      inject.Injector
-	hintProviders []hint.Provider
 }
 
 // New creates a new Daemon. Kept for test compatibility.
@@ -490,48 +489,14 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("engine init: %w", err)
 	}
 
-	// Apply per-project .yap.toml overrides to the hint config. The
-	// project file lives in the repo root (walked from cwd to git root)
-	// and overrides global hint settings for this project.
-	cwd, _ := os.Getwd()
-	projectOv, err := hint.LoadProjectOverrides(cwd)
-	if err != nil {
-		slog.Default().Warn("hint: failed to load project .yap.toml", "error", err)
-	} else {
-		pcfg.ApplyProjectOverrides(cfg, projectOv)
-	}
-
-	// Build hint providers from the registry when the hint pipeline is
-	// enabled. Unknown or broken providers are non-fatal: the daemon
-	// logs a warning and skips them so a single misconfigured provider
-	// never blocks startup.
-	var hintProviders []hint.Provider
-	if cfg.Hint.Enabled {
-		for _, name := range cfg.Hint.Providers {
-			factory, err := hint.Get(name)
-			if err != nil {
-				slog.Default().Warn("hint: unknown provider, skipping", "name", name, "error", err)
-				continue
-			}
-			cwd, _ := os.Getwd()
-			p, err := factory(hint.Config{RootPath: cwd})
-			if err != nil {
-				slog.Default().Warn("hint: provider construction failed, skipping", "name", name, "error", err)
-				continue
-			}
-			hintProviders = append(hintProviders, p)
-		}
-	}
-
 	d := &Daemon{
-		cfg:           cfg,
-		ctx:           ctx,
-		eng:           eng,
-		recorder:      rec,
-		chime:         deps.Platform.Chime,
-		notifier:      deps.Platform.Notifier,
-		injector:      injector,
-		hintProviders: hintProviders,
+		cfg:      cfg,
+		ctx:      ctx,
+		eng:      eng,
+		recorder: rec,
+		chime:    deps.Platform.Chime,
+		notifier: deps.Platform.Notifier,
+		injector: injector,
 	}
 
 	// Resolve the on-disk config path so the status response can
@@ -734,14 +699,6 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		return hint.Bundle{}
 	}
 
-	// Layer 1: base vocabulary from project docs (always-on).
-	cwd, _ := os.Getwd()
-	vocab := hint.ReadVocabularyFiles(cwd, d.cfg.Hint.VocabularyFiles)
-
-	// Layer 2: provider conversation context (first match wins).
-	var conversation string
-	var source string
-
 	timeoutMS := d.cfg.Hint.TimeoutMS
 	if timeoutMS <= 0 {
 		timeoutMS = 300
@@ -751,23 +708,61 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 
 	// Resolve target via the injector's StrategyResolver (Phase 4
 	// pure query). When the injector does not implement the optional
-	// interface, we return vocabulary-only — this is the correct
-	// degraded behavior for platforms that haven't shipped Resolve.
+	// interface, we fall back to the daemon's own cwd.
+	var target inject.Target
+	var targetResolved bool
 	resolver, ok := d.injector.(inject.StrategyResolver)
-	if !ok {
-		return hint.Bundle{Vocabulary: vocab}
+	if ok {
+		decision, err := resolver.Resolve(fetchCtx)
+		if err != nil {
+			slog.Default().Debug("hint: target resolution failed", "error", err)
+		} else {
+			target = decision.Target
+			targetResolved = true
+		}
 	}
-	decision, err := resolver.Resolve(fetchCtx)
+
+	// Resolve the focused window's cwd via /proc/<pid>/cwd. The
+	// daemon's own cwd is typically $HOME (launched from a keybind),
+	// but the vocabulary files live in the project the user is working
+	// in. The focused terminal's cwd IS the project directory.
+	rootPath := resolveTargetCwd(target)
+
+	// Apply per-project .yap.toml overrides using the focused cwd.
+	projectOv, err := hint.LoadProjectOverrides(rootPath)
 	if err != nil {
-		slog.Default().Debug("hint: target resolution failed", "error", err)
+		slog.Default().Debug("hint: project override load failed", "error", err)
+	} else {
+		pcfg.ApplyProjectOverrides(d.cfg, projectOv)
+	}
+
+	// Layer 1: base vocabulary from project docs (always-on).
+	vocab := hint.ReadVocabularyFiles(rootPath, d.cfg.Hint.VocabularyFiles)
+
+	// Layer 2: provider conversation context (first match wins).
+	// Only walk providers when we successfully resolved the target —
+	// without knowing which app is focused, we can't fetch
+	// app-specific context.
+	var conversation string
+	var source string
+
+	if !targetResolved {
 		return hint.Bundle{Vocabulary: vocab}
 	}
 
-	for _, p := range d.hintProviders {
-		if !p.Supports(decision.Target) {
+	for _, name := range d.cfg.Hint.Providers {
+		factory, fErr := hint.Get(name)
+		if fErr != nil {
 			continue
 		}
-		b, err := p.Fetch(fetchCtx, decision.Target)
+		p, pErr := factory(hint.Config{RootPath: rootPath})
+		if pErr != nil {
+			continue
+		}
+		if !p.Supports(target) {
+			continue
+		}
+		b, err := p.Fetch(fetchCtx, target)
 		if err != nil {
 			slog.Default().Debug("hint: provider failed", "provider", p.Name(), "error", err)
 			continue
@@ -784,6 +779,20 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		Conversation: conversation,
 		Source:        source,
 	}
+}
+
+// resolveTargetCwd resolves the focused window's working directory via
+// /proc/<pid>/cwd. Falls back to os.Getwd() when the target has no
+// PID or /proc is unreadable.
+func resolveTargetCwd(target inject.Target) string {
+	if target.WindowID != "" {
+		link, err := os.Readlink("/proc/" + target.WindowID + "/cwd")
+		if err == nil {
+			return link
+		}
+	}
+	cwd, _ := os.Getwd()
+	return cwd
 }
 
 // headBytes returns the first n bytes of s, clipping on a UTF-8 rune

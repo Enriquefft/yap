@@ -30,6 +30,27 @@ import (
 	"github.com/Enriquefft/yap/pkg/yap/transform/fallback"
 )
 
+func init() {
+	hint.Register("test-full-pipeline", func(cfg hint.Config) (hint.Provider, error) {
+		return &fakeHintProvider{
+			name: "test-full-pipeline", supports: true,
+			conversation: "user: hello\nassistant: hi",
+		}, nil
+	})
+	hint.Register("test-failing", func(cfg hint.Config) (hint.Provider, error) {
+		return &fakeHintProvider{
+			name: "test-failing", supports: true,
+			fetchErr: errors.New("provider exploded"),
+		}, nil
+	})
+	hint.Register("test-fallback", func(cfg hint.Config) (hint.Provider, error) {
+		return &fakeHintProvider{
+			name: "test-fallback", supports: true,
+			conversation: "fallback conversation",
+		}, nil
+	})
+}
+
 // TestRecordState verifies recording state machine operations.
 func TestRecordState(t *testing.T) {
 	var rs recordState
@@ -925,6 +946,7 @@ func TestFetchHintBundle_FullPipeline(t *testing.T) {
 	cfg := pcfg.DefaultConfig()
 	cfg.Hint.Enabled = true
 	cfg.Hint.VocabularyFiles = []string{"CLAUDE.md"}
+	cfg.Hint.Providers = []string{"test-full-pipeline"}
 	cfg.Hint.TimeoutMS = 500
 	c := config.Config(cfg)
 
@@ -936,13 +958,6 @@ func TestFetchHintBundle_FullPipeline(t *testing.T) {
 				DisplayServer: "wayland",
 				AppClass:      "foot",
 				AppType:       inject.AppTerminal,
-			},
-		},
-		hintProviders: []hint.Provider{
-			&fakeHintProvider{
-				name:         "test-provider",
-				supports:     true,
-				conversation: "user: hello\nassistant: hi",
 			},
 		},
 	}
@@ -957,8 +972,8 @@ func TestFetchHintBundle_FullPipeline(t *testing.T) {
 	if bundle.Conversation != "user: hello\nassistant: hi" {
 		t.Errorf("conversation = %q, want 'user: hello\\nassistant: hi'", bundle.Conversation)
 	}
-	if bundle.Source != "test-provider" {
-		t.Errorf("source = %q, want 'test-provider'", bundle.Source)
+	if bundle.Source != "test-full-pipeline" {
+		t.Errorf("source = %q, want 'test-full-pipeline'", bundle.Source)
 	}
 }
 
@@ -1001,7 +1016,6 @@ func TestFetchHintBundle_NoProviders_VocabularyOnly(t *testing.T) {
 		injector: &fakeHintResolver{
 			target: inject.Target{AppType: inject.AppTerminal},
 		},
-		hintProviders: nil, // no providers
 	}
 
 	bundle := d.fetchHintBundle()
@@ -1017,6 +1031,7 @@ func TestFetchHintBundle_ProviderFails_SkipsToNext(t *testing.T) {
 	cfg := pcfg.DefaultConfig()
 	cfg.Hint.Enabled = true
 	cfg.Hint.VocabularyFiles = nil
+	cfg.Hint.Providers = []string{"test-failing", "test-fallback"}
 	cfg.Hint.TimeoutMS = 500
 	c := config.Config(cfg)
 
@@ -1026,26 +1041,14 @@ func TestFetchHintBundle_ProviderFails_SkipsToNext(t *testing.T) {
 		injector: &fakeHintResolver{
 			target: inject.Target{AppType: inject.AppTerminal},
 		},
-		hintProviders: []hint.Provider{
-			&fakeHintProvider{
-				name:     "failing",
-				supports: true,
-				fetchErr: errors.New("provider exploded"),
-			},
-			&fakeHintProvider{
-				name:         "fallback",
-				supports:     true,
-				conversation: "fallback conversation",
-			},
-		},
 	}
 
 	bundle := d.fetchHintBundle()
 	if bundle.Conversation != "fallback conversation" {
 		t.Errorf("conversation = %q, want 'fallback conversation'", bundle.Conversation)
 	}
-	if bundle.Source != "fallback" {
-		t.Errorf("source = %q, want 'fallback'", bundle.Source)
+	if bundle.Source != "test-fallback" {
+		t.Errorf("source = %q, want 'test-fallback'", bundle.Source)
 	}
 }
 
@@ -1053,6 +1056,7 @@ func TestFetchHintBundle_NoStrategyResolver_VocabularyOnly(t *testing.T) {
 	cfg := pcfg.DefaultConfig()
 	cfg.Hint.Enabled = true
 	cfg.Hint.VocabularyFiles = nil
+	cfg.Hint.Providers = []string{"test-full-pipeline"}
 	c := config.Config(cfg)
 
 	// fakeDaemonInjector does NOT implement StrategyResolver.
@@ -1060,17 +1064,9 @@ func TestFetchHintBundle_NoStrategyResolver_VocabularyOnly(t *testing.T) {
 		cfg:      &c,
 		ctx:      context.Background(),
 		injector: &fakeDaemonInjector{},
-		hintProviders: []hint.Provider{
-			&fakeHintProvider{
-				name:         "should-not-match",
-				supports:     true,
-				conversation: "this should not appear",
-			},
-		},
 	}
 
 	bundle := d.fetchHintBundle()
-	// Without StrategyResolver, providers are never walked.
 	if bundle.Conversation != "" {
 		t.Errorf("expected empty conversation without StrategyResolver, got %q", bundle.Conversation)
 	}
@@ -1080,6 +1076,7 @@ func TestFetchHintBundle_ResolveError_VocabularyOnly(t *testing.T) {
 	cfg := pcfg.DefaultConfig()
 	cfg.Hint.Enabled = true
 	cfg.Hint.VocabularyFiles = nil
+	cfg.Hint.Providers = []string{"test-full-pipeline"}
 	cfg.Hint.TimeoutMS = 500
 	c := config.Config(cfg)
 
@@ -1088,13 +1085,6 @@ func TestFetchHintBundle_ResolveError_VocabularyOnly(t *testing.T) {
 		ctx: context.Background(),
 		injector: &fakeHintResolver{
 			resolveErr: errors.New("no display"),
-		},
-		hintProviders: []hint.Provider{
-			&fakeHintProvider{
-				name:         "should-not-run",
-				supports:     true,
-				conversation: "nope",
-			},
 		},
 	}
 
