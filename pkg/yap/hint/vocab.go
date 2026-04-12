@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// ReadVocabularyFiles walks from startDir up to the git root (or
+// ReadRawVocabularyFiles walks from startDir up to the git root (or
 // filesystem root) and reads each named file, returning their
-// concatenated content separated by "\n---\n". Files that don't exist
+// concatenated content separated by "\n". Files that don't exist
 // are silently skipped. Returns "" when no files are found.
 //
 // The walk stops at the first directory that contains a .git entry
@@ -17,11 +17,10 @@ import (
 // first. This ensures the vocabulary is scoped to the current
 // project and does not leak terms from unrelated parent directories.
 //
-// ReadVocabularyFiles is a pure function with no side effects beyond
-// file reads. It is used by the daemon's base vocabulary layer to
-// provide always-on project-level vocabulary regardless of whether
-// any hint provider matched.
-func ReadVocabularyFiles(startDir string, filenames []string) string {
+// ReadRawVocabularyFiles is the shared file-reading core used by both
+// ReadVocabularyFiles (which extracts terms) and yap init --ai (which
+// sends raw prose to an LLM).
+func ReadRawVocabularyFiles(startDir string, filenames []string) string {
 	if len(filenames) == 0 {
 		return ""
 	}
@@ -61,7 +60,24 @@ func ReadVocabularyFiles(startDir string, filenames []string) string {
 		dir = parent
 	}
 
-	return extractTerms(stripMarkdown(strings.Join(parts, "\n")))
+	return strings.Join(parts, "\n")
+}
+
+// ReadVocabularyFiles walks from startDir up to the git root and reads
+// each named file, extracts domain-specific terms, and returns them as
+// a comma-separated string. Files that don't exist are silently
+// skipped. Returns "" when no files are found.
+//
+// ReadVocabularyFiles is a pure function with no side effects beyond
+// file reads. It is used by the daemon's base vocabulary layer to
+// provide always-on project-level vocabulary regardless of whether
+// any hint provider matched.
+func ReadVocabularyFiles(startDir string, filenames []string) string {
+	raw := ReadRawVocabularyFiles(startDir, filenames)
+	if raw == "" {
+		return ""
+	}
+	return ExtractTerms(stripMarkdown(raw))
 }
 
 // Common words filtered from vocabulary. Only domain-specific terms
@@ -127,12 +143,12 @@ var stopwords = map[string]struct{}{
 	"true": {}, "false": {},
 }
 
-// extractTerms condenses prose into a comma-separated list of unique
+// ExtractTerms condenses prose into a comma-separated list of unique
 // domain-specific terms. Whisper's prompt parameter works best with
 // short, language-neutral terms — not full sentences in a potentially
 // different language than the speech. Project names and technical
 // words like "yap", "whisperlocal", "Groq" are language-independent.
-func extractTerms(s string) string {
+func ExtractTerms(s string) string {
 	words := strings.Fields(s)
 	seen := map[string]struct{}{}
 	var terms []string

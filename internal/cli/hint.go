@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Enriquefft/yap/internal/config"
@@ -74,17 +75,29 @@ func runHint(cmd *cobra.Command, cfg *config.Config, p platform.Platform) error 
 	// Resolve focused window's cwd and apply project overrides.
 	rootPath := hint.ResolveTargetCwd(target)
 	hintCfg := cfg.Hint
-	if ov, err := hint.LoadProjectOverrides(rootPath); err == nil {
-		if ov.VocabularyFiles != nil {
-			hintCfg.VocabularyFiles = *ov.VocabularyFiles
+	projectOv, ovErr := hint.LoadProjectOverrides(rootPath)
+	if ovErr == nil {
+		if projectOv.VocabularyFiles != nil {
+			hintCfg.VocabularyFiles = *projectOv.VocabularyFiles
 		}
-		if ov.Providers != nil {
-			hintCfg.Providers = *ov.Providers
+		if projectOv.Providers != nil {
+			hintCfg.Providers = *projectOv.Providers
 		}
 	}
 
-	// Read vocabulary files.
-	vocab := hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
+	// Read vocabulary. When .yap.toml provides explicit
+	// vocabulary_terms (set by `yap init`), join them directly and
+	// skip file-based extraction entirely.
+	var vocab string
+	var vocabSource string
+	if ov := projectOv.VocabularyTerms; ovErr == nil && ov != nil && len(*ov) > 0 {
+		vocab = strings.Join(*ov, ", ")
+		vocabSource = "vocabulary_terms"
+	} else {
+		vocab = hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
+		vocabSource = "vocabulary_files"
+	}
+	fmt.Fprintf(out, "vocabulary_source: %s\n", vocabSource)
 
 	// Walk providers.
 	var conversation, source string

@@ -67,6 +67,7 @@ func newRootCmd(p platform.Platform, modelMgr *models.Manager) *cobra.Command {
 	// Configuration / models.
 	root.AddCommand(newConfigCmd(&rootCfg, p))
 	root.AddCommand(newModelsCmd(modelMgr))
+	root.AddCommand(newInitCmd(&rootCfg, p))
 
 	return root
 }

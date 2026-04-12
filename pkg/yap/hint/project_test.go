@@ -76,6 +76,31 @@ enabled = false
 	}
 }
 
+func TestLoadProjectOverrides_VocabularyTerms(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".yap.toml"), []byte(`
+[hint]
+vocabulary_terms = ["yap", "whisperlocal", "Groq"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ov, err := LoadProjectOverrides(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ov.VocabularyTerms == nil {
+		t.Fatal("expected VocabularyTerms override")
+	}
+	terms := *ov.VocabularyTerms
+	if len(terms) != 3 || terms[0] != "yap" || terms[1] != "whisperlocal" || terms[2] != "Groq" {
+		t.Fatalf("unexpected VocabularyTerms: %v", terms)
+	}
+}
+
 func TestLoadProjectOverrides_EmptyHintSection(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {

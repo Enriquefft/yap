@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -759,8 +760,15 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 		return hint.Bundle{}
 	}
 
-	// Layer 1: base vocabulary from project docs (always-on).
-	vocab := hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
+	// Layer 1: base vocabulary. When .yap.toml provides explicit
+	// vocabulary_terms (set by `yap init`), join them directly and
+	// skip file-based extraction entirely.
+	var vocab string
+	if ov := projectOv.VocabularyTerms; ov != nil && len(*ov) > 0 {
+		vocab = strings.Join(*ov, ", ")
+	} else {
+		vocab = hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
+	}
 
 	// Layer 2: provider conversation context (first match wins).
 	// Skip provider walk when transform is disabled — conversation

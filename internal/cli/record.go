@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -417,8 +418,15 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		pcfg.ApplyProjectOverrides(cfg, projectOv)
 	}
 
-	// Layer 1: base vocabulary from project docs.
-	vocab := hint.ReadVocabularyFiles(rootPath, cfg.Hint.VocabularyFiles)
+	// Layer 1: base vocabulary. When .yap.toml provides explicit
+	// vocabulary_terms (set by `yap init`), join them directly and
+	// skip file-based extraction entirely.
+	var vocab string
+	if ov := projectOv.VocabularyTerms; ov != nil && len(*ov) > 0 {
+		vocab = strings.Join(*ov, ", ")
+	} else {
+		vocab = hint.ReadVocabularyFiles(rootPath, cfg.Hint.VocabularyFiles)
+	}
 
 	// Layer 2: provider conversation context.
 	var conversation string

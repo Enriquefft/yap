@@ -19,6 +19,7 @@ type projectFile struct {
 type projectHint struct {
 	Enabled              *bool     `toml:"enabled"`
 	VocabularyFiles      *[]string `toml:"vocabulary_files"`
+	VocabularyTerms      *[]string `toml:"vocabulary_terms"`
 	Providers            *[]string `toml:"providers"`
 	VocabularyMaxChars   *int      `toml:"vocabulary_max_chars"`
 	ConversationMaxChars *int      `toml:"conversation_max_chars"`
@@ -32,6 +33,7 @@ type projectHint struct {
 type ProjectOverrides struct {
 	Enabled              *bool
 	VocabularyFiles      *[]string
+	VocabularyTerms      *[]string
 	Providers            *[]string
 	VocabularyMaxChars   *int
 	ConversationMaxChars *int
@@ -76,6 +78,7 @@ func parseProjectFile(data []byte) (ProjectOverrides, error) {
 	return ProjectOverrides{
 		Enabled:              pf.Hint.Enabled,
 		VocabularyFiles:      pf.Hint.VocabularyFiles,
+		VocabularyTerms:      pf.Hint.VocabularyTerms,
 		Providers:            pf.Hint.Providers,
 		VocabularyMaxChars:   pf.Hint.VocabularyMaxChars,
 		ConversationMaxChars: pf.Hint.ConversationMaxChars,
