@@ -61,7 +61,57 @@ func ReadVocabularyFiles(startDir string, filenames []string) string {
 		dir = parent
 	}
 
-	return stripMarkdown(strings.Join(parts, "\n"))
+	return extractTerms(stripMarkdown(strings.Join(parts, "\n")))
+}
+
+// Common words filtered from vocabulary. Only domain-specific terms
+// should reach Whisper. This set covers English since project docs
+// are typically in English; the extracted terms (project names,
+// technical words) are language-neutral.
+var stopwords = map[string]struct{}{
+	"a": {}, "an": {}, "the": {}, "is": {}, "are": {}, "was": {}, "were": {},
+	"be": {}, "been": {}, "being": {}, "have": {}, "has": {}, "had": {},
+	"do": {}, "does": {}, "did": {}, "will": {}, "would": {}, "could": {},
+	"should": {}, "may": {}, "might": {}, "can": {}, "shall": {},
+	"and": {}, "or": {}, "but": {}, "if": {}, "of": {}, "at": {}, "by": {},
+	"for": {}, "with": {}, "about": {}, "to": {}, "from": {}, "in": {},
+	"on": {}, "it": {}, "its": {}, "that": {}, "this": {}, "not": {},
+	"no": {}, "so": {}, "as": {}, "than": {}, "when": {}, "what": {},
+	"which": {}, "who": {}, "how": {}, "where": {}, "all": {}, "each": {},
+	"every": {}, "any": {}, "your": {}, "you": {}, "we": {}, "our": {},
+	"their": {}, "they": {}, "he": {}, "she": {}, "his": {}, "her": {},
+	"up": {}, "out": {}, "into": {}, "also": {}, "just": {}, "only": {},
+	"more": {}, "most": {}, "very": {}, "then": {}, "there": {},
+}
+
+// extractTerms condenses prose into a comma-separated list of unique
+// domain-specific terms. Whisper's prompt parameter works best with
+// short, language-neutral terms — not full sentences in a potentially
+// different language than the speech. Project names and technical
+// words like "yap", "whisperlocal", "Groq" are language-independent.
+func extractTerms(s string) string {
+	words := strings.Fields(s)
+	seen := map[string]struct{}{}
+	var terms []string
+	for _, w := range words {
+		w = strings.Trim(w, ".,;:!?()[]{}\"'")
+		lower := strings.ToLower(w)
+		if len(lower) < 2 {
+			continue
+		}
+		if _, ok := stopwords[lower]; ok {
+			continue
+		}
+		if _, ok := seen[lower]; ok {
+			continue
+		}
+		seen[lower] = struct{}{}
+		terms = append(terms, w)
+		if len(terms) >= 40 {
+			break
+		}
+	}
+	return strings.Join(terms, ", ")
 }
 
 var (

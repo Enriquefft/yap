@@ -34,6 +34,7 @@ func TestNoPackageLevelMutableState(t *testing.T) {
 		"reHTMLTag":          {},
 		"reMultiSpace":       {},
 		"reMultiLine":        {},
+		"stopwords":          {},
 	}
 
 	entries, err := os.ReadDir(wd)

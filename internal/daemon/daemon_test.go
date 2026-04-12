@@ -951,8 +951,8 @@ func TestFetchHintBundle_FullPipeline(t *testing.T) {
 	if bundle.Vocabulary == "" {
 		t.Error("expected non-empty vocabulary")
 	}
-	if !strings.Contains(bundle.Vocabulary, "yap is a voice tool") {
-		t.Errorf("vocabulary = %q, want to contain 'yap is a voice tool'", bundle.Vocabulary)
+	if !strings.Contains(bundle.Vocabulary, "yap") {
+		t.Errorf("vocabulary = %q, want to contain 'yap'", bundle.Vocabulary)
 	}
 	if bundle.Conversation != "user: hello\nassistant: hi" {
 		t.Errorf("conversation = %q, want 'user: hello\\nassistant: hi'", bundle.Conversation)

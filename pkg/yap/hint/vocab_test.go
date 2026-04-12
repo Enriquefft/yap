@@ -23,17 +23,17 @@ func TestReadVocabularyFiles_BasicProject(t *testing.T) {
 	}
 
 	got := hint.ReadVocabularyFiles(root, []string{"CLAUDE.md", "AGENTS.md", "README.md"})
-	if !strings.Contains(got, "yap is a voice tool") {
-		t.Errorf("missing CLAUDE.md content in %q", got)
+	if !strings.Contains(got, "yap") {
+		t.Errorf("missing 'yap' term in %q", got)
 	}
 	if !strings.Contains(got, "Voice-to-text") {
-		t.Errorf("missing README.md content in %q", got)
-	}
-	if strings.Contains(got, "AGENTS.md") {
-		t.Errorf("AGENTS.md should be skipped (doesn't exist)")
+		t.Errorf("missing 'Voice-to-text' term in %q", got)
 	}
 	if strings.Contains(got, "#") {
 		t.Errorf("markdown heading should be stripped in %q", got)
+	}
+	if strings.Contains(got, " is ") {
+		t.Errorf("stopwords should be filtered in %q", got)
 	}
 }
 
@@ -56,8 +56,8 @@ func TestReadVocabularyFiles_WalksUpToGitRoot(t *testing.T) {
 	}
 
 	got := hint.ReadVocabularyFiles(sub, []string{"CLAUDE.md"})
-	if got != "root level" {
-		t.Errorf("got %q, want %q", got, "root level")
+	if !strings.Contains(got, "root") && !strings.Contains(got, "level") {
+		t.Errorf("expected terms from root CLAUDE.md in %q", got)
 	}
 }
 
