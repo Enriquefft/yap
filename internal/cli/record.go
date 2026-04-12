@@ -439,15 +439,29 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 
 	vocabMax := cfg.Hint.VocabularyMaxChars
 	if vocabMax <= 0 {
-		vocabMax = 1000
+		vocabMax = 250
 	}
 	convMax := cfg.Hint.ConversationMaxChars
 	if convMax <= 0 {
 		convMax = 8000
 	}
 
-	return transcribe.Options{Prompt: tailBytesRecord(vocab, vocabMax)},
+	return transcribe.Options{Prompt: headBytesRecord(vocab, vocabMax)},
 		transform.Options{Context: tailBytesRecord(conversation, convMax)}
+}
+
+func headBytesRecord(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	end := n
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
 }
 
 func tailBytesRecord(s string, n int) string {

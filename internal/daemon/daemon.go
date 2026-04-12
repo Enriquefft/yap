@@ -645,7 +645,7 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 
 	vocabMaxChars := d.cfg.Hint.VocabularyMaxChars
 	if vocabMaxChars <= 0 {
-		vocabMaxChars = 1000
+		vocabMaxChars = 250
 	}
 	convMaxChars := d.cfg.Hint.ConversationMaxChars
 	if convMaxChars <= 0 {
@@ -653,7 +653,7 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 	}
 
 	transcribeOpts := transcribe.Options{
-		Prompt: tailBytes(bundle.Vocabulary, vocabMaxChars),
+		Prompt: headBytes(bundle.Vocabulary, vocabMaxChars),
 	}
 	transformOpts := transform.Options{
 		Context: tailBytes(bundle.Conversation, convMaxChars),
@@ -786,8 +786,25 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 	}
 }
 
+// headBytes returns the first n bytes of s, clipping on a UTF-8 rune
+// boundary. Used for vocabulary (project name/description is at the
+// start of the document).
+func headBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	end := n
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
 // tailBytes returns the last n bytes of s, clipping on a UTF-8 rune
-// boundary. If len(s) <= n, returns s unchanged.
+// boundary. Used for conversation (recent messages are at the end).
 func tailBytes(s string, n int) string {
 	if n <= 0 {
 		return ""

@@ -284,7 +284,7 @@ in {
         };
         vocabulary_max_chars = lib.mkOption {
           type = lib.types.int;
-          default = 800;
+          default = 250;
           description = "Max bytes of vocabulary passed to Whisper prompt";
         };
         conversation_max_chars = lib.mkOption {
