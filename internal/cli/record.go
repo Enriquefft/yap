@@ -11,13 +11,18 @@ import (
 	"syscall"
 	"time"
 
+	"unicode/utf8"
+
 	"github.com/Enriquefft/yap/internal/assets"
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/daemon"
 	"github.com/Enriquefft/yap/internal/engine"
 	"github.com/Enriquefft/yap/internal/platform"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/hint"
 	"github.com/Enriquefft/yap/pkg/yap/inject"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 	"github.com/spf13/cobra"
 )
 
@@ -212,6 +217,9 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 		}
 	}()
 
+	// Fetch hint bundle for vocabulary + conversation context.
+	tOpts, xOpts := buildHintOpts(&eff, p)
+
 	runErr := eng.Run(ctx, engine.RunOptions{
 		RecordCtx:      recCtx,
 		StartChime:     assets.StartChime,
@@ -219,6 +227,8 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 		WarningChime:   assets.WarningChime,
 		TimeoutSec:     timeout,
 		StreamPartials: eff.General.StreamPartials,
+		TranscribeOpts: tOpts,
+		TransformOpts:  xOpts,
 	})
 	if runErr == nil {
 		return nil
@@ -368,3 +378,85 @@ func (r *resolveInjector) resolveAndWrite(ctx context.Context) error {
 
 // Compile-time assertion that resolveInjector satisfies inject.Injector.
 var _ inject.Injector = (*resolveInjector)(nil)
+
+// buildHintOpts fetches the hint bundle and builds per-call Options for
+// the transcribe and transform stages. This mirrors the daemon's
+// fetchHintBundle logic so `yap record` and `yap toggle` (which spawns
+// `yap record`) get the same vocabulary bias and conversation context
+// as the daemon path.
+func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options, transform.Options) {
+	if !cfg.Hint.Enabled {
+		return transcribe.Options{}, transform.Options{}
+	}
+
+	cwd, _ := os.Getwd()
+
+	// Apply per-project .yap.toml overrides.
+	projectOv, err := hint.LoadProjectOverrides(cwd)
+	if err != nil {
+		slog.Default().Debug("hint: project override load failed", "error", err)
+	} else {
+		pcfg.ApplyProjectOverrides(cfg, projectOv)
+	}
+
+	// Layer 1: base vocabulary from project docs.
+	vocab := hint.ReadVocabularyFiles(cwd, cfg.Hint.VocabularyFiles)
+
+	// Layer 2: provider conversation context.
+	var conversation string
+	timeoutMS := cfg.Hint.TimeoutMS
+	if timeoutMS <= 0 {
+		timeoutMS = 300
+	}
+	fetchCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
+	defer cancel()
+
+	for _, name := range cfg.Hint.Providers {
+		factory, err := hint.Get(name)
+		if err != nil {
+			continue
+		}
+		prov, err := factory(hint.Config{RootPath: cwd})
+		if err != nil {
+			continue
+		}
+		// yap record is always invoked from a terminal. Use a
+		// terminal-typed Target so providers that check for
+		// AppTerminal (claudecode, termscroll) match correctly.
+		target := inject.Target{AppType: inject.AppTerminal}
+		if !prov.Supports(target) {
+			continue
+		}
+		b, err := prov.Fetch(fetchCtx, target)
+		if err != nil {
+			continue
+		}
+		if b.Conversation != "" {
+			conversation = b.Conversation
+			break
+		}
+	}
+
+	vocabMax := cfg.Hint.VocabularyMaxChars
+	if vocabMax <= 0 {
+		vocabMax = 1000
+	}
+	convMax := cfg.Hint.ConversationMaxChars
+	if convMax <= 0 {
+		convMax = 8000
+	}
+
+	return transcribe.Options{Prompt: tailBytesRecord(vocab, vocabMax)},
+		transform.Options{Context: tailBytesRecord(conversation, convMax)}
+}
+
+func tailBytesRecord(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
+}
