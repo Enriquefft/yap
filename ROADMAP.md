@@ -762,7 +762,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 **Depends on:** Phase 3, Phase 4, Phase 5, Phase 6, Phase 8
 **Goal:** Whisper and the LLM transform both know *what the user is dictating into* so domain vocabulary ("yap", "whisperlocal", "OSC52") is recognized correctly at the source instead of being fixed after the fact. The motivating failure: saying "what is yap?" inside a Claude Code session on this repo and getting "what is jump?" because Whisper has no vocabulary anchor.
 
-**Key insight:** this is a lexical-bias problem, not an LLM-cleanup problem. Whisper's `prompt` parameter (OpenAI, Groq, whisper.cpp all support it) nudges token probabilities toward supplied vocabulary. The correct fix is to feed recent **canonical application state** into both the transcribe prompt and the transform system message — same source, two consumers with different token budgets. No heuristic extraction, no bag-of-words, no README-as-proxy. The canonical state of what you are dictating into is the ground truth.
+**Key insight:** this is a lexical-bias problem, not an LLM-cleanup problem. Whisper's `prompt` parameter (OpenAI, Groq, whisper.cpp all support it) nudges token probabilities toward supplied vocabulary. The fix has two orthogonal layers: (1) **project-level vocabulary** from docs files (CLAUDE.md, AGENTS.md, README.md — project instruction files that vary by LLM client but serve the same purpose) provides stable domain terms; (2) **app-specific conversation context** from the canonical application state (Claude Code session jsonl, tmux scrollback) provides recent conversational grounding. Layer 1 is always-on and provider-independent. Layer 2 fires when a hint provider matches the focused app. Both layers are configurable per project.
 
 ### Interface changes (breaking, pre-1.0)
 
@@ -778,9 +778,11 @@ Merged in commit `770edee` (2026-04). All tests pass.
 ### New package: `pkg/yap/hint/`
 
 - [ ] `pkg/yap/hint/hint.go` — `Provider` interface (`Name`, `Supports(target)`, `Fetch(ctx, target) (Bundle, error)`), `Bundle{Vocabulary, Conversation, Source}`, `Factory`, `Config{RootPath}`, `Register/Get/Providers` registry (identical shape to `pkg/yap/transcribe`)
+- [ ] `pkg/yap/hint/vocab.go` — `ReadVocabularyFiles(root string, filenames []string) string` utility: walks from cwd up to git root, reads each file if found, concatenates with `\n---\n` separators, returns natural text. Used by the daemon's base-vocabulary layer, not by individual providers.
 - [ ] `pkg/yap/hint/hint_test.go` — registry tests
+- [ ] `pkg/yap/hint/vocab_test.go` — tests the file-reading utility against t.TempDir fixtures
 - [ ] `pkg/yap/hint/noglobals_test.go` — AST guard matching existing packages
-- [ ] Bundle semantics: **same natural text for both fields on Phase 12**. Future providers may return different text per field when they have structured state (e.g. an AT-SPI provider could return focused-element text for vocabulary and the surrounding paragraph for conversation). Phase 12 keeps it simple: providers return one block of canonical recent text, engine truncates per-stage.
+- [ ] Bundle semantics: `Vocabulary` and `Conversation` are **two orthogonal fields** with different sources. Vocabulary = project docs (CLAUDE.md, AGENTS.md, README.md — project instruction files that vary by LLM provider client but serve identical purposes) read by the daemon's base layer. Conversation = app-specific state returned by the matched provider. Vocabulary feeds the Whisper prompt (lexical bias). Conversation feeds the transform context (intent grounding). A recording session can have Vocabulary without Conversation (no provider matched) but not the reverse — the base vocabulary layer is always-on when hint.enabled=true.
 
 ### Linux providers (the two shipped in Phase 12)
 
@@ -789,13 +791,16 @@ Merged in commit `770edee` (2026-04). All tests pass.
   - Latest session = the jsonl in that directory with the most recent mtime
   - Parses user + assistant entries, extracts `message.content` strings (and text blocks from assistant arrays), skips meta / command-caveat / tool-use entries
   - Formats as natural `user: … / assistant: …` prose
+  - Returns **only `Bundle.Conversation`** — vocabulary is handled by the daemon's base layer (CLAUDE.md / AGENTS.md / README.md). The claudecode provider does NOT read project docs; it provides session-specific conversational context only.
   - `Supports` matches on `target.AppType == AppTerminal` or `target.Tmux`
   - Graceful empty bundle when no session file exists (not an error)
 - [ ] `pkg/yap/hint/tmuxpane/` — shells `tmux capture-pane -p -S -500 -t $TMUX_PANE`
   - Strips ANSI sequences, returns the raw terminal buffer text
+  - Returns **only `Bundle.Conversation`** — vocabulary is the daemon's base layer
   - `Supports` matches on `target.Tmux`
   - Non-tmux sessions return an empty bundle (not an error)
   - Graceful empty when `tmux` is not on `$PATH`
+  - **Does NOT fire when the claudecode provider already matched** — the provider walk is first-match-wins and claudecode ranks above tmuxpane in the default list. Tmux scrollback is a noisy superset of the session jsonl; the structured jsonl is strictly better when available.
 
 ### Active-window detection reuse
 
@@ -806,7 +811,8 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 - [ ] `pkg/yap/config.HintConfig` under `Config.Hint`:
   - `enabled bool`
-  - `providers []string` — ordered fallback list (default: `["claudecode","tmuxpane"]`)
+  - `vocabulary_files []string` — project doc filenames to read for base vocabulary (default: `["CLAUDE.md", "AGENTS.md", "README.md"]`). LLM provider clients use different instruction file names (CLAUDE.md for Claude Code, AGENTS.md for others, .cursorrules for Cursor, etc.) — the default covers the common ones. Users configure per-project by editing their config.
+  - `providers []string` — ordered fallback list for conversation context (default: `["claudecode","tmuxpane"]`)
   - `vocabulary_max_chars int` — Whisper prompt budget (default: 1000 bytes ≈ ~250 tokens, leaving margin under Whisper's 224-token window)
   - `conversation_max_chars int` — transform context budget (default: 8000 bytes)
   - `timeout_ms int` — wall-time budget on the provider walk (default: 300ms; hard cap so a stuck provider never delays audio capture)
@@ -817,13 +823,13 @@ Merged in commit `770edee` (2026-04). All tests pass.
 ### Daemon wiring
 
 - [ ] `Daemon` struct gains `hintProviders []hint.Provider` built at startup from `cfg.Hint.Providers` via the registry
-- [ ] `startRecording` calls a new `fetchHintBundle(ctx)` helper BEFORE audio capture:
-  1. Bounded `fetchCtx` with `cfg.Hint.TimeoutMS`
-  2. `d.injector.(inject.StrategyResolver).Resolve(fetchCtx)` → `Target`
-  3. Walk `hintProviders` in order, first provider whose `Supports(target)` returns true AND whose `Fetch` returns a non-empty Bundle wins
+- [ ] `startRecording` calls a new `fetchHintBundle(ctx)` helper BEFORE audio capture. Two-layer assembly:
+  1. **Base vocabulary layer (always-on):** `hint.ReadVocabularyFiles(cwd, cfg.Hint.VocabularyFiles)` reads project docs (CLAUDE.md, AGENTS.md, README.md, etc.) from cwd walking up to git root. Returns natural text with domain terms. This layer fires regardless of whether any provider matches, so Whisper always gets project vocabulary.
+  2. **Provider conversation layer:** bounded `fetchCtx` with `cfg.Hint.TimeoutMS`, `d.injector.(inject.StrategyResolver).Resolve(fetchCtx)` → `Target`, walk `hintProviders` in order, first provider whose `Supports(target)` returns true AND whose `Fetch` returns a non-empty Bundle.Conversation wins.
+  3. Assemble final `Bundle{Vocabulary: baseVocab, Conversation: provider.Conversation, Source: provider.Name()}`
   4. Provider errors are non-fatal: log at debug, try next
-  5. Empty return is a legal null case — the pipeline runs identically to today
-- [ ] Bundle threaded into `engine.RunOptions.Bundle` so the engine owns the per-stage truncation
+  5. Empty conversation is a legal null case — the pipeline still benefits from project vocabulary
+- [ ] Bundle threaded into `engine.RunOptions` (daemon builds `transcribe.Options` and `transform.Options` from the bundle and budget fields, engine receives ready-made Options)
 
 ### CLI
 
@@ -857,7 +863,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
 - **macOS AX provider** — rides with Phase 14 (macOS Support).
 - **Windows UIA provider** — rides with Phase 15 (Windows Support).
-- **Static project vocabulary** (README / CLAUDE.md tokenization). Explicitly **rejected**: README is documentation, not state. Using it as a vocabulary proxy duplicates "what matters right now" across two places and guarantees drift. The session file is ground truth; anything else is a shadow.
+- **Per-project config overlay** (`.yap.toml` in repo root merged with user config). Enables truly per-repo `vocabulary_files` and `providers` without editing the global config. Revisit when multiple-project usage becomes common.
 
 ---
 
