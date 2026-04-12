@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/Enriquefft/yap/internal/config"
@@ -72,20 +71,31 @@ func runHint(cmd *cobra.Command, cfg *config.Config, p platform.Platform) error 
 	// Print target.
 	writeHintTarget(out, target)
 
+	// Resolve focused window's cwd and apply project overrides.
+	rootPath := hint.ResolveTargetCwd(target)
+	hintCfg := cfg.Hint
+	if ov, err := hint.LoadProjectOverrides(rootPath); err == nil {
+		if ov.VocabularyFiles != nil {
+			hintCfg.VocabularyFiles = *ov.VocabularyFiles
+		}
+		if ov.Providers != nil {
+			hintCfg.Providers = *ov.Providers
+		}
+	}
+
 	// Read vocabulary files.
-	cwd, _ := os.Getwd()
-	vocab := hint.ReadVocabularyFiles(cwd, cfg.Hint.VocabularyFiles)
+	vocab := hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
 
 	// Walk providers.
 	var conversation, source string
 	var providerErr string
-	for _, name := range cfg.Hint.Providers {
+	for _, name := range hintCfg.Providers {
 		factory, err := hint.Get(name)
 		if err != nil {
 			fmt.Fprintf(out, "provider %q: unknown, skipping\n", name)
 			continue
 		}
-		prov, err := factory(hint.Config{RootPath: cwd})
+		prov, err := factory(hint.Config{RootPath: rootPath})
 		if err != nil {
 			fmt.Fprintf(out, "provider %q: construction failed: %v\n", name, err)
 			continue
