@@ -763,10 +763,13 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 	vocab := hint.ReadVocabularyFiles(rootPath, hintCfg.VocabularyFiles)
 
 	// Layer 2: provider conversation context (first match wins).
+	// Skip provider walk when transform is disabled — conversation
+	// context only feeds the transform stage, so fetching it without
+	// a transform backend is wasted work.
 	var conversation string
 	var source string
 
-	if !targetResolved {
+	if !targetResolved || !d.cfg.Transform.Enabled {
 		return hint.Bundle{Vocabulary: vocab}
 	}
 

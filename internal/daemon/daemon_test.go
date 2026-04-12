@@ -948,6 +948,7 @@ func TestFetchHintBundle_FullPipeline(t *testing.T) {
 	cfg.Hint.VocabularyFiles = []string{"CLAUDE.md"}
 	cfg.Hint.Providers = []string{"test-full-pipeline"}
 	cfg.Hint.TimeoutMS = 500
+	cfg.Transform.Enabled = true
 	c := config.Config(cfg)
 
 	d := &Daemon{
@@ -1033,6 +1034,7 @@ func TestFetchHintBundle_ProviderFails_SkipsToNext(t *testing.T) {
 	cfg.Hint.VocabularyFiles = nil
 	cfg.Hint.Providers = []string{"test-failing", "test-fallback"}
 	cfg.Hint.TimeoutMS = 500
+	cfg.Transform.Enabled = true
 	c := config.Config(cfg)
 
 	d := &Daemon{
