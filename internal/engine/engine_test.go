@@ -14,6 +14,7 @@ import (
 	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe/mock"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 	"github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -525,6 +526,77 @@ func TestEngineRun_EncodeError_IsWrapped(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, encodeErr)
 	require.Contains(t, err.Error(), "encode:")
+}
+
+// capturingTransformer is a passthrough that records the Options it
+// was called with. Tests use it to verify the engine threads per-call
+// Options through to the transformer unchanged.
+type capturingTransformer struct {
+	mu   sync.Mutex
+	opts transform.Options
+}
+
+func (c *capturingTransformer) Transform(ctx context.Context, in <-chan transcribe.TranscriptChunk, opts transform.Options) (<-chan transcribe.TranscriptChunk, error) {
+	c.mu.Lock()
+	c.opts = opts
+	c.mu.Unlock()
+	out := make(chan transcribe.TranscriptChunk)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case chunk, ok := <-in:
+				if !ok {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case out <- chunk:
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+func (c *capturingTransformer) LastOptions() transform.Options {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.opts
+}
+
+func TestEngineRun_OptionsThreadedThroughPipeline(t *testing.T) {
+	// Non-empty TranscribeOpts.Prompt and TransformOpts.Context must
+	// reach the mock backends unchanged.
+	backend := mock.New(transcribe.TranscriptChunk{Text: "ok", IsFinal: true})
+	rec := &mockRecorder{wavData: []byte("fake-wav")}
+	chime := &mockChime{}
+	injector := &recordingInjector{}
+	tx := &capturingTransformer{}
+
+	eng, err := engine.New(rec, chime, backend, tx, injector, nil)
+	require.NoError(t, err)
+
+	guard := goroutineLeakGuard(t)
+	err = eng.Run(context.Background(), engine.RunOptions{
+		RecordCtx:      preCancelledRecCtx(),
+		StreamPartials: true,
+		TranscribeOpts: transcribe.Options{Prompt: "yap whisperlocal OSC52"},
+		TransformOpts:  transform.Options{Context: "user: what is yap?"},
+	})
+	require.NoError(t, err)
+	guard()
+
+	// Assert the mock transcriber captured the prompt.
+	gotPrompt := backend.LastOptions().Prompt
+	assert.Equal(t, "yap whisperlocal OSC52", gotPrompt, "TranscribeOpts.Prompt not threaded")
+
+	// Assert the capturing transformer captured the context.
+	gotCtx := tx.LastOptions().Context
+	assert.Equal(t, "user: what is yap?", gotCtx, "TransformOpts.Context not threaded")
 }
 
 func TestEngineRun_NilChimeSourcesAreSafe(t *testing.T) {
