@@ -1,0 +1,11 @@
+{"type":"system","message":{"content":"permission granted"},"isMeta":true,"timestamp":"2026-04-11T10:00:00Z"}
+{"type":"user","message":{"content":"file history snapshot data"},"isMeta":true,"timestamp":"2026-04-11T10:00:01Z"}
+{"type":"user","message":{"content":"<local-command-caveat>This is a local command warning</local-command-caveat>"},"isMeta":false,"timestamp":"2026-04-11T10:00:02Z"}
+{"type":"user","message":{"content":"<command-name>some-command</command-name>"},"isMeta":false,"timestamp":"2026-04-11T10:00:03Z"}
+{"type":"user","message":{"content":"What is yap?"},"isMeta":false,"timestamp":"2026-04-11T10:01:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"yap is a voice-to-text tool."},{"type":"tool_use","name":"Read","input":{"path":"/tmp/foo"}},{"type":"thinking","text":"Let me think about this..."}]},"timestamp":"2026-04-11T10:01:05Z"}
+{"type":"user","message":{"content":"How does the daemon work?"},"isMeta":false,"timestamp":"2026-04-11T10:02:00Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The daemon listens for hotkey events"},{"type":"text","text":"and records audio when held."}]},"timestamp":"2026-04-11T10:02:05Z"}
+{"type":"user","message":{"content":"Can you add a test?"},"isMeta":false,"timestamp":"2026-04-11T10:03:00Z"}
+{"type":"user","message":{"content":"Actually, fix the bug first."},"isMeta":false,"timestamp":"2026-04-11T10:03:30Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'll fix the bug in the daemon package."},{"type":"tool_use","name":"Edit","input":{"path":"/tmp/bar"}}]},"timestamp":"2026-04-11T10:03:35Z"}

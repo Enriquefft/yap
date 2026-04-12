@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"github.com/Enriquefft/yap/internal/pidfile"
 	"github.com/Enriquefft/yap/internal/platform"
 	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/hint"
 	"github.com/Enriquefft/yap/pkg/yap/inject"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/Enriquefft/yap/pkg/yap/transform"
@@ -779,5 +781,325 @@ func TestCaptureHandler_WithAttrsGroup_RaceFree(t *testing.T) {
 	}
 	if !sawChildGroup {
 		t.Error("derived WithGroup handler did not emit its bound attribute into the shared buffer")
+	}
+}
+
+// -- tailBytes tests ---------------------------------------------------
+
+func TestTailBytes_EmptyString(t *testing.T) {
+	if got := tailBytes("", 100); got != "" {
+		t.Errorf("tailBytes(\"\", 100) = %q, want \"\"", got)
+	}
+}
+
+func TestTailBytes_ShorterThanBudget(t *testing.T) {
+	s := "hello"
+	if got := tailBytes(s, 100); got != s {
+		t.Errorf("tailBytes(%q, 100) = %q, want %q", s, got, s)
+	}
+}
+
+func TestTailBytes_ExactBudget(t *testing.T) {
+	s := "hello"
+	if got := tailBytes(s, 5); got != s {
+		t.Errorf("tailBytes(%q, 5) = %q, want %q", s, got, s)
+	}
+}
+
+func TestTailBytes_LongerThanBudget(t *testing.T) {
+	s := "hello world"
+	got := tailBytes(s, 5)
+	if got != "world" {
+		t.Errorf("tailBytes(%q, 5) = %q, want %q", s, got, "world")
+	}
+}
+
+func TestTailBytes_ZeroBudget(t *testing.T) {
+	if got := tailBytes("hello", 0); got != "" {
+		t.Errorf("tailBytes(\"hello\", 0) = %q, want \"\"", got)
+	}
+}
+
+func TestTailBytes_NegativeBudget(t *testing.T) {
+	if got := tailBytes("hello", -1); got != "" {
+		t.Errorf("tailBytes(\"hello\", -1) = %q, want \"\"", got)
+	}
+}
+
+func TestTailBytes_MultiByte_UTF8_AtBoundary(t *testing.T) {
+	// "café" is c(1) a(1) f(1) é(2) = 5 bytes.
+	// Asking for 4 bytes: offset = 5-4 = 1 ('a'), which is a valid
+	// rune start, so we get "afé" (4 bytes).
+	s := "café"
+	got := tailBytes(s, 4)
+	if got != "afé" {
+		t.Errorf("tailBytes(%q, 4) = %q, want %q", s, got, "afé")
+	}
+
+	// Asking for 3 bytes: offset = 5-3 = 2 ('f'), which is a valid
+	// rune start, so we get "fé" (3 bytes).
+	got = tailBytes(s, 3)
+	if got != "fé" {
+		t.Errorf("tailBytes(%q, 3) = %q, want %q", s, got, "fé")
+	}
+
+	// Asking for 2 bytes: offset = 5-2 = 3, which lands inside the
+	// 2-byte 'é' sequence. tailBytes must skip forward to the next
+	// rune start (byte 4), yielding only "é" (2 bytes).
+	got = tailBytes(s, 2)
+	if got != "é" {
+		t.Errorf("tailBytes(%q, 2) = %q, want %q", s, got, "é")
+	}
+}
+
+func TestTailBytes_MultiByte_3Byte_Rune(t *testing.T) {
+	// "ab€cd" — '€' is 3 bytes (E2 82 AC). Total: a(1) b(1) €(3) c(1) d(1) = 7.
+	// Budget 4: offset = 7-4 = 3, lands at byte 3 which is inside '€' (byte 2 of 3).
+	// Skip forward to byte 5 ('c'), yielding "cd" (2 bytes).
+	s := "ab€cd"
+	got := tailBytes(s, 4)
+	if got != "cd" {
+		t.Errorf("tailBytes(%q, 4) = %q, want %q", s, got, "cd")
+	}
+}
+
+// -- fetchHintBundle tests ---------------------------------------------
+
+// fakeHintResolver satisfies inject.Injector AND inject.StrategyResolver.
+type fakeHintResolver struct {
+	target     inject.Target
+	resolveErr error
+}
+
+func (f *fakeHintResolver) Inject(_ context.Context, _ string) error { return nil }
+func (f *fakeHintResolver) InjectStream(_ context.Context, in <-chan transcribe.TranscriptChunk) error {
+	for range in {
+	}
+	return nil
+}
+func (f *fakeHintResolver) Resolve(_ context.Context) (inject.StrategyDecision, error) {
+	if f.resolveErr != nil {
+		return inject.StrategyDecision{}, f.resolveErr
+	}
+	return inject.StrategyDecision{Target: f.target}, nil
+}
+
+var _ inject.Injector = (*fakeHintResolver)(nil)
+var _ inject.StrategyResolver = (*fakeHintResolver)(nil)
+
+// fakeHintProvider is a test-only hint.Provider.
+type fakeHintProvider struct {
+	name         string
+	supports     bool
+	conversation string
+	fetchErr     error
+}
+
+func (f *fakeHintProvider) Name() string                { return f.name }
+func (f *fakeHintProvider) Supports(_ inject.Target) bool { return f.supports }
+func (f *fakeHintProvider) Fetch(_ context.Context, _ inject.Target) (hint.Bundle, error) {
+	if f.fetchErr != nil {
+		return hint.Bundle{}, f.fetchErr
+	}
+	return hint.Bundle{Conversation: f.conversation, Source: f.name}, nil
+}
+
+func TestFetchHintBundle_FullPipeline(t *testing.T) {
+	// Set up a temp directory with a vocabulary file.
+	tmp := t.TempDir()
+	vocabFile := filepath.Join(tmp, "CLAUDE.md")
+	if err := os.WriteFile(vocabFile, []byte("yap is a voice tool"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Create .git so ReadVocabularyFiles stops here.
+	if err := os.MkdirAll(filepath.Join(tmp, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = true
+	cfg.Hint.VocabularyFiles = []string{"CLAUDE.md"}
+	cfg.Hint.TimeoutMS = 500
+	c := config.Config(cfg)
+
+	d := &Daemon{
+		cfg: &c,
+		ctx: context.Background(),
+		injector: &fakeHintResolver{
+			target: inject.Target{
+				DisplayServer: "wayland",
+				AppClass:      "foot",
+				AppType:       inject.AppTerminal,
+			},
+		},
+		hintProviders: []hint.Provider{
+			&fakeHintProvider{
+				name:         "test-provider",
+				supports:     true,
+				conversation: "user: hello\nassistant: hi",
+			},
+		},
+	}
+
+	bundle := d.fetchHintBundle()
+	if bundle.Vocabulary == "" {
+		t.Error("expected non-empty vocabulary")
+	}
+	if !strings.Contains(bundle.Vocabulary, "yap is a voice tool") {
+		t.Errorf("vocabulary = %q, want to contain 'yap is a voice tool'", bundle.Vocabulary)
+	}
+	if bundle.Conversation != "user: hello\nassistant: hi" {
+		t.Errorf("conversation = %q, want 'user: hello\\nassistant: hi'", bundle.Conversation)
+	}
+	if bundle.Source != "test-provider" {
+		t.Errorf("source = %q, want 'test-provider'", bundle.Source)
+	}
+}
+
+func TestFetchHintBundle_Disabled(t *testing.T) {
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = false
+	c := config.Config(cfg)
+
+	d := &Daemon{cfg: &c, ctx: context.Background()}
+	bundle := d.fetchHintBundle()
+	if bundle.Vocabulary != "" || bundle.Conversation != "" {
+		t.Errorf("expected empty bundle when disabled, got %+v", bundle)
+	}
+}
+
+func TestFetchHintBundle_NoProviders_VocabularyOnly(t *testing.T) {
+	tmp := t.TempDir()
+	vocabFile := filepath.Join(tmp, "README.md")
+	if err := os.WriteFile(vocabFile, []byte("domain terms here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = true
+	cfg.Hint.VocabularyFiles = []string{"README.md"}
+	c := config.Config(cfg)
+
+	d := &Daemon{
+		cfg: &c,
+		ctx: context.Background(),
+		injector: &fakeHintResolver{
+			target: inject.Target{AppType: inject.AppTerminal},
+		},
+		hintProviders: nil, // no providers
+	}
+
+	bundle := d.fetchHintBundle()
+	if bundle.Vocabulary == "" {
+		t.Error("expected vocabulary from README.md")
+	}
+	if bundle.Conversation != "" {
+		t.Error("expected empty conversation with no providers")
+	}
+}
+
+func TestFetchHintBundle_ProviderFails_SkipsToNext(t *testing.T) {
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = true
+	cfg.Hint.VocabularyFiles = nil
+	cfg.Hint.TimeoutMS = 500
+	c := config.Config(cfg)
+
+	d := &Daemon{
+		cfg: &c,
+		ctx: context.Background(),
+		injector: &fakeHintResolver{
+			target: inject.Target{AppType: inject.AppTerminal},
+		},
+		hintProviders: []hint.Provider{
+			&fakeHintProvider{
+				name:     "failing",
+				supports: true,
+				fetchErr: errors.New("provider exploded"),
+			},
+			&fakeHintProvider{
+				name:         "fallback",
+				supports:     true,
+				conversation: "fallback conversation",
+			},
+		},
+	}
+
+	bundle := d.fetchHintBundle()
+	if bundle.Conversation != "fallback conversation" {
+		t.Errorf("conversation = %q, want 'fallback conversation'", bundle.Conversation)
+	}
+	if bundle.Source != "fallback" {
+		t.Errorf("source = %q, want 'fallback'", bundle.Source)
+	}
+}
+
+func TestFetchHintBundle_NoStrategyResolver_VocabularyOnly(t *testing.T) {
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = true
+	cfg.Hint.VocabularyFiles = nil
+	c := config.Config(cfg)
+
+	// fakeDaemonInjector does NOT implement StrategyResolver.
+	d := &Daemon{
+		cfg:      &c,
+		ctx:      context.Background(),
+		injector: &fakeDaemonInjector{},
+		hintProviders: []hint.Provider{
+			&fakeHintProvider{
+				name:         "should-not-match",
+				supports:     true,
+				conversation: "this should not appear",
+			},
+		},
+	}
+
+	bundle := d.fetchHintBundle()
+	// Without StrategyResolver, providers are never walked.
+	if bundle.Conversation != "" {
+		t.Errorf("expected empty conversation without StrategyResolver, got %q", bundle.Conversation)
+	}
+}
+
+func TestFetchHintBundle_ResolveError_VocabularyOnly(t *testing.T) {
+	cfg := pcfg.DefaultConfig()
+	cfg.Hint.Enabled = true
+	cfg.Hint.VocabularyFiles = nil
+	cfg.Hint.TimeoutMS = 500
+	c := config.Config(cfg)
+
+	d := &Daemon{
+		cfg: &c,
+		ctx: context.Background(),
+		injector: &fakeHintResolver{
+			resolveErr: errors.New("no display"),
+		},
+		hintProviders: []hint.Provider{
+			&fakeHintProvider{
+				name:         "should-not-run",
+				supports:     true,
+				conversation: "nope",
+			},
+		},
+	}
+
+	bundle := d.fetchHintBundle()
+	if bundle.Conversation != "" {
+		t.Errorf("expected empty conversation on resolve error, got %q", bundle.Conversation)
 	}
 }

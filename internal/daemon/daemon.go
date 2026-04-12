@@ -11,6 +11,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Enriquefft/yap/internal/assets"
 	"github.com/Enriquefft/yap/internal/config"
@@ -19,6 +20,8 @@ import (
 	"github.com/Enriquefft/yap/internal/pidfile"
 	"github.com/Enriquefft/yap/internal/platform"
 	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/hint"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
 	"github.com/Enriquefft/yap/pkg/yap/silence"
 	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	// Register every transcribe backend the daemon can select at
@@ -35,6 +38,9 @@ import (
 	_ "github.com/Enriquefft/yap/pkg/yap/transform/local"
 	_ "github.com/Enriquefft/yap/pkg/yap/transform/openai"
 	_ "github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
+	// Register hint providers for context-aware pipeline (Phase 12).
+	_ "github.com/Enriquefft/yap/pkg/yap/hint/claudecode"
+	_ "github.com/Enriquefft/yap/pkg/yap/hint/termscroll"
 )
 
 // Deps holds all injectable dependencies for the daemon.
@@ -344,13 +350,15 @@ func (rs *recordState) cancelRecording() {
 
 // Daemon represents the background process.
 type Daemon struct {
-	cfg      *config.Config
-	ctx      context.Context
-	state    recordState
-	eng      *engine.Engine
-	recorder platform.Recorder
-	chime    platform.ChimePlayer
-	notifier platform.Notifier
+	cfg           *config.Config
+	ctx           context.Context
+	state         recordState
+	eng           *engine.Engine
+	recorder      platform.Recorder
+	chime         platform.ChimePlayer
+	notifier      platform.Notifier
+	injector      inject.Injector
+	hintProviders []hint.Provider
 }
 
 // New creates a new Daemon. Kept for test compatibility.
@@ -482,13 +490,37 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("engine init: %w", err)
 	}
 
+	// Build hint providers from the registry when the hint pipeline is
+	// enabled. Unknown or broken providers are non-fatal: the daemon
+	// logs a warning and skips them so a single misconfigured provider
+	// never blocks startup.
+	var hintProviders []hint.Provider
+	if cfg.Hint.Enabled {
+		for _, name := range cfg.Hint.Providers {
+			factory, err := hint.Get(name)
+			if err != nil {
+				slog.Default().Warn("hint: unknown provider, skipping", "name", name, "error", err)
+				continue
+			}
+			cwd, _ := os.Getwd()
+			p, err := factory(hint.Config{RootPath: cwd})
+			if err != nil {
+				slog.Default().Warn("hint: provider construction failed, skipping", "name", name, "error", err)
+				continue
+			}
+			hintProviders = append(hintProviders, p)
+		}
+	}
+
 	d := &Daemon{
-		cfg:      cfg,
-		ctx:      ctx,
-		eng:      eng,
-		recorder: rec,
-		chime:    deps.Platform.Chime,
-		notifier: deps.Platform.Notifier,
+		cfg:           cfg,
+		ctx:           ctx,
+		eng:           eng,
+		recorder:      rec,
+		chime:         deps.Platform.Chime,
+		notifier:      deps.Platform.Notifier,
+		injector:      injector,
+		hintProviders: hintProviders,
 	}
 
 	// Resolve the on-disk config path so the status response can
@@ -588,6 +620,34 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 	slog.Default().Info("state", "from", stateIdle, "to", stateRecording)
 	d.state.setState(stateRecording)
 
+	// Fetch hint bundle BEFORE audio capture. The bundle assembly is
+	// bounded by cfg.Hint.TimeoutMS so a stuck provider never delays
+	// recording start. The result is threaded into RunOptions below.
+	bundle := d.fetchHintBundle()
+	if bundle.Vocabulary != "" || bundle.Conversation != "" {
+		slog.Default().Info("hint: bundle ready",
+			"vocab_bytes", len(bundle.Vocabulary),
+			"conversation_bytes", len(bundle.Conversation),
+			"source", bundle.Source,
+		)
+	}
+
+	vocabMaxChars := d.cfg.Hint.VocabularyMaxChars
+	if vocabMaxChars <= 0 {
+		vocabMaxChars = 1000
+	}
+	convMaxChars := d.cfg.Hint.ConversationMaxChars
+	if convMaxChars <= 0 {
+		convMaxChars = 8000
+	}
+
+	transcribeOpts := transcribe.Options{
+		Prompt: tailBytes(bundle.Vocabulary, vocabMaxChars),
+	}
+	transformOpts := transform.Options{
+		Context: tailBytes(bundle.Conversation, convMaxChars),
+	}
+
 	// Wire silence detection into the recorder's frame callback when
 	// enabled. The detector fires onWarning ~1s before silence auto-stop
 	// and onSilence to cancel the recording context.
@@ -638,8 +698,8 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 				slog.Default().Info("state", "from", stateRecording, "to", stateProcessing)
 				d.state.setState(stateProcessing)
 			},
-			TranscribeOpts: transcribe.Options{},
-			TransformOpts:  transform.Options{},
+			TranscribeOpts: transcribeOpts,
+			TransformOpts:  transformOpts,
 		})
 		if err != nil &&
 			!errors.Is(err, context.Canceled) &&
@@ -649,6 +709,87 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 		}
 	}()
 	return true
+}
+
+// fetchHintBundle assembles the two-layer hint Bundle the daemon uses
+// to bias Whisper and ground the transform LLM. Layer 1 (base
+// vocabulary) reads project docs from cwd to git root — always-on
+// when hint.enabled is true. Layer 2 (conversation context) resolves
+// the focused window via the injector's StrategyResolver, walks the
+// hint providers, and takes the first non-empty conversation. Provider
+// errors are non-fatal: logged at debug, skipped.
+func (d *Daemon) fetchHintBundle() hint.Bundle {
+	if !d.cfg.Hint.Enabled {
+		return hint.Bundle{}
+	}
+
+	// Layer 1: base vocabulary from project docs (always-on).
+	cwd, _ := os.Getwd()
+	vocab := hint.ReadVocabularyFiles(cwd, d.cfg.Hint.VocabularyFiles)
+
+	// Layer 2: provider conversation context (first match wins).
+	var conversation string
+	var source string
+
+	timeoutMS := d.cfg.Hint.TimeoutMS
+	if timeoutMS <= 0 {
+		timeoutMS = 300
+	}
+	fetchCtx, cancel := context.WithTimeout(d.ctx, time.Duration(timeoutMS)*time.Millisecond)
+	defer cancel()
+
+	// Resolve target via the injector's StrategyResolver (Phase 4
+	// pure query). When the injector does not implement the optional
+	// interface, we return vocabulary-only — this is the correct
+	// degraded behavior for platforms that haven't shipped Resolve.
+	resolver, ok := d.injector.(inject.StrategyResolver)
+	if !ok {
+		return hint.Bundle{Vocabulary: vocab}
+	}
+	decision, err := resolver.Resolve(fetchCtx)
+	if err != nil {
+		slog.Default().Debug("hint: target resolution failed", "error", err)
+		return hint.Bundle{Vocabulary: vocab}
+	}
+
+	for _, p := range d.hintProviders {
+		if !p.Supports(decision.Target) {
+			continue
+		}
+		b, err := p.Fetch(fetchCtx, decision.Target)
+		if err != nil {
+			slog.Default().Debug("hint: provider failed", "provider", p.Name(), "error", err)
+			continue
+		}
+		if b.Conversation != "" {
+			conversation = b.Conversation
+			source = p.Name()
+			break
+		}
+	}
+
+	return hint.Bundle{
+		Vocabulary:   vocab,
+		Conversation: conversation,
+		Source:        source,
+	}
+}
+
+// tailBytes returns the last n bytes of s, clipping on a UTF-8 rune
+// boundary. If len(s) <= n, returns s unchanged.
+func tailBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	// Start from len(s)-n and scan forward to the next valid rune start.
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }
 
 // toggleRecording toggles recording state for the IPC toggle command

@@ -62,6 +62,7 @@ func newRootCmd(p platform.Platform, modelMgr *models.Manager) *cobra.Command {
 	root.AddCommand(newStatusCmd(&rootCfg))
 	root.AddCommand(newToggleCmd(&rootCfg))
 	root.AddCommand(newDevicesCmd(p))
+	root.AddCommand(newHintCmd(&rootCfg, p))
 
 	// Configuration / models.
 	root.AddCommand(newConfigCmd(&rootCfg, p))
