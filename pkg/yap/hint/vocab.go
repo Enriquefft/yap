@@ -69,19 +69,62 @@ func ReadVocabularyFiles(startDir string, filenames []string) string {
 // are typically in English; the extracted terms (project names,
 // technical words) are language-neutral.
 var stopwords = map[string]struct{}{
-	"a": {}, "an": {}, "the": {}, "is": {}, "are": {}, "was": {}, "were": {},
-	"be": {}, "been": {}, "being": {}, "have": {}, "has": {}, "had": {},
-	"do": {}, "does": {}, "did": {}, "will": {}, "would": {}, "could": {},
-	"should": {}, "may": {}, "might": {}, "can": {}, "shall": {},
+	// articles, determiners
+	"a": {}, "an": {}, "the": {}, "this": {}, "that": {}, "these": {}, "those": {},
+	// be verbs
+	"is": {}, "are": {}, "was": {}, "were": {}, "be": {}, "been": {}, "being": {},
+	// have verbs
+	"have": {}, "has": {}, "had": {}, "having": {},
+	// do verbs
+	"do": {}, "does": {}, "did": {}, "doing": {},
+	// modals
+	"will": {}, "would": {}, "could": {}, "should": {}, "may": {}, "might": {},
+	"can": {}, "shall": {}, "must": {},
+	// conjunctions, prepositions
 	"and": {}, "or": {}, "but": {}, "if": {}, "of": {}, "at": {}, "by": {},
 	"for": {}, "with": {}, "about": {}, "to": {}, "from": {}, "in": {},
-	"on": {}, "it": {}, "its": {}, "that": {}, "this": {}, "not": {},
-	"no": {}, "so": {}, "as": {}, "than": {}, "when": {}, "what": {},
-	"which": {}, "who": {}, "how": {}, "where": {}, "all": {}, "each": {},
-	"every": {}, "any": {}, "your": {}, "you": {}, "we": {}, "our": {},
-	"their": {}, "they": {}, "he": {}, "she": {}, "his": {}, "her": {},
-	"up": {}, "out": {}, "into": {}, "also": {}, "just": {}, "only": {},
-	"more": {}, "most": {}, "very": {}, "then": {}, "there": {},
+	"on": {}, "into": {}, "onto": {}, "upon": {}, "between": {}, "through": {},
+	"during": {}, "before": {}, "after": {}, "above": {}, "below": {},
+	"under": {}, "over": {}, "without": {}, "within": {}, "along": {},
+	// pronouns
+	"it": {}, "its": {}, "you": {}, "your": {}, "you're": {}, "we": {},
+	"our": {}, "they": {}, "their": {}, "them": {}, "he": {}, "she": {},
+	"his": {}, "her": {}, "my": {}, "me": {}, "us": {}, "him": {},
+	// common verbs
+	"use": {}, "used": {}, "uses": {}, "using": {},
+	"make": {}, "made": {}, "makes": {}, "making": {},
+	"get": {}, "gets": {}, "got": {}, "getting": {},
+	"set": {}, "sets": {}, "setting": {},
+	"see": {}, "saw": {}, "seen": {}, "seeing": {},
+	"run": {}, "runs": {}, "running": {}, "ran": {},
+	"take": {}, "takes": {}, "took": {}, "taken": {},
+	"give": {}, "gives": {}, "gave": {}, "given": {},
+	"go": {}, "goes": {}, "going": {}, "went": {}, "gone": {},
+	"come": {}, "comes": {}, "came": {}, "coming": {},
+	"keep": {}, "keeps": {}, "kept": {}, "keeping": {},
+	"let": {}, "lets": {}, "need": {}, "needs": {}, "want": {}, "wants": {},
+	"hold": {}, "holds": {}, "held": {}, "read": {}, "reads": {},
+	"write": {}, "writes": {}, "show": {}, "shows": {},
+	"work": {}, "works": {}, "start": {}, "stop": {},
+	"add": {}, "adds": {}, "put": {}, "puts": {},
+	// common adjectives/adverbs
+	"not": {}, "no": {}, "so": {}, "as": {}, "than": {}, "also": {},
+	"just": {}, "only": {}, "more": {}, "most": {}, "very": {},
+	"new": {}, "other": {}, "like": {}, "some": {}, "such": {},
+	"first": {}, "last": {}, "next": {}, "same": {}, "own": {},
+	"every": {}, "each": {}, "any": {}, "all": {},
+	// question/relative words
+	"when": {}, "what": {}, "which": {}, "who": {}, "how": {}, "where": {},
+	// misc common
+	"up": {}, "out": {}, "then": {}, "there": {}, "here": {},
+	"well": {}, "way": {}, "even": {}, "still": {}, "yet": {},
+	"too": {}, "now": {}, "back": {}, "down": {},
+	// filler words common in docs but never domain-specific
+	"currently": {}, "available": {}, "provides": {},
+	"based": {}, "called": {}, "including": {}, "already": {},
+	"following": {}, "appears": {}, "wherever": {}, "intact": {},
+	"enabled": {}, "disabled": {}, "supported": {},
+	"true": {}, "false": {},
 }
 
 // extractTerms condenses prose into a comma-separated list of unique
@@ -94,9 +137,20 @@ func extractTerms(s string) string {
 	seen := map[string]struct{}{}
 	var terms []string
 	for _, w := range words {
-		w = strings.Trim(w, ".,;:!?()[]{}\"'")
+		w = strings.Trim(w, ".,;:!?()[]{}\"'—–-/\\|@#$%^&*~`")
 		lower := strings.ToLower(w)
 		if len(lower) < 2 {
+			continue
+		}
+		// Skip pure-punctuation or pure-numeric tokens.
+		allPunct := true
+		for _, r := range lower {
+			if r != '-' && r != '_' && r != '.' && (r < '0' || r > '9') {
+				allPunct = false
+				break
+			}
+		}
+		if allPunct {
 			continue
 		}
 		if _, ok := stopwords[lower]; ok {
