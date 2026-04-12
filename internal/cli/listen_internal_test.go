@@ -12,20 +12,6 @@ import (
 	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
-// withScratchRuntimeDir installs a fresh XDG_RUNTIME_DIR pointing at
-// a test-owned tmpfs-equivalent so pidfile.DaemonPath and friends
-// resolve into the temp tree. Tests that only redirect XDG_DATA_HOME
-// will still see the real /run/user/UID, which is wrong since the
-// Bug 5 & 6 migration moved every runtime file under XDG_RUNTIME_DIR.
-func withScratchRuntimeDir(t *testing.T, tmp string) {
-	t.Helper()
-	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(tmp, "run"))
-	if err := os.MkdirAll(filepath.Join(tmp, "run"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	xdg.Reload()
-}
-
 // fakeSpawnHandle is a stub spawnHandle that lets each test decide
 // whether the simulated daemon "succeeds" (acquires the pidfile flock
 // and creates the socket file synchronously) or "fails" (writes a

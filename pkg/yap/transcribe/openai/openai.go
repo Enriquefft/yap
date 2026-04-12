@@ -241,7 +241,6 @@ func (b *Backend) post(ctx context.Context, wavData []byte, prompt string) (stri
 			if resp.StatusCode/100 == 4 {
 				return "", apiErr
 			}
-			lastErr = apiErr
 			if attempt < maxRetries {
 				if sleepErr := sleepCtx(ctx, backoffDelays[attempt]); sleepErr != nil {
 					return "", sleepErr

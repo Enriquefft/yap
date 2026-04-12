@@ -331,10 +331,7 @@ func needsWizard() bool {
 		return true
 	}
 	_, err = os.Stat(configPath)
-	if os.IsNotExist(err) {
-		return true
-	}
-	return false
+	return os.IsNotExist(err)
 }
 
 // runWizard launches the interactive first-run wizard.

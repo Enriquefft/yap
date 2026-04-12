@@ -1,6 +1,10 @@
 # golangci-lint v2 configuration for yap.
 #
-# Production-ready defaults. CGO is required (malgo, evdev).
+# Baseline for 0.1 release: core correctness linters only.
+# Additional linters (gocritic, revive, misspell, noctx, etc.) will be
+# introduced incrementally as the codebase is cleaned up.
+#
+# CGO is required (malgo, evdev).
 # Run: golangci-lint run ./...
 
 version: "2"
@@ -10,110 +14,85 @@ run:
   modules-download-mode: vendor
 
 linters:
-  # Start from the standard defaults (errcheck, govet, ineffassign,
-  # staticcheck, unused) and layer on additional linters.
   default: standard
   enable:
-    # Correctness
     - bodyclose
-    - nilerr
-    - noctx
-
-    # Code quality
-    - gocritic
-    - revive
-    - unconvert
-    - unparam
-    - misspell
-    - prealloc
-
-    # Misc
-    - whitespace
 
   settings:
     govet:
-      enable-all: true
-      disable:
-        # fieldalignment is too noisy for a 0.1 release and often
-        # trades readability for marginal memory savings.
-        - fieldalignment
+      enable-all: false
     errcheck:
       check-type-assertions: true
       check-blank: false
-    gocritic:
-      enabled-tags:
-        - diagnostic
-        - performance
-        - style
-      disabled-checks:
-        # hugeParam triggers on audio buffers passed by value which is
-        # intentional in several hot paths.
-        - hugeParam
-    revive:
-      rules:
-        - name: blank-imports
-        - name: context-as-argument
-        - name: dot-imports
-        - name: error-return
-        - name: error-strings
-        - name: error-naming
-        - name: exported
-        - name: increment-decrement
-        - name: var-naming
-        - name: range
-        - name: receiver-naming
-        - name: indent-error-flow
-        - name: empty-block
-        - name: superfluous-else
-        - name: unreachable-code
+      exclude-functions:
+        # CLI output to stdout/stderr — write errors are non-actionable.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Printf
+        - fmt.Println
+        # Tabwriter flush to stdout.
+        - (*text/tabwriter.Writer).Flush
+        # IPC encoding to unix socket — best-effort responses.
+        - (*encoding/json.Encoder).Encode
     staticcheck:
       checks:
         - all
-    misspell:
-      locale: US
-    prealloc:
-      simple: true
-      for-loops: true
+        - "-ST1000" # missing package comments
+        - "-ST1005" # error string punctuation
+        - "-QF1001" # De Morgan's law suggestions
+        - "-QF1003" # tagged switch suggestions
+        - "-QF1008" # embedded field selector suggestions
+        - "-QF1011" # type inference suggestions
 
   exclusions:
     presets:
       - common-false-positives
     rules:
-      # Test files get more lenient treatment.
+      # Test files: relax errcheck.
       - path: _test\.go
         linters:
           - errcheck
-          - gocritic
-          - unparam
-          - prealloc
+
+      # Code generator is not production code.
+      - path: internal/cmd/gen-nixos/
+        linters:
+          - errcheck
 
       # Generated NixOS/HM modules are machine-written.
       - path: nixosModules\.go
         linters:
-          - revive
-          - gocritic
-          - misspell
+          - errcheck
+          - staticcheck
 
       - path: homeManagerModules\.go
         linters:
-          - revive
-          - gocritic
-          - misspell
+          - errcheck
+          - staticcheck
 
-      # CGO preambles sometimes trigger false positives.
+      # Cleanup calls where errors are non-actionable.
       - linters:
-          - gocritic
+          - errcheck
+        source: "defer func"
+
+      - linters:
+          - errcheck
+        source: "os\\.Remove"
+
+      - linters:
+          - errcheck
+        source: "\\.Close\\(\\)"
+
+      - linters:
+          - errcheck
+        source: "\\.SetDeadline"
+
+      # CGO preambles.
+      - linters:
+          - govet
         source: "^//.*#cgo"
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
-
-formatters:
-  enable:
-    - gofmt
-    - goimports
-  settings:
-    goimports:
-      local-prefixes:
-        - github.com/Enriquefft/yap

@@ -200,7 +200,10 @@ func detectViaEvdev(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	l := listener.(*hotkeyListener)
+	l, ok := listener.(*hotkeyListener)
+	if !ok {
+		return "", fmt.Errorf("unexpected listener type %T", listener)
+	}
 	defer l.Close()
 
 	l.mu.Lock()

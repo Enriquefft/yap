@@ -546,7 +546,11 @@ func Run(cfg *config.Config, deps Deps) error {
 		}
 	})
 
-	go srv.Serve(ctx)
+	go func() {
+		if err := srv.Serve(ctx); err != nil {
+			slog.Error("ipc server exited", "error", err)
+		}
+	}()
 
 	timeoutSec := cfg.General.MaxDuration
 	if timeoutSec == 0 {

@@ -247,7 +247,7 @@ func TestConfigSet_PreservesComments(t *testing.T) {
 		t.Fatalf("line count changed: in=%d out=%d", len(inLines), len(outLines))
 	}
 	wantTarget := `    hotkey = "KEY_F24"  # my favorite` + "\n"
-	var targetIdx int = -1
+	targetIdx := -1
 	for i := range inLines {
 		if strings.HasPrefix(strings.TrimLeft(inLines[i], " \t"), `hotkey`) {
 			targetIdx = i

@@ -123,7 +123,7 @@ func TestNew(t *testing.T) {
 	c := config.Config(cfg)
 	d := New(&c)
 	if d == nil {
-		t.Error("New() returned nil")
+		t.Fatal("New() returned nil")
 	}
 	if d.cfg != &c {
 		t.Error("Daemon config not set correctly")

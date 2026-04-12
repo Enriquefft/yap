@@ -582,7 +582,7 @@ func parseKeyValueLine(data []byte, lineStart, lineNum int) (scannedLine, int, e
 	// The tokenizer walks forward from lineStart to find the key,
 	// `=`, and value. Multi-line strings extend consumed past the
 	// first line end.
-	firstLineEnd := lineStart
+	var firstLineEnd int
 	if nl := bytes.IndexByte(data[lineStart:], '\n'); nl >= 0 {
 		firstLineEnd = lineStart + nl + 1
 	} else {
