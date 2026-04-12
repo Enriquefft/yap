@@ -1,3 +1,2 @@
 [hint]
-  vocabulary_files = ["README.md"]
-  vocabulary_terms = ["yap", "whisperlocal", "Groq", "whisper.cpp", "OSC52", "wtype", "ydotool", "claudecode", "termscroll", "malgo", "evdev"]
+  vocabulary_terms = ["yap", "Enriquefft", "whisperlocal", "whisper.cpp", "whisper-server", "OSC52", "groq", "musl", "evdev", "beeep", "pidfile", "ChimeSource"]
