@@ -266,12 +266,12 @@ in {
         };
         vocabulary_files = lib.mkOption {
           type = lib.types.listOf lib.types.str;
-          default = [ ];
+          default = [ "CLAUDE.md" "AGENTS.md" "README.md" ];
           description = "Project doc filenames to read for base vocabulary (walks cwd to git root)";
         };
         providers = lib.mkOption {
           type = lib.types.listOf lib.types.str;
-          default = [ ];
+          default = [ "claudecode" "termscroll" ];
           description = "Ordered hint provider list for conversation context; first match wins";
         };
         vocabulary_max_chars = lib.mkOption {

@@ -359,7 +359,15 @@ func nixDefault(f FieldInfo) string {
 	case reflect.Float32, reflect.Float64:
 		return formatFloat(reflect.ValueOf(f.Default).Float())
 	case reflect.Slice:
-		return "[ ]"
+		rv := reflect.ValueOf(f.Default)
+		if rv.IsNil() || rv.Len() == 0 {
+			return "[ ]"
+		}
+		var items []string
+		for i := 0; i < rv.Len(); i++ {
+			items = append(items, strconv.Quote(fmt.Sprint(rv.Index(i).Interface())))
+		}
+		return "[ " + strings.Join(items, " ") + " ]"
 	default:
 		return `""`
 	}
