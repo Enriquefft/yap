@@ -490,6 +490,17 @@ func Run(cfg *config.Config, deps Deps) error {
 		return fmt.Errorf("engine init: %w", err)
 	}
 
+	// Apply per-project .yap.toml overrides to the hint config. The
+	// project file lives in the repo root (walked from cwd to git root)
+	// and overrides global hint settings for this project.
+	cwd, _ := os.Getwd()
+	projectOv, err := hint.LoadProjectOverrides(cwd)
+	if err != nil {
+		slog.Default().Warn("hint: failed to load project .yap.toml", "error", err)
+	} else {
+		pcfg.ApplyProjectOverrides(cfg, projectOv)
+	}
+
 	// Build hint providers from the registry when the hint pipeline is
 	// enabled. Unknown or broken providers are non-fatal: the daemon
 	// logs a warning and skips them so a single misconfigured provider

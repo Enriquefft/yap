@@ -198,9 +198,18 @@ conversation_max_chars = 8000                                # transform context
 timeout_ms = 300                                             # max ms for provider fetch before recording starts
 ```
 
-**Per-project customization:** edit `vocabulary_files` to include project-specific docs (e.g. `["GLOSSARY.md", "CLAUDE.md"]`). Each filename is searched from the daemon's working directory upward to the nearest `.git` root.
+**Per-project config:** drop a `.yap.toml` in your repo root. It overrides global hint settings for that project:
 
-**Disable:** `yap config set hint.enabled false`
+```toml
+# .yap.toml (in repo root, committed or gitignored — your call)
+[hint]
+vocabulary_files = ["GLOSSARY.md", "CLAUDE.md", "API.md"]
+vocabulary_max_chars = 2000
+```
+
+Any field not set in `.yap.toml` keeps its global default. yap walks from cwd to the nearest `.git` root to find this file.
+
+**Disable:** `yap config set hint.enabled false` (global) or set `enabled = false` in `.yap.toml` (per-project)
 
 **Debug:** `yap hint` prints the resolved target, winning provider, and vocabulary/conversation sizes for the currently focused window.
 
