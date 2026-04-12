@@ -23,6 +23,14 @@ detect_os_arch() {
 
   case $os in
     linux) ;;
+    darwin)
+      echo "macOS support is coming soon. Follow progress at https://github.com/Enriquefft/yap"
+      exit 1
+      ;;
+    mingw*|msys*|cygwin*)
+      echo "Windows support is on the roadmap. Follow progress at https://github.com/Enriquefft/yap"
+      exit 1
+      ;;
     *) echo "Unsupported OS: $os"; exit 1 ;;
   esac
 
