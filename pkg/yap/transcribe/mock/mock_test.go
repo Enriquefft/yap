@@ -5,8 +5,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transcribe/mock"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/mock"
 )
 
 func TestNewDefaultChunks(t *testing.T) {

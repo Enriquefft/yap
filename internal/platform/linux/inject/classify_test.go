@@ -3,7 +3,7 @@ package inject
 import (
 	"testing"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 func TestClassifyTerminals(t *testing.T) {

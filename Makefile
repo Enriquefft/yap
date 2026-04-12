@@ -9,7 +9,7 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 # VERSION_LDFLAG injects the value into internal/config.Version via the
 # Go linker. internal/config/version.go is the single source of truth
 # for the default ("dev"); release builds override it here.
-VERSION_LDFLAG := -X github.com/hybridz/yap/internal/config.Version=$(VERSION)
+VERSION_LDFLAG := -X github.com/Enriquefft/yap/internal/config.Version=$(VERSION)
 
 # -s -w: strip debug info. Required for NFR-05 (< 20MB).
 # -linkmode external -extldflags '-static': produce static binary (NFR-01, NFR-02).

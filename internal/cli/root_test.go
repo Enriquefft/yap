@@ -3,8 +3,8 @@ package cli_test
 import (
 	"testing"
 
-	"github.com/hybridz/yap/internal/config"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/internal/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 	"github.com/spf13/cobra"
 )
 

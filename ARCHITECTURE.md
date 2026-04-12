@@ -185,8 +185,8 @@ The `pkg/yap/` packages are the contract. A third-party Go program can use yap a
 
 ```go
 import (
-    "github.com/hybridz/yap/pkg/yap"
-    "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"
+    "github.com/Enriquefft/yap/pkg/yap"
+    "github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal"
 )
 
 client, err := yap.New(
@@ -198,7 +198,7 @@ text, err := client.TranscribeFile(ctx, "recording.wav")
 Or compose primitives directly:
 
 ```go
-import "github.com/hybridz/yap/pkg/yap/transcribe/groq"
+import "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
 
 t := groq.New(groq.Options{APIKey: os.Getenv("GROQ_API_KEY")})
 chunks, err := t.Transcribe(ctx, audioReader)
@@ -501,13 +501,13 @@ Every command is a thin Cobra wrapper over `pkg/yap/`. Commands contain no pipel
 
 ## Build, Distribution, and Static Binary
 
-- **Module path:** `github.com/hybridz/yap`
+- **Module path:** `github.com/Enriquefft/yap`
 - **Go version:** 1.25+
 - **Build:** `nix develop --command go build ./cmd/yap`
 - **Static build:** `make build-static` produces a single static binary verified by `ldd` to have no dynamic dependencies on Linux. **Status: blocked** — musl toolchain not wired into the Nix dev shell; tracked under Distribution + CI.
 - **CGo boundary:** `malgo` (audio) is the only CGo dependency. `whisperlocal` shells out to `whisper-server` at runtime — no CGo. Static linking needs only `malgo`/miniaudio headers.
 - **Cross-compilation:** GitHub Actions matrix builds `linux/{amd64,arm64}`, `darwin/{amd64,arm64}`, `windows/amd64`. Each target runs the test suite. **Status: not yet wired** — pending Distribution + CI workstream.
-- **Distribution channels:** GitHub Releases (canonical), curl install script, Nix flake, Homebrew formula, AUR PKGBUILD, `go install github.com/hybridz/yap/cmd/yap@latest`.
+- **Distribution channels:** GitHub Releases (canonical), curl install script, Nix flake, Homebrew formula, AUR PKGBUILD, `go install github.com/Enriquefft/yap/cmd/yap@latest`.
 
 ---
 

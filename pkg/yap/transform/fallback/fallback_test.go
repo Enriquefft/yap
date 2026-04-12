@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
-	"github.com/hybridz/yap/pkg/yap/transform/fallback"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transform/fallback"
 )
 
 // stubTransformer is a test double for transform.Transformer. It

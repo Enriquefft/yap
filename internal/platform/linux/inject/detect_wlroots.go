@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // detect_wlroots.go implements generic wlroots active-window detection

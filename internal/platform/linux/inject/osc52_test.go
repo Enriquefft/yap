@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeWriteCloser captures bytes written by a strategy through

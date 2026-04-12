@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // newPlatformBackend is the unix implementation of the Backend

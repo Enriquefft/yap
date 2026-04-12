@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // Strategy is the Linux-local strategy interface. It's narrower than

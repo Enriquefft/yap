@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // TestInjectorSatisfiesStrategyResolver is a compile-time guard that

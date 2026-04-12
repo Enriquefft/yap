@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // ErrNoDisplay is returned by Detect when neither WAYLAND_DISPLAY nor

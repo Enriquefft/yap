@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // osc52Strategy delivers text to a terminal emulator via the OSC 52

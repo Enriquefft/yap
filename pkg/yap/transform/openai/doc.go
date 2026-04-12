@@ -35,7 +35,7 @@
 // Importing this package for side effects registers it under the
 // name "openai":
 //
-//	import _ "github.com/hybridz/yap/pkg/yap/transform/openai"
+//	import _ "github.com/Enriquefft/yap/pkg/yap/transform/openai"
 //
 // Library consumers that want to skip the registry can construct a
 // Backend directly via New.

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // Transformer consumes a stream of transcript chunks and emits a

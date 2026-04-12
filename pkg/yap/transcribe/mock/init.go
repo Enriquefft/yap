@@ -1,6 +1,6 @@
 package mock
 
-import "github.com/hybridz/yap/pkg/yap/transcribe"
+import "github.com/Enriquefft/yap/pkg/yap/transcribe"
 
 // init registers the mock backend under the name "mock" so that
 // daemon and integration tests can select it via transcribe.Get.

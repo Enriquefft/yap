@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // fakeBackend is the simplest possible Transcriber used to exercise

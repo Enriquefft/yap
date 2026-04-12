@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transcribe/groq"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
 )
 
 // newTestBackend constructs a Backend pointed at the given test server

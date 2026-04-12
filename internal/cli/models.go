@@ -5,7 +5,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal/models"
 	"github.com/spf13/cobra"
 )
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // seedDefaultConfig writes a fresh default config to cfgFile so Set

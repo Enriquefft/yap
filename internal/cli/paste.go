@@ -6,10 +6,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/daemon"
-	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/daemon"
+	"github.com/Enriquefft/yap/internal/platform"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
 	"github.com/spf13/cobra"
 )
 

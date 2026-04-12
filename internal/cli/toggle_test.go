@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
 // TestToggle_DaemonPath uses the IPC socket and asserts the toggle

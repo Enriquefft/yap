@@ -1,4 +1,4 @@
-module github.com/hybridz/yap
+module github.com/Enriquefft/yap
 
 go 1.25.6
 

@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // APIError represents an error response from an OpenAI-compatible

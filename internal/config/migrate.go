@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/BurntSushi/toml"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // flatLegacy is the pre-Phase-2 flat config schema. Decoding into this

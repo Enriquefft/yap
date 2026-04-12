@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/adrg/xdg"
-	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeRecorder is a test platform.Recorder that returns immediately

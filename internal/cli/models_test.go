@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/cli"
-	linux "github.com/hybridz/yap/internal/platform/linux"
-	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
+	"github.com/Enriquefft/yap/internal/cli"
+	linux "github.com/Enriquefft/yap/internal/platform/linux"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal/models"
 )
 
 // withTempCache redirects XDG_CACHE_HOME and any unrelated env vars

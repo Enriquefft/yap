@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 func TestDefaultConfig_Deterministic(t *testing.T) {

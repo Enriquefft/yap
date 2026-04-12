@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // pathCase exercises a single dot-notation path through Set and Get.

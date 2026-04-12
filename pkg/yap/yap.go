@@ -6,9 +6,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
-	"github.com/hybridz/yap/pkg/yap/transform/passthrough"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
 )
 
 // Client is the top-level wrapper over a Transcriber and a

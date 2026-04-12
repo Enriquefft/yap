@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // x11Strategy types text into the focused application via xdotool on

@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hybridz/yap/internal/cli"
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/daemon"
-	linux "github.com/hybridz/yap/internal/platform/linux"
+	"github.com/Enriquefft/yap/internal/cli"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/daemon"
+	linux "github.com/Enriquefft/yap/internal/platform/linux"
 )
 
 // main routes execution between two modes:

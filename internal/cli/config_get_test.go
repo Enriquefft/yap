@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/cli"
+	"github.com/Enriquefft/yap/internal/cli"
 )
 
 // runCLI invokes the root command with argv, captures stdout+stderr,

@@ -12,29 +12,29 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hybridz/yap/internal/assets"
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/engine"
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
-	"github.com/hybridz/yap/internal/platform"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
-	"github.com/hybridz/yap/pkg/yap/silence"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/internal/assets"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/engine"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/platform"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/silence"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	// Register every transcribe backend the daemon can select at
 	// runtime. Side-effect imports are the Phase 3 contract.
-	_ "github.com/hybridz/yap/pkg/yap/transcribe/groq"
-	_ "github.com/hybridz/yap/pkg/yap/transcribe/mock"
-	_ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
-	_ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"
-	"github.com/hybridz/yap/pkg/yap/transform"
-	"github.com/hybridz/yap/pkg/yap/transform/fallback"
+	_ "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
+	_ "github.com/Enriquefft/yap/pkg/yap/transcribe/mock"
+	_ "github.com/Enriquefft/yap/pkg/yap/transcribe/openai"
+	_ "github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transform/fallback"
 	// Register every transform backend. Phase 3 only shipped
 	// passthrough; Phase 8 adds local (Ollama native) and openai
 	// (any OpenAI-compatible SSE endpoint).
-	_ "github.com/hybridz/yap/pkg/yap/transform/local"
-	_ "github.com/hybridz/yap/pkg/yap/transform/openai"
-	_ "github.com/hybridz/yap/pkg/yap/transform/passthrough"
+	_ "github.com/Enriquefft/yap/pkg/yap/transform/local"
+	_ "github.com/Enriquefft/yap/pkg/yap/transform/openai"
+	_ "github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
 )
 
 // Deps holds all injectable dependencies for the daemon.

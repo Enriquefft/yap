@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // editCase drives the golden-fixture tests. Each case has a fixture

@@ -3,7 +3,7 @@ package config_test
 import (
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // clearEnv unsets every yap-related env var so each test starts from

@@ -24,10 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/internal/platform"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 )
 
 // ChimeSource is a function that returns a WAV reader for a chime

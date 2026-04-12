@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # yap install script
-# Usage: curl -fsSL https://raw.githubusercontent.com/hybridz/yap/main/install.sh | bash
+# Usage: curl -fsSL https://yap.enriquefft.com/install | bash
 
-REPO="hybridz/yap"
+REPO="Enriquefft/yap"
 GITHUB_BASE="https://github.com"
 API_BASE="https://api.github.com"
 INSTALL_DIR="$HOME/.local/bin"

@@ -5,9 +5,9 @@
 package linux
 
 import (
-	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/internal/platform/linux/inject"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform/linux/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // NewPlatform returns a Platform with all Linux implementations wired

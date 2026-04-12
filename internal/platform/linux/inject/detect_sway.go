@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // swayNode is the subset of the swaymsg -t get_tree JSON shape we care

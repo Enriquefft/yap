@@ -6,7 +6,7 @@
 //
 // The package is deliberately public rather than internal: third
 // parties writing their own transform backend under
-// github.com/hybridz/yap/pkg/yap/transform can reuse the same
+// github.com/Enriquefft/yap/pkg/yap/transform can reuse the same
 // scaffolding without copy-pasting or reaching into an internal/
 // directory. The surface is intentionally minimal — a Client, a
 // PostJSON method, and a NonRetryableError sentinel.

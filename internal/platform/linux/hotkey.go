@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/holoplot/go-evdev"
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // hotkeyListener implements platform.Hotkey using Linux evdev.

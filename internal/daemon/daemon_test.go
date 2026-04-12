@@ -17,15 +17,15 @@ import (
 	"time"
 
 	"github.com/adrg/xdg"
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
-	"github.com/hybridz/yap/internal/platform"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
-	"github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
-	"github.com/hybridz/yap/pkg/yap/transform/fallback"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/platform"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transform/fallback"
 )
 
 // TestRecordState verifies recording state machine operations.

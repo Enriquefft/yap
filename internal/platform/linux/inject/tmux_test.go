@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeTmuxExec snapshots the call sequence and the stdin payload for

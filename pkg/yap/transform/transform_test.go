@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 )
 
 type fakeTransformer struct{}

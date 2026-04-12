@@ -24,7 +24,7 @@
 // Importing this package for side effects registers the backend under
 // the name "whisperlocal" in the transcribe registry:
 //
-//	import _ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"
+//	import _ "github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal"
 //
 // Direct construction is also supported via New for library callers
 // that do not want to go through the registry.

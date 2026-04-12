@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/adrg/xdg"
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
 // withScratchRuntimeDir installs a fresh XDG_RUNTIME_DIR pointing at

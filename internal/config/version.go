@@ -3,7 +3,7 @@
 // Version is a package-level variable (not a const) so release builds
 // can override it via ldflags:
 //
-//	go build -ldflags "-X github.com/hybridz/yap/internal/config.Version=v0.2.0" ./cmd/yap
+//	go build -ldflags "-X github.com/Enriquefft/yap/internal/config.Version=v0.2.0" ./cmd/yap
 //
 // The Makefile passes the value from `git describe --tags --always --dirty`,
 // and the Nix flake threads its declared package version through the same

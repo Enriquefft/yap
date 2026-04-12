@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/hybridz/yap/internal/assets"
+	"github.com/Enriquefft/yap/internal/assets"
 )
 
 func TestAssetsPresent(t *testing.T) {

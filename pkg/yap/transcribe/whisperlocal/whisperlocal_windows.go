@@ -5,7 +5,7 @@ package whisperlocal
 import (
 	"errors"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // windowsNotSupportedMsg is the sticky error message returned by

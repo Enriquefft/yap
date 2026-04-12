@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeWaylandExec is a Wayland-specific exec recorder. The test

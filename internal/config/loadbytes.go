@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/BurntSushi/toml"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // LoadBytes decodes data into a Config without any disk I/O. It is

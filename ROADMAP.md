@@ -147,7 +147,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [x] `internal/cli/` and `internal/daemon/` import from `pkg/yap/`
 
 **Done when:**
-- [x] `go doc github.com/hybridz/yap/pkg/yap` documents the public API
+- [x] `go doc github.com/Enriquefft/yap/pkg/yap` documents the public API
 - [x] `grep -rn 'var.*=.*&http.Client' pkg/yap/` returns zero results
 - [x] A separate Go program can import `pkg/yap/transcribe/groq` and transcribe a WAV
 - [x] `internal/transcribe/` no longer exists
@@ -568,7 +568,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - The `internal/cli/record.go` SIGUSR1 handler intentionally cancels only `recCtx`, not the outer `ctx`, so the captured audio still flows through the transcribe and inject stages — the same semantic the daemon's hotkey-release handler uses.
 - `internal/cli/stop.go` and `internal/cli/toggle.go` now write status messages through the cobra command's writer (not `os.Stdout`) so tests can capture them. This is a small but important hygiene change for any future CLI test that wants to assert on stdout.
 - `internal/cli/root.go` exposes `ExecuteForTestWithPlatform` so tests can inject fake platforms (fake recorders, fake injectors, fake device listers) without touching the production linux factory. The Phase 6 `ExecuteForTest` becomes a thin wrapper.
-- `internal/config/version.go` ships `Version = "0.1.0-dev"` as a single-source-of-truth string. Distribution CI overrides it via `-ldflags '-X github.com/hybridz/yap/internal/config.Version=...'` once Phase 12 wires release tooling — Phase 7 leaves the constant inline because there is exactly one place to bump on every release.
+- `internal/config/version.go` ships `Version = "0.1.0-dev"` as a single-source-of-truth string. Distribution CI overrides it via `-ldflags '-X github.com/Enriquefft/yap/internal/config.Version=...'` once Phase 12 wires release tooling — Phase 7 leaves the constant inline because there is exactly one place to bump on every release.
 
 ### Review findings (post-Phase 7 code review)
 
@@ -856,7 +856,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] Homebrew formula
 - [ ] AUR PKGBUILD
 - [ ] NixOS module regenerated from `pkg/yap/config/` (Phase 2 onward)
-- [ ] `go install github.com/hybridz/yap/cmd/yap@latest` works end to end
+- [ ] `go install github.com/Enriquefft/yap/cmd/yap@latest` works end to end
 
 **Backfill schedule:**
 - Phase 0 fixes the `install.sh` location and the stale README

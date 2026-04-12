@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/config"
 )
 
 // legacyFlat is the canonical pre-Phase-2 TOML payload. Kept as a

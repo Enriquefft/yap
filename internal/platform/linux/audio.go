@@ -10,7 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // preferredBackends is the Linux audio backend preference list used by

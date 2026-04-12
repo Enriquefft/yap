@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/hybridz/yap/internal/cli"
-	"github.com/hybridz/yap/internal/platform"
-	"github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/internal/cli"
+	"github.com/Enriquefft/yap/internal/platform"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // resolvingInjector is a recordingInjector that ALSO satisfies

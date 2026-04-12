@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // electronStrategy delivers text to Electron and browser apps via the

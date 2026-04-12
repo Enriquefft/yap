@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/internal/engine"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transcribe/mock"
-	"github.com/hybridz/yap/pkg/yap/transform/passthrough"
+	"github.com/Enriquefft/yap/internal/engine"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/mock"
+	"github.com/Enriquefft/yap/pkg/yap/transform/passthrough"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

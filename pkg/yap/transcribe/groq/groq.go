@@ -11,7 +11,7 @@
 // Importing this package for side effects registers the backend under
 // the name "groq" in the transcribe registry:
 //
-//	import _ "github.com/hybridz/yap/pkg/yap/transcribe/groq"
+//	import _ "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
 //
 // Direct construction is also supported via New for library callers
 // who do not want to pay for the registry indirection.
@@ -28,7 +28,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // DefaultAPIURL is the Groq transcription endpoint. New substitutes

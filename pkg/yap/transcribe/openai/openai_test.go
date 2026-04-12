@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transcribe/openai"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/openai"
 )
 
 // collect drains a chunk channel and returns (text, final chunk).

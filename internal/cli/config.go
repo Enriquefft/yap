@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/platform"
 	"github.com/spf13/cobra"
 )
 

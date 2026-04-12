@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeExec returns an ExecCommand stub that maps a command name to a

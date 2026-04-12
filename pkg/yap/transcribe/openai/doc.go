@@ -13,5 +13,5 @@
 // Importing this package for side effects registers the backend under
 // the name "openai" in the transcribe registry:
 //
-//	import _ "github.com/hybridz/yap/pkg/yap/transcribe/openai"
+//	import _ "github.com/Enriquefft/yap/pkg/yap/transcribe/openai"
 package openai

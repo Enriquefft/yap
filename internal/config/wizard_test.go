@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // stubHotkeyConfig is a test double for platform.HotkeyConfig.

@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // Default tunables. They live as constants so the package contains no

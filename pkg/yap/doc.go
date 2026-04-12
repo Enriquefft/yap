@@ -11,9 +11,9 @@
 //	    "context"
 //	    "os"
 //
-//	    "github.com/hybridz/yap/pkg/yap"
-//	    "github.com/hybridz/yap/pkg/yap/transcribe"
-//	    "github.com/hybridz/yap/pkg/yap/transcribe/groq"
+//	    "github.com/Enriquefft/yap/pkg/yap"
+//	    "github.com/Enriquefft/yap/pkg/yap/transcribe"
+//	    "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
 //	)
 //
 //	backend, err := groq.New(transcribe.Config{

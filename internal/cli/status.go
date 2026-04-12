@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
 	"github.com/spf13/cobra"
 )
 

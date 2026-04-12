@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // Injector is the Linux implementation of pkg/yap/inject.Injector. It

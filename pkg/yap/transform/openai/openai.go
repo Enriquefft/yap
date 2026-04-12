@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
-	"github.com/hybridz/yap/pkg/yap/transform/httpstream"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transform/httpstream"
 )
 
 // DefaultSystemPrompt mirrors the on-disk transform default so

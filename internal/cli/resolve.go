@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // writeStrategyDecision renders a StrategyDecision to w in the

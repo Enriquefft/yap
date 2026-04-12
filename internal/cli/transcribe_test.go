@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // withTranscribeBackend writes a config that selects a specific

@@ -1,9 +1,9 @@
 # yap — Hold-to-Talk Voice Dictation for Your Desktop
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/hybridz/yap/release.yml?style=flat-square)
-![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)
+![Build Status](https://img.shields.io/github/actions/workflow/status/Enriquefft/yap/release.yml?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 ![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat-square&logo=go)
-![Release](https://img.shields.io/github/v/release/hybridz/yap?style=flat-square)
+![Release](https://img.shields.io/github/v/release/Enriquefft/yap?style=flat-square)
 
 Hold a key. Speak. Text appears wherever you're typing.
 
@@ -27,17 +27,17 @@ For the full architectural picture, see [`ARCHITECTURE.md`](ARCHITECTURE.md). Fo
 ### One-line install (Linux)
 
 ```bash
-curl -fsSL https://yap.sh/install | bash
+curl -fsSL https://yap.enriquefft.com/install | bash
 ```
 
 ### Manual download
 
-Grab the latest binary from [GitHub Releases](https://github.com/hybridz/yap/releases) and put it on your `PATH`.
+Grab the latest binary from [GitHub Releases](https://github.com/Enriquefft/yap/releases) and put it on your `PATH`.
 
 ### From source
 
 ```bash
-git clone https://github.com/hybridz/yap.git
+git clone https://github.com/Enriquefft/yap.git
 cd yap
 make build           # dynamic build
 make build-static    # static binary (musl)
@@ -179,11 +179,11 @@ Issues and PRs are welcome. See [`ROADMAP.md`](ROADMAP.md) for the phased plan a
 
 ## License
 
-[AGPL-3.0](LICENSE).
+[MIT](LICENSE).
 
 ## Links
 
 - [Architecture](ARCHITECTURE.md)
 - [Roadmap](ROADMAP.md)
 - [Changelog](CHANGELOG.md)
-- [GitHub Issues](https://github.com/hybridz/yap/issues)
+- [GitHub Issues](https://github.com/Enriquefft/yap/issues)

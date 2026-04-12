@@ -11,8 +11,8 @@
 // registrations into the registry:
 //
 //	import (
-//	    "github.com/hybridz/yap/pkg/yap/transcribe"
-//	    _ "github.com/hybridz/yap/pkg/yap/transcribe/groq"
+//	    "github.com/Enriquefft/yap/pkg/yap/transcribe"
+//	    _ "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"
 //	)
 //
 //	factory, err := transcribe.Get("groq")

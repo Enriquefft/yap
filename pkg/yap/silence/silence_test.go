@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/silence"
+	"github.com/Enriquefft/yap/pkg/yap/silence"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

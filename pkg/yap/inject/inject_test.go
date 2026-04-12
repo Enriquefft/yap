@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/inject"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // fakeStrategy is a trivial Strategy impl used only to prove the

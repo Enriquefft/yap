@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/config"
 )
 
 // shadowMinimalNestedConfig is a valid nested TOML payload used by

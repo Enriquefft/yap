@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // detectX11 resolves the focused X11 window into a classified Target.

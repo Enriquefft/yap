@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // fakeX11Exec records every xdotool call and lets the test script the

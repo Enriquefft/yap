@@ -3,7 +3,7 @@ package inject
 import (
 	"strings"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // terminalClasses is the allowlist of known terminal emulators.

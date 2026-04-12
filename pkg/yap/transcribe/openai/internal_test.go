@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // TestNew_DefaultTimeout asserts the C12 fix: when cfg.Timeout is

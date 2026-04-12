@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hybridz/yap/internal/platform"
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	"github.com/Enriquefft/yap/internal/platform"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // recordingStrategy is a tiny Strategy used by selection tests. It

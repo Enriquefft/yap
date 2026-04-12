@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transform"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transform"
 )
 
 // Transformer is a transform.Transformer decorator that runs Primary

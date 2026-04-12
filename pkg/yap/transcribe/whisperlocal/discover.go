@@ -6,8 +6,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
-	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal/models"
 )
 
 // envServerPath is the environment variable users set to override the

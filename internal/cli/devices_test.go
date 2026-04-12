@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // fakeDeviceLister implements platform.DeviceLister for tests.

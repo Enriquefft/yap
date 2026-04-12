@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
 // acquireRecordPID takes the exclusive flock on the `yap record` PID

@@ -5,9 +5,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/daemon"
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/daemon"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 	"github.com/spf13/cobra"
 )
 

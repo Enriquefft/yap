@@ -13,7 +13,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // Backend is the deterministic test Transcriber. The chunk sequence

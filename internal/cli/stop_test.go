@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/adrg/xdg"
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
 // withScratchXDG sets up a scratch XDG tree for a CLI test.

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/config"
 )
 
 // configPathTestMinimalConfig is the smallest valid nested payload

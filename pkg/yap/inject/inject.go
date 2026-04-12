@@ -13,7 +13,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // Injector delivers text to the currently focused application. It is

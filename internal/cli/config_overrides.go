@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/platform"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/platform"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 	"github.com/spf13/cobra"
 )
 

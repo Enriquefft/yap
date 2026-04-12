@@ -8,7 +8,7 @@ import (
 	"context"
 	"io"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // KeyCode is a platform-independent key identifier.

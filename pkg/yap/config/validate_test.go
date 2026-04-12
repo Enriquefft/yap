@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // stubKeyValidator implements config.KeyValidator without importing

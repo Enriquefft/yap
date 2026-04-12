@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gen2brain/malgo"
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // deviceLister implements platform.DeviceLister via miniaudio's

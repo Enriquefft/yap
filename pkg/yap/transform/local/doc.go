@@ -25,7 +25,7 @@
 // Importing this package for side effects registers the backend
 // under the name "local" in the transform registry:
 //
-//	import _ "github.com/hybridz/yap/pkg/yap/transform/local"
+//	import _ "github.com/Enriquefft/yap/pkg/yap/transform/local"
 //
 // Library consumers that want to skip the registry can construct a
 // Backend directly via New.

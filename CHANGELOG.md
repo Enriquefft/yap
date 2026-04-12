@@ -19,7 +19,7 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
   mirroring the Phase 3 groq pattern, and 4xx fail-fast via the
   exported `NonRetryableError` type. The package is deliberately
   public (not under `internal/`) so third parties writing their own
-  transform backend under `github.com/hybridz/yap/pkg/yap/transform`
+  transform backend under `github.com/Enriquefft/yap/pkg/yap/transform`
   can reuse the same scaffolding.
 - `pkg/yap/transform/local/` — Ollama-native transform backend
   (`POST {api_url}/api/chat` with NDJSON streaming response).
@@ -140,7 +140,7 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
   "0.1.0-dev"`. The constant is the single source of truth for the
   version string reported by `yap status` and the daemon's IPC
   status response. Distribution CI overrides it via `-ldflags
-  '-X github.com/hybridz/yap/internal/config.Version=...'` once
+  '-X github.com/Enriquefft/yap/internal/config.Version=...'` once
   Phase 12 wires release tooling.
 - `internal/cli/root.go` exposes
   `cli.ExecuteForTestWithPlatform(p, argv, stdout, stderr)` so
@@ -340,7 +340,7 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
   most once per process and reuses the existing `sync.Once`
   pattern; production code never resets it.
 - `internal/daemon/daemon.go` side-effect-imports
-  `_ "github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal"` so
+  `_ "github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal"` so
   the registry knows the backend. The daemon's transcriber-build
   path now type-asserts the registered transcriber against
   `io.Closer` and defers Close on shutdown — backends without
@@ -669,7 +669,7 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 #### Added
 - `pkg/yap/` is now the public library surface for yap's primitives.
-  Third-party Go programs can import `github.com/hybridz/yap/pkg/yap`
+  Third-party Go programs can import `github.com/Enriquefft/yap/pkg/yap`
   and drive transcription end-to-end without touching the daemon or
   the CLI. The top-level `yap.Client` type wraps a `Transcriber` and
   a `Transformer` behind a functional-options API (`WithTranscriber`,
@@ -729,14 +729,14 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
   the `transcribeAdapter` helper are gone; backends are wired
   purely through the registry. The daemon imports every backend
   sub-package for its side-effect registration
-  (`_ "github.com/hybridz/yap/pkg/yap/transcribe/groq"`, etc.).
+  (`_ "github.com/Enriquefft/yap/pkg/yap/transcribe/groq"`, etc.).
 
 #### Removed
 - `internal/transcribe/` is deleted in its entirety. The Groq
   client, its test suite, and its AST no-globals guard all live
   under `pkg/yap/transcribe/groq/` now, ported to the streaming
   channel API. The import path
-  `github.com/hybridz/yap/internal/transcribe` no longer exists and
+  `github.com/Enriquefft/yap/internal/transcribe` no longer exists and
   must not be re-introduced.
 - `engine.Transcriber` (the former local interface), the
   `transcribeAdapter` bridge in the daemon, and the
@@ -884,4 +884,4 @@ behavior change for end users.
   Phase 4 by the app-aware injection module described in
   `ARCHITECTURE.md`.
 
-[Unreleased]: https://github.com/hybridz/yap/compare/770edee...HEAD
+[Unreleased]: https://github.com/Enriquefft/yap/compare/770edee...HEAD

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/hybridz/yap/internal/platform"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	"github.com/Enriquefft/yap/internal/platform"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // apiKeyPattern validates a Groq API key format: gsk_ followed by 52

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	yinject "github.com/hybridz/yap/pkg/yap/inject"
+	yinject "github.com/Enriquefft/yap/pkg/yap/inject"
 )
 
 // tmuxStrategy delivers text via tmux's load-buffer + paste-buffer

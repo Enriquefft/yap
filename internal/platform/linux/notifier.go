@@ -2,7 +2,7 @@ package linux
 
 import (
 	"github.com/gen2brain/beeep"
-	"github.com/hybridz/yap/internal/platform"
+	"github.com/Enriquefft/yap/internal/platform"
 )
 
 // notifier implements platform.Notifier using beeep (libnotify on Linux).

@@ -3,10 +3,10 @@ package cli
 import (
 	"io"
 
-	"github.com/hybridz/yap/internal/config"
-	"github.com/hybridz/yap/internal/platform"
-	linux "github.com/hybridz/yap/internal/platform/linux"
-	"github.com/hybridz/yap/pkg/yap/transcribe/whisperlocal/models"
+	"github.com/Enriquefft/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/platform"
+	linux "github.com/Enriquefft/yap/internal/platform/linux"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe/whisperlocal/models"
 	"github.com/spf13/cobra"
 )
 

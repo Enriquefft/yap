@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transcribe"
+	"github.com/Enriquefft/yap/pkg/yap/transcribe"
 )
 
 // fakeFileInfo implements os.FileInfo for the discoverer test stubs.

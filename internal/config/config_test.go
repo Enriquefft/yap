@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hybridz/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/config"
 )
 
 func TestConfigPath(t *testing.T) {

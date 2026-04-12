@@ -14,7 +14,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/adrg/xdg"
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // Config is the on-disk configuration document. It is a type alias for

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"text/template"
 
-	pcfg "github.com/hybridz/yap/pkg/yap/config"
+	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 )
 
 // FieldInfo describes one leaf field in the config schema.

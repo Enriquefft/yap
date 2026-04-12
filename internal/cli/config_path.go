@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hybridz/yap/internal/config"
+	"github.com/Enriquefft/yap/internal/config"
 	"github.com/spf13/cobra"
 )
 

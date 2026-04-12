@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/adrg/xdg"
-	"github.com/hybridz/yap/internal/ipc"
-	"github.com/hybridz/yap/internal/pidfile"
+	"github.com/Enriquefft/yap/internal/ipc"
+	"github.com/Enriquefft/yap/internal/pidfile"
 )
 
 // TestStatus_NoDaemon prints the local-fallback JSON shape and

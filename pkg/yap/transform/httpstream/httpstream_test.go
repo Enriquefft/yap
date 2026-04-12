@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hybridz/yap/pkg/yap/transform/httpstream"
+	"github.com/Enriquefft/yap/pkg/yap/transform/httpstream"
 )
 
 // newTestClient returns a Client wired to the supplied server with a
