@@ -6,8 +6,14 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
@@ -15,7 +21,8 @@
         # binaries are produced via `nix develop .#static --command
         # make build-static`, which routes through the Makefile — the
         # single source of truth for release build flags.
-        yapPkg = { buildGoModule, pkg-config }:
+        yapPkg =
+          { buildGoModule, pkg-config }:
           let
             version = "0.1.0";
           in
@@ -32,14 +39,17 @@
             buildInputs = [ ];
 
             ldflags = [
-              "-s" "-w"
-              "-X" "github.com/Enriquefft/yap/internal/config.Version=${version}"
+              "-s"
+              "-w"
+              "-X"
+              "github.com/Enriquefft/yap/internal/config.Version=${version}"
             ];
           };
-      in {
+      in
+      {
         packages = {
-          default = pkgs.callPackage yapPkg {};
-          yap = pkgs.callPackage yapPkg {};
+          default = pkgs.callPackage yapPkg { };
+          yap = pkgs.callPackage yapPkg { };
         };
 
         # Development shell: provides all tools needed for local development.
@@ -50,21 +60,23 @@
         # shell's NIX_LDFLAGS causes musl+glibc mixing in test binaries
         # which segfaults `go test`.
         # Usage: nix develop .#static
-        devShells.static = let
-          muslCC = pkgs.pkgsStatic.stdenv.cc;
-        in pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            go
-            pkg-config
-            (writeShellScriptBin "musl-gcc" ''
-              exec ${muslCC}/bin/${muslCC.targetPrefix}gcc "$@"
-            '')
-          ];
-          shellHook = ''
-            echo "yap static dev shell — musl toolchain active"
-            echo "  make build-static  — static musl build"
-          '';
-        };
+        devShells.static =
+          let
+            muslCC = pkgs.pkgsStatic.stdenv.cc;
+          in
+          pkgs.mkShell {
+            nativeBuildInputs = with pkgs; [
+              go
+              pkg-config
+              (writeShellScriptBin "musl-gcc" ''
+                exec ${muslCC}/bin/${muslCC.targetPrefix}gcc "$@"
+              '')
+            ];
+            shellHook = ''
+              echo "yap static dev shell — musl toolchain active"
+              echo "  make build-static  — static musl build"
+            '';
+          };
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
@@ -81,6 +93,7 @@
             # does not link against whisper.cpp — discovery is via PATH at
             # runtime, so this is purely a developer convenience.
             whisper-cpp
+            alsa-utils
           ];
 
           shellHook = ''
@@ -89,15 +102,17 @@
             echo "  nix develop .#static --command make build-static  — static musl build"
           '';
         };
-      }) // {
-        # NixOS module: closes over self to reference flake packages directly.
-        # No overlay needed — the module resolves the package from self.packages.
-        nixosModules.default = import ./nixosModules.nix self;
+      }
+    )
+    // {
+      # NixOS module: closes over self to reference flake packages directly.
+      # No overlay needed — the module resolves the package from self.packages.
+      nixosModules.default = import ./nixosModules.nix self;
 
-        # Home-manager module: provides programs.yap with optional systemd
-        # user service. Users who manage keybinds externally can set
-        # programs.yap.daemon.enable = false and use yap record/toggle
-        # from their own keybind setup.
-        homeManagerModules.default = import ./homeManagerModules.nix self;
-      };
+      # Home-manager module: provides programs.yap with optional systemd
+      # user service. Users who manage keybinds externally can set
+      # programs.yap.daemon.enable = false and use yap record/toggle
+      # from their own keybind setup.
+      homeManagerModules.default = import ./homeManagerModules.nix self;
+    };
 }
