@@ -453,7 +453,14 @@ func buildHintOpts(cfg *config.Config, p platform.Platform) (transcribe.Options,
 		convMax = 8000
 	}
 
-	return transcribe.Options{Prompt: hint.HeadBytes(vocab, vocabMax)},
+	prompt := hint.HeadBytes(vocab, vocabMax)
+	slog.Default().Info("hint: built options",
+		"vocab_bytes", len(vocab),
+		"prompt_bytes", len(prompt),
+		"conversation_bytes", len(conversation),
+		"root_path", rootPath,
+	)
+	return transcribe.Options{Prompt: prompt},
 		transform.Options{Context: hint.TailBytes(conversation, convMax)}
 }
 
