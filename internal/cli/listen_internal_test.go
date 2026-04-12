@@ -197,9 +197,13 @@ func TestSpawnDaemonChild_TimeoutIncludesStderr(t *testing.T) {
 func TestOsSpawnDaemon_UsesFileForChildStderr(t *testing.T) {
 	withScratchListenEnv(t)
 
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("true not in PATH")
+	}
 	prev := daemonChildCommand
 	daemonChildCommand = func() (*exec.Cmd, error) {
-		return exec.Command("/bin/true"), nil
+		return exec.Command(truePath), nil
 	}
 	t.Cleanup(func() { daemonChildCommand = prev })
 
