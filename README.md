@@ -168,6 +168,42 @@ The TOML schema, the NixOS module, the wizard prompts, and the validation logic 
 | `YAP_HOTKEY` | Compat alias for `general.hotkey`. |
 | `YAP_CONFIG` | Override config file path. |
 
+## Context-Aware Transcription
+
+yap reads project docs and application state to bias Whisper toward your domain vocabulary. This fixes common misrecognitions — "yap" no longer transcribes as "jump" or "chap" when you're working in the yap repo.
+
+**Two layers, both configurable:**
+
+| Layer | Source | Feeds | Always-on? |
+|---|---|---|---|
+| Vocabulary | Project docs (`CLAUDE.md`, `AGENTS.md`, `README.md`) | Whisper `prompt` parameter | Yes (when `hint.enabled`) |
+| Conversation | App-specific state (Claude Code session, terminal scrollback) | LLM transform context | Only when a provider matches |
+
+**Providers** supply conversation context. They run in priority order; first match wins:
+
+| Provider | Matches | Source |
+|---|---|---|
+| `claudecode` | Terminal apps | `~/.claude/projects/<cwd-slug>/<latest>.jsonl` — recent user/assistant messages |
+| `termscroll` | Terminal apps | Terminal scrollback via API (kitty `allow_remote_control`; more terminals in 12.5) |
+
+**All `[hint]` options:**
+
+```toml
+[hint]
+enabled = true                                         # master switch
+vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project docs walked from cwd to git root
+providers = ["claudecode", "termscroll"]               # conversation providers, first-match wins
+vocabulary_max_chars = 1000                             # Whisper prompt budget (~250 tokens)
+conversation_max_chars = 8000                           # transform context budget
+timeout_ms = 300                                        # max ms for provider fetch before recording starts
+```
+
+**Per-project customization:** edit `vocabulary_files` to add project-specific docs (e.g. `["GLOSSARY.md", "CLAUDE.md"]`). All filenames are searched from cwd upward to the git root.
+
+**Disable entirely:** `yap config set hint.enabled false` — pipeline behaves identically to pre-Phase-12.
+
+**Debug:** `yap hint` prints the live bundle (resolved target, winning provider, vocabulary/conversation sizes) for the currently focused window.
+
 ## Privacy
 
 yap is local-first by default. The default transcription backend is **whisperlocal**, which runs `whisper.cpp` on your machine via a long-lived `whisper-server` subprocess. With the local backend, your audio never leaves your machine.
