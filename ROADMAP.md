@@ -797,10 +797,9 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] `pkg/yap/hint/termscroll/` — single provider with an internal **strategy pattern** (mirrors Phase 4 inject architecture). Each terminal backend is a Strategy; the provider walks them in priority order.
   - `termscroll.go` — `Provider` impl: `Name()="termscroll"`, `Supports()` matches `AppTerminal || Tmux`, `Fetch()` walks strategy list
   - `strategy.go` — `Strategy` interface: `Name() string`, `Supports(inject.Target) bool`, `Read(ctx) (string, error)`
-  - `tmux.go` — strategy: `tmux capture-pane -p -S -500`. Highest priority when `Target.Tmux`. Reads the specific pane, not the whole terminal window.
   - `kitty.go` — strategy: `kitty @ get-text --extent=screen`. Matches `AppClass == "kitty"`. Detects socket via `$KITTY_LISTEN_ON` or `/tmp/kitty-{uid}-*` probing. Graceful skip when `allow_remote_control` is not enabled (kitty returns an error — provider catches and falls through).
   - `init.go` — `hint.Register("termscroll", ...)`
-  - Strategy priority: tmux > kitty > (future: wezterm, ghostty, warp). Tmux is always preferred when present because `capture-pane` reads the specific pane, not the entire terminal viewport that may show multiple tmux panes.
+  - Strategy priority: kitty > (Phase 12.5: tmux, wezterm, ghostty, warp). Phase 12 ships kitty only — Claude Code (50% of usage) is handled by the claudecode provider, not termscroll.
   - Strips ANSI sequences from all strategy output. Returns **only `Bundle.Conversation`** — vocabulary is the daemon's base layer.
   - Returns empty bundle (not error) when no strategy matches or all fail.
   - **Does NOT fire when the claudecode provider already matched** — the provider walk is first-match-wins and claudecode ranks above termscroll in the default list. Claude session jsonl is structured ground truth; tmux/kitty scrollback is a noisy superset. Structured beats unstructured.
@@ -861,7 +860,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ### Deferred to Phase 12.5 and later
 
-- **Phase 12.5 — additional termscroll strategies:** wezterm (`wezterm cli get-text`), ghostty (API TBD — investigate IPC), warp (proprietary API TBD). Each is one `.go` file in `pkg/yap/hint/termscroll/` — zero interface changes, zero config changes. Drops in as a new Strategy behind the existing tmux + kitty.
+- **Phase 12.5 — additional termscroll strategies:** tmux (`tmux capture-pane`), wezterm (`wezterm cli get-text`), ghostty (API TBD — investigate IPC), warp (proprietary API TBD). Each is one `.go` file in `pkg/yap/hint/termscroll/` — zero interface changes, zero config changes. Drops in as a new Strategy behind the existing kitty. Tmux deferred from Phase 12 because the claudecode provider already covers the 50% Claude Code use case (Claude Code in tmux → claudecode fires first).
 - **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Requires a nontrivial DBus protocol implementation on top of `github.com/godbus/dbus/v5`; most useful target apps (Electron, browsers) have poor a11y tree coverage anyway. Revisit after a user asks for it.
 - **Compositor-specific providers** (KWin / GNOME Shell extension hooks). Niche, low leverage.
 - **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
