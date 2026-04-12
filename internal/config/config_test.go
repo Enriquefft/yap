@@ -44,6 +44,15 @@ func TestMissingConfigUsesDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("YAP_CONFIG", "")
 
+	// Point systemConfigPath at a non-existent path inside the
+	// TempDir so Load's fallback chain cannot reach the developer's
+	// real /etc/yap/config.toml. Without this, any machine running
+	// yap with a NixOS-generated system config (hotkey=KEY_F24,
+	// language=es, etc.) contaminates the "missing config uses
+	// defaults" assertion because the fallback branch loads from
+	// /etc/yap whenever neither XDG nor YAP_CONFIG resolves.
+	t.Cleanup(config.SetSystemConfigPathForTest(filepath.Join(tmp, "etc", "yap", "config.toml")))
+
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() returned error for missing config: %v", err)
