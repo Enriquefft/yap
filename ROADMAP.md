@@ -794,13 +794,16 @@ Merged in commit `770edee` (2026-04). All tests pass.
   - Returns **only `Bundle.Conversation`** — vocabulary is handled by the daemon's base layer (CLAUDE.md / AGENTS.md / README.md). The claudecode provider does NOT read project docs; it provides session-specific conversational context only.
   - `Supports` matches on `target.AppType == AppTerminal` or `target.Tmux`
   - Graceful empty bundle when no session file exists (not an error)
-- [ ] `pkg/yap/hint/tmuxpane/` — shells `tmux capture-pane -p -S -500 -t $TMUX_PANE`
-  - Strips ANSI sequences, returns the raw terminal buffer text
-  - Returns **only `Bundle.Conversation`** — vocabulary is the daemon's base layer
-  - `Supports` matches on `target.Tmux`
-  - Non-tmux sessions return an empty bundle (not an error)
-  - Graceful empty when `tmux` is not on `$PATH`
-  - **Does NOT fire when the claudecode provider already matched** — the provider walk is first-match-wins and claudecode ranks above tmuxpane in the default list. Tmux scrollback is a noisy superset of the session jsonl; the structured jsonl is strictly better when available.
+- [ ] `pkg/yap/hint/termscroll/` — single provider with an internal **strategy pattern** (mirrors Phase 4 inject architecture). Each terminal backend is a Strategy; the provider walks them in priority order.
+  - `termscroll.go` — `Provider` impl: `Name()="termscroll"`, `Supports()` matches `AppTerminal || Tmux`, `Fetch()` walks strategy list
+  - `strategy.go` — `Strategy` interface: `Name() string`, `Supports(inject.Target) bool`, `Read(ctx) (string, error)`
+  - `tmux.go` — strategy: `tmux capture-pane -p -S -500`. Highest priority when `Target.Tmux`. Reads the specific pane, not the whole terminal window.
+  - `kitty.go` — strategy: `kitty @ get-text --extent=screen`. Matches `AppClass == "kitty"`. Detects socket via `$KITTY_LISTEN_ON` or `/tmp/kitty-{uid}-*` probing. Graceful skip when `allow_remote_control` is not enabled (kitty returns an error — provider catches and falls through).
+  - `init.go` — `hint.Register("termscroll", ...)`
+  - Strategy priority: tmux > kitty > (future: wezterm, ghostty, warp). Tmux is always preferred when present because `capture-pane` reads the specific pane, not the entire terminal viewport that may show multiple tmux panes.
+  - Strips ANSI sequences from all strategy output. Returns **only `Bundle.Conversation`** — vocabulary is the daemon's base layer.
+  - Returns empty bundle (not error) when no strategy matches or all fail.
+  - **Does NOT fire when the claudecode provider already matched** — the provider walk is first-match-wins and claudecode ranks above termscroll in the default list. Claude session jsonl is structured ground truth; tmux/kitty scrollback is a noisy superset. Structured beats unstructured.
 
 ### Active-window detection reuse
 
@@ -812,7 +815,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] `pkg/yap/config.HintConfig` under `Config.Hint`:
   - `enabled bool`
   - `vocabulary_files []string` — project doc filenames to read for base vocabulary (default: `["CLAUDE.md", "AGENTS.md", "README.md"]`). LLM provider clients use different instruction file names (CLAUDE.md for Claude Code, AGENTS.md for others, .cursorrules for Cursor, etc.) — the default covers the common ones. Users configure per-project by editing their config.
-  - `providers []string` — ordered fallback list for conversation context (default: `["claudecode","tmuxpane"]`)
+  - `providers []string` — ordered fallback list for conversation context (default: `["claudecode","termscroll"]`)
   - `vocabulary_max_chars int` — Whisper prompt budget (default: 1000 bytes ≈ ~250 tokens, leaving margin under Whisper's 224-token window)
   - `conversation_max_chars int` — transform context budget (default: 8000 bytes)
   - `timeout_ms int` — wall-time budget on the provider walk (default: 300ms; hard cap so a stuck provider never delays audio capture)
@@ -840,7 +843,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] Unit tests for the two new Options structs in `pkg/yap/transcribe` and `pkg/yap/transform`
 - [ ] Updated backend tests for every transcribe + transform implementation (mock, groq, openai, whisperlocal, passthrough, local, openai-transform, fallback) to thread Options through
 - [ ] `pkg/yap/hint/claudecode/claudecode_test.go` — parses a fixture `testdata/session.jsonl` with a realistic mix of user/assistant/meta/tool entries, asserts extracted Bundle text
-- [ ] `pkg/yap/hint/tmuxpane/tmuxpane_test.go` — PATH-shim fake `tmux` binary printing canned output, asserts parsing and ANSI stripping
+- [ ] `pkg/yap/hint/termscroll/termscroll_test.go` — tests provider walk with fake strategies; `tmux_test.go` with PATH-shim fake `tmux`; `kitty_test.go` with PATH-shim fake `kitty` binary; ANSI stripping tests
 - [ ] `internal/engine/engine_test.go` — exercises `RunOptions.Bundle` threading with captured Options from mock transcriber + mock transformer; asserts tail-truncation against budgets
 - [ ] `internal/daemon/daemon_test.go` — `fetchHintBundle` against fake providers (match, no-match, error, empty) and fake resolver; asserts ordering and non-fatal error handling
 - [ ] `internal/cli/hint_test.go` — exercises the new debug command against a fake platform
@@ -856,14 +859,16 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] `make build-static` still produces a working binary (no new cgo dependencies introduced by this phase)
 - [ ] Every new package has a `noglobals_test.go` AST guard
 
-### Deferred to later phases (intentional)
+### Deferred to Phase 12.5 and later
 
+- **Phase 12.5 — additional termscroll strategies:** wezterm (`wezterm cli get-text`), ghostty (API TBD — investigate IPC), warp (proprietary API TBD). Each is one `.go` file in `pkg/yap/hint/termscroll/` — zero interface changes, zero config changes. Drops in as a new Strategy behind the existing tmux + kitty.
 - **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Requires a nontrivial DBus protocol implementation on top of `github.com/godbus/dbus/v5`; most useful target apps (Electron, browsers) have poor a11y tree coverage anyway. Revisit after a user asks for it.
 - **Compositor-specific providers** (KWin / GNOME Shell extension hooks). Niche, low leverage.
 - **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
 - **macOS AX provider** — rides with Phase 14 (macOS Support).
 - **Windows UIA provider** — rides with Phase 15 (Windows Support).
 - **Per-project config overlay** (`.yap.toml` in repo root merged with user config). Enables truly per-repo `vocabulary_files` and `providers` without editing the global config. Revisit when multiple-project usage becomes common.
+- **Terminals with no scrollback API** (foot, alacritty, st): vocabulary-only coverage permanently. These terminals are deliberately minimal and will never expose a scrollback read API. Users get CLAUDE.md/README.md vocabulary bias, which fixes the core "yap → jump" problem. No conversation context.
 
 ---
 
