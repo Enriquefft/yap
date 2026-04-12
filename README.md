@@ -147,7 +147,7 @@ electron_strategy = "clipboard" # "clipboard" | "keystroke"
 [hint]
 enabled = true                  # context-aware transcription (reads project docs + app state)
 vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project docs to read for domain terms
-providers = ["claudecode", "tmuxpane"]                       # conversation context providers, first-match wins
+providers = ["claudecode", "termscroll"]                       # conversation context providers, first-match wins
 vocabulary_max_chars = 1000     # Whisper prompt budget (~250 tokens)
 conversation_max_chars = 8000   # transform context budget
 timeout_ms = 300                # max wall-time for provider fetch

@@ -43,7 +43,7 @@ type Config struct {
 // it does, fetch conversation context from the focused application.
 type Provider interface {
 	// Name returns a stable identifier for this provider (e.g.
-	// "claudecode", "tmuxpane"). Used in config, logs, and
+	// "claudecode", "termscroll"). Used in config, logs, and
 	// Bundle.Source.
 	Name() string
 	// Supports returns true when this provider can produce useful

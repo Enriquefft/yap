@@ -11,6 +11,6 @@
 // ReadVocabularyFiles, not by individual providers.
 //
 // The hint package is deliberately free of platform-specific imports.
-// Concrete providers live in sub-packages (claudecode, tmuxpane) and
+// Concrete providers live in sub-packages (claudecode, termscroll) and
 // register themselves via init().
 package hint

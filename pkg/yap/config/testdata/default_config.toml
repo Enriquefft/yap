@@ -38,7 +38,7 @@
 [hint]
   enabled = true
   vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]
-  providers = ["claudecode", "tmuxpane"]
+  providers = ["claudecode", "termscroll"]
   vocabulary_max_chars = 1000
   conversation_max_chars = 8000
   timeout_ms = 300

@@ -317,7 +317,7 @@ func nixType(f FieldInfo) string {
 		if len(f.ElemFields) > 0 {
 			return renderSubmoduleType(f.ElemFields)
 		}
-		return "lib.types.listOf (lib.types.attrsOf lib.types.str)"
+		return "lib.types.listOf lib.types.str"
 	default:
 		return "lib.types.str"
 	}

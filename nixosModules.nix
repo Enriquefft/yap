@@ -273,12 +273,12 @@ in {
           description = "Enable context-aware hint pipeline";
         };
         vocabulary_files = lib.mkOption {
-          type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+          type = lib.types.listOf lib.types.str;
           default = [ ];
           description = "Project doc filenames to read for base vocabulary (walks cwd to git root)";
         };
         providers = lib.mkOption {
-          type = lib.types.listOf (lib.types.attrsOf lib.types.str);
+          type = lib.types.listOf lib.types.str;
           default = [ ];
           description = "Ordered hint provider list for conversation context; first match wins";
         };

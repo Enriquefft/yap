@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Enriquefft/yap/pkg/yap/hint"
 	"github.com/Enriquefft/yap/pkg/yap/inject"
@@ -217,10 +218,16 @@ func extractTextBlocks(raw json.RawMessage) string {
 	return strings.Join(parts, " ")
 }
 
-// tailToBytes returns the tail of s that fits within budget bytes.
+// tailToBytes returns the tail of s that fits within budget bytes,
+// clipping on a UTF-8 rune boundary so the returned string never
+// starts with a continuation byte.
 func tailToBytes(s string, budget int) string {
 	if len(s) <= budget {
 		return s
 	}
-	return s[len(s)-budget:]
+	start := len(s) - budget
+	for start < len(s) && start > 0 && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }

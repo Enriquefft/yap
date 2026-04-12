@@ -43,7 +43,6 @@ func (k *kittyStrategy) Read(ctx context.Context) (string, error) {
 
 	args := []string{"@", "get-text", "--extent=screen"}
 	if socket != "" {
-		args = append([]string{"@", "--to=" + socket, "get-text", "--extent=screen"}, []string{}...)
 		args = []string{"@", "--to=" + socket, "get-text", "--extent=screen"}
 	}
 

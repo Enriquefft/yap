@@ -165,7 +165,7 @@ func DefaultConfig() Config {
 		Hint: HintConfig{
 			Enabled:              true,
 			VocabularyFiles:      []string{"CLAUDE.md", "AGENTS.md", "README.md"},
-			Providers:            []string{"claudecode", "tmuxpane"},
+			Providers:            []string{"claudecode", "termscroll"},
 			VocabularyMaxChars:   1000,
 			ConversationMaxChars: 8000,
 			TimeoutMS:            300,
