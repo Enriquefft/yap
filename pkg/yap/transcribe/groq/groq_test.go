@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -188,9 +189,9 @@ func TestMultipartForm(t *testing.T) {
 }
 
 func TestHTTPTimeout(t *testing.T) {
-	requestCount := 0
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
+		requestCount.Add(1)
 		time.Sleep(200 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
@@ -214,15 +215,15 @@ func TestHTTPTimeout(t *testing.T) {
 	if final.Err == nil {
 		t.Error("expected timeout error, got nil")
 	}
-	if requestCount < 1 {
-		t.Errorf("expected at least 1 HTTP request, got %d", requestCount)
+	if requestCount.Load() < 1 {
+		t.Errorf("expected at least 1 HTTP request, got %d", requestCount.Load())
 	}
 }
 
 func TestRetryClassification_4xx(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprint(w, `{"error": {"message": "invalid API key", "type": "authentication_error"}}`)
 	}))
@@ -237,8 +238,8 @@ func TestRetryClassification_4xx(t *testing.T) {
 	if final.Err == nil {
 		t.Fatal("expected error for 401, got nil")
 	}
-	if callCount != 1 {
-		t.Errorf("got %d calls, want 1 (no retry on 4xx)", callCount)
+	if callCount.Load() != 1 {
+		t.Errorf("got %d calls, want 1 (no retry on 4xx)", callCount.Load())
 	}
 	if !strings.Contains(final.Err.Error(), "invalid API key") {
 		t.Errorf("error should contain API message, got: %v", final.Err)
@@ -246,9 +247,9 @@ func TestRetryClassification_4xx(t *testing.T) {
 }
 
 func TestRetryClassification_5xx(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, `{"error": {"message": "service unavailable", "type": "server_error"}}`)
 	}))
@@ -263,15 +264,15 @@ func TestRetryClassification_5xx(t *testing.T) {
 	if final.Err == nil {
 		t.Fatal("expected 503 error, got nil")
 	}
-	if callCount != 4 {
-		t.Errorf("got %d calls, want 4 (initial + 3 retries)", callCount)
+	if callCount.Load() != 4 {
+		t.Errorf("got %d calls, want 4 (initial + 3 retries)", callCount.Load())
 	}
 }
 
 func TestRetryClassification_Timeout(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
@@ -295,15 +296,15 @@ func TestRetryClassification_Timeout(t *testing.T) {
 	if final.Err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if callCount < 2 {
-		t.Errorf("got %d calls, want >= 2 (timeout retried)", callCount)
+	if callCount.Load() < 2 {
+		t.Errorf("got %d calls, want >= 2 (timeout retried)", callCount.Load())
 	}
 }
 
 func TestAPIKey(t *testing.T) {
-	var gotAuthHeader string
+	var gotAuthHeader atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuthHeader = r.Header.Get("Authorization")
+		gotAuthHeader.Store(r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"text": "test"}`)
 	}))
@@ -328,8 +329,8 @@ func TestAPIKey(t *testing.T) {
 		t.Fatalf("final.Err: %v", final.Err)
 	}
 	want := "Bearer " + testKey
-	if gotAuthHeader != want {
-		t.Errorf("auth header: got %q, want %q", gotAuthHeader, want)
+	if got, _ := gotAuthHeader.Load().(string); got != want {
+		t.Errorf("auth header: got %q, want %q", got, want)
 	}
 }
 

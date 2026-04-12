@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -131,9 +132,9 @@ func TestErrorResponseUnwrapsAPIError(t *testing.T) {
 }
 
 func TestRetry5xx(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprint(w, `{"error": {"message": "upstream", "type": "server_error"}}`)
 	}))
@@ -156,15 +157,15 @@ func TestRetry5xx(t *testing.T) {
 	if final.Err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if callCount != 4 {
-		t.Errorf("callCount = %d, want 4 (initial + 3 retries)", callCount)
+	if callCount.Load() != 4 {
+		t.Errorf("callCount = %d, want 4 (initial + 3 retries)", callCount.Load())
 	}
 }
 
 func TestNoRetry4xx(t *testing.T) {
-	callCount := 0
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+		callCount.Add(1)
 		w.WriteHeader(http.StatusForbidden)
 		fmt.Fprint(w, `{"error": {"message": "nope", "type": "permission_denied"}}`)
 	}))
@@ -187,8 +188,8 @@ func TestNoRetry4xx(t *testing.T) {
 	if final.Err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if callCount != 1 {
-		t.Errorf("callCount = %d, want 1 (no retry on 4xx)", callCount)
+	if callCount.Load() != 1 {
+		t.Errorf("callCount = %d, want 1 (no retry on 4xx)", callCount.Load())
 	}
 }
 
