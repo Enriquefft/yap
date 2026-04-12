@@ -40,12 +40,13 @@ func TailBytes(s string, n int) string {
 	return s[start:]
 }
 
-// ResolveTargetCwd resolves the focused window's working directory
-// via /proc/<pid>/cwd. Falls back to os.Getwd() when the target has
-// no PID or /proc is unreadable (e.g. wlroots compositors that don't
-// expose PID in the toplevel protocol).
+// ResolveTargetCwd resolves the working directory of the focused app.
+// For terminals, reads /proc/<pid>/cwd — the terminal's cwd IS the
+// project directory. For non-terminals (browsers, Electron apps), the
+// process cwd is meaningless, so falls back to os.Getwd(). Also falls
+// back when no PID is available or /proc is unreadable.
 func ResolveTargetCwd(target inject.Target) string {
-	if target.WindowID != "" {
+	if target.AppType == inject.AppTerminal && target.WindowID != "" {
 		link, err := os.Readlink("/proc/" + target.WindowID + "/cwd")
 		if err == nil {
 			return link
