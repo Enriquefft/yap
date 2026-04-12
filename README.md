@@ -1,22 +1,23 @@
-# yap — Hold-to-Talk Voice Dictation for Your Desktop
+# yap — Context-Aware Voice Dictation for Your Desktop
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/Enriquefft/yap/release.yml?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
 ![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat-square&logo=go)
 ![Release](https://img.shields.io/github/v/release/Enriquefft/yap?style=flat-square)
 
-Hold a key. Speak. Text appears wherever you're typing.
+Hold a key. Speak. Text appears wherever you're typing — with your project's vocabulary intact.
 
-yap is a lightweight voice-to-text daemon with near-zero idle footprint. Its sole job is to let you drive any app — terminals and Claude Code first — with your voice, reliably and fast.
+yap is a lightweight voice-to-text daemon that reads your project docs and conversation history so domain terms transcribe correctly. Local whisper.cpp by default, terminal-native, near-zero idle footprint.
 
 > **Status:** pre-1.0. Linux is the current platform. macOS and Windows are on the roadmap. Breaking changes are possible until 1.0.
 
 ## Why yap
 
+- **Context-aware transcription** — yap reads your project docs (CLAUDE.md, README.md) and conversation history (Claude Code sessions, tmux scrollback) to bias Whisper's vocabulary. Domain terms transcribe correctly instead of being garbled.
+- **Terminal-native** — OSC52, bracketed paste, tmux, SSH, Claude Code, VS Code, and browsers are first-class injection targets, not afterthoughts.
+- **Local-first** — whisper.cpp runs on your machine by default. Audio never leaves your hardware. Swap to Groq for ~1s cloud latency with one line of config.
 - **Zero idle footprint** — a few MB of RAM and negligible CPU when not recording.
-- **Fast transcription** — short clips return in roughly a second.
 - **Single binary** — one static executable, no runtime dependencies.
-- **App-aware text injection** — terminals, Electron editors, browsers, tmux, and SSH sessions are first-class targets, not afterthoughts.
 - **Composable primitives** — `Record`, `Transcribe`, `Transform`, `Inject` are independent operations exposed through a public Go library.
 - **Clipboard safe** — your clipboard is preserved across paste operations that need it.
 
@@ -87,9 +88,13 @@ yap config path                  # print resolved config file path
 yap models list                  # list pinned whisper.cpp models and install state
 yap models download <name>       # download a model into the cache (SHA256-verified)
 yap models path [name]           # print the cache directory or a specific model path
+yap record                       # one-shot record → transcribe → inject, no daemon
+yap transcribe <file.wav>        # transcribe an audio file (--json for structured output)
+yap transform "text"             # run the LLM transform on text (stdin or arg)
+yap paste "text"                 # exercise the injection layer directly
+yap devices                      # list audio input devices
+yap hint                         # debug: show resolved target, provider, and vocabulary
 ```
-
-Additional commands (`yap record`, `yap transcribe`, `yap transform`, `yap paste`, `yap devices`, `yap history`) ship as the corresponding roadmap phases land. See [`ROADMAP.md`](ROADMAP.md).
 
 ## Configuration
 
@@ -139,6 +144,14 @@ electron_strategy = "clipboard" # "clipboard" | "keystroke"
 #   { match = "kitty",   strategy = "osc52" },
 # ]
 
+[hint]
+enabled = true                  # context-aware transcription (reads project docs + app state)
+vocabulary_files = ["CLAUDE.md", "AGENTS.md", "README.md"]  # project docs to read for domain terms
+providers = ["claudecode", "tmuxpane"]                       # conversation context providers, first-match wins
+vocabulary_max_chars = 1000     # Whisper prompt budget (~250 tokens)
+conversation_max_chars = 8000   # transform context budget
+timeout_ms = 300                # max wall-time for provider fetch
+
 [tray]
 enabled = false
 ```
@@ -170,8 +183,8 @@ yap has no accounts, no telemetry, no analytics, and no cloud sync. Ever.
 | Platform | Status |
 |---|---|
 | Linux   | Supported. |
-| macOS   | Planned ([`ROADMAP.md`](ROADMAP.md) phase 13). |
-| Windows | Planned ([`ROADMAP.md`](ROADMAP.md) phase 14). |
+| macOS   | Coming soon ([`ROADMAP.md`](ROADMAP.md) phase 14). |
+| Windows | Planned ([`ROADMAP.md`](ROADMAP.md) phase 15). |
 
 ## Contributing
 
