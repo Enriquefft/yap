@@ -166,7 +166,7 @@ func DefaultConfig() Config {
 			Enabled:              true,
 			VocabularyFiles:      []string{"CLAUDE.md", "AGENTS.md", "README.md"},
 			Providers:            []string{"claudecode", "termscroll"},
-			VocabularyMaxChars:   1000,
+			VocabularyMaxChars:   800,
 			ConversationMaxChars: 8000,
 			TimeoutMS:            300,
 		},
