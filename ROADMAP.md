@@ -5,7 +5,7 @@
 
 ---
 
-## Status (2026-04-08)
+## Status (2026-04-11)
 
 | # | Phase | Status |
 |---|-------|--------|
@@ -21,10 +21,11 @@
 | 9 | Audio Backend (malgo) | done |
 | 10 | Hotkey Combos | pending |
 | 11 | Press-to-Toggle + Silence | done |
-| 12 | Transcription History | pending |
-| 13 | macOS Support | pending |
-| 14 | Windows Support | pending |
-| 15 | System Tray | pending |
+| 12 | Context-Aware Pipeline (Linux) | pending |
+| 13 | Transcription History | pending |
+| 14 | macOS Support | pending |
+| 15 | Windows Support | pending |
+| 16 | System Tray | pending |
 | — | Distribution + CI | continuous |
 
 ---
@@ -756,7 +757,111 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 12 — Transcription History
+## Phase 12 — Context-Aware Pipeline (Linux)
+
+**Depends on:** Phase 3, Phase 4, Phase 5, Phase 6, Phase 8
+**Goal:** Whisper and the LLM transform both know *what the user is dictating into* so domain vocabulary ("yap", "whisperlocal", "OSC52") is recognized correctly at the source instead of being fixed after the fact. The motivating failure: saying "what is yap?" inside a Claude Code session on this repo and getting "what is jump?" because Whisper has no vocabulary anchor.
+
+**Key insight:** this is a lexical-bias problem, not an LLM-cleanup problem. Whisper's `prompt` parameter (OpenAI, Groq, whisper.cpp all support it) nudges token probabilities toward supplied vocabulary. The correct fix is to feed recent **canonical application state** into both the transcribe prompt and the transform system message — same source, two consumers with different token budgets. No heuristic extraction, no bag-of-words, no README-as-proxy. The canonical state of what you are dictating into is the ground truth.
+
+### Interface changes (breaking, pre-1.0)
+
+- [ ] `pkg/yap/transcribe`: add `Options struct { Prompt string }`
+- [ ] `Transcriber.Transcribe(ctx, audio, opts Options)` — per-call prompt, not per-backend
+- [ ] Remove `transcribe.Config.Prompt` — it was at the wrong granularity (construction-time, but the prompt must differ per recording because the focused window differs per recording)
+- [ ] Thread `Options.Prompt` through every backend: groq, openai, whisperlocal, mock
+- [ ] `pkg/yap/transform`: add `Options struct { Context string }`
+- [ ] `Transformer.Transform(ctx, in, opts Options)` — per-call context string
+- [ ] Thread `Options.Context` through every backend: local, openai, passthrough, fallback. Non-empty context is prepended to the configured `SystemPrompt` as a reference block (`"Recent context (reference only, do not repeat):\n{context}\n---\n"`) at call time
+- [ ] Update `internal/engine/engine.go`: `RunOptions` gains `Bundle hint.Bundle` + `VocabularyMaxChars` + `ConversationMaxChars`; `runPipeline` tail-truncates bundle text and passes to the per-stage Options
+
+### New package: `pkg/yap/hint/`
+
+- [ ] `pkg/yap/hint/hint.go` — `Provider` interface (`Name`, `Supports(target)`, `Fetch(ctx, target) (Bundle, error)`), `Bundle{Vocabulary, Conversation, Source}`, `Factory`, `Config{RootPath}`, `Register/Get/Providers` registry (identical shape to `pkg/yap/transcribe`)
+- [ ] `pkg/yap/hint/hint_test.go` — registry tests
+- [ ] `pkg/yap/hint/noglobals_test.go` — AST guard matching existing packages
+- [ ] Bundle semantics: **same natural text for both fields on Phase 12**. Future providers may return different text per field when they have structured state (e.g. an AT-SPI provider could return focused-element text for vocabulary and the surrounding paragraph for conversation). Phase 12 keeps it simple: providers return one block of canonical recent text, engine truncates per-stage.
+
+### Linux providers (the two shipped in Phase 12)
+
+- [ ] `pkg/yap/hint/claudecode/` — reads `~/.claude/projects/<cwd-slug>/<latest-session>.jsonl`
+  - `cwd-slug`: absolute cwd with `/` replaced by `-` (e.g. `/home/hybridz/Projects/yap` → `-home-hybridz-Projects-yap`)
+  - Latest session = the jsonl in that directory with the most recent mtime
+  - Parses user + assistant entries, extracts `message.content` strings (and text blocks from assistant arrays), skips meta / command-caveat / tool-use entries
+  - Formats as natural `user: … / assistant: …` prose
+  - `Supports` matches on `target.AppType == AppTerminal` or `target.Tmux`
+  - Graceful empty bundle when no session file exists (not an error)
+- [ ] `pkg/yap/hint/tmuxpane/` — shells `tmux capture-pane -p -S -500 -t $TMUX_PANE`
+  - Strips ANSI sequences, returns the raw terminal buffer text
+  - `Supports` matches on `target.Tmux`
+  - Non-tmux sessions return an empty bundle (not an error)
+  - Graceful empty when `tmux` is not on `$PATH`
+
+### Active-window detection reuse
+
+- [ ] Daemon calls `d.injector.(inject.StrategyResolver).Resolve(ctx)` at press time to get the focused `inject.Target`. This is the Phase 4 contract — `Resolve` is documented as a pure query, no side effects. The same `Target` then drives both the hint provider walk AND the eventual `InjectStream` delivery at the end of the pipeline. Single-source-of-truth for target classification.
+- [ ] Verify the Linux injector at `internal/platform/linux/inject/injector.go` implements `StrategyResolver` (confirmed at phase planning time).
+
+### Config schema
+
+- [ ] `pkg/yap/config.HintConfig` under `Config.Hint`:
+  - `enabled bool`
+  - `providers []string` — ordered fallback list (default: `["claudecode","tmuxpane"]`)
+  - `vocabulary_max_chars int` — Whisper prompt budget (default: 1000 bytes ≈ ~250 tokens, leaving margin under Whisper's 224-token window)
+  - `conversation_max_chars int` — transform context budget (default: 8000 bytes)
+  - `timeout_ms int` — wall-time budget on the provider walk (default: 300ms; hard cap so a stuck provider never delays audio capture)
+- [ ] `enabled = true` by default. This is shipped as core functionality, not opt-in. Principle 2: perfection is the target, not an MVP.
+- [ ] Validator in `pkg/yap/config/validate.go`: clamp ranges, reject unknown provider names against `hint.Providers()`
+- [ ] `nixosModules.nix` regenerated from the updated schema via the existing `gen-nixos` tool
+
+### Daemon wiring
+
+- [ ] `Daemon` struct gains `hintProviders []hint.Provider` built at startup from `cfg.Hint.Providers` via the registry
+- [ ] `startRecording` calls a new `fetchHintBundle(ctx)` helper BEFORE audio capture:
+  1. Bounded `fetchCtx` with `cfg.Hint.TimeoutMS`
+  2. `d.injector.(inject.StrategyResolver).Resolve(fetchCtx)` → `Target`
+  3. Walk `hintProviders` in order, first provider whose `Supports(target)` returns true AND whose `Fetch` returns a non-empty Bundle wins
+  4. Provider errors are non-fatal: log at debug, try next
+  5. Empty return is a legal null case — the pipeline runs identically to today
+- [ ] Bundle threaded into `engine.RunOptions.Bundle` so the engine owns the per-stage truncation
+
+### CLI
+
+- [ ] `yap hint` debug command — runs the same provider walk against the live focused window and prints the resolved Target + winning provider + bundle summary + first N bytes of each field. Verification tool, no side effects.
+
+### Tests
+
+- [ ] Unit tests for the two new Options structs in `pkg/yap/transcribe` and `pkg/yap/transform`
+- [ ] Updated backend tests for every transcribe + transform implementation (mock, groq, openai, whisperlocal, passthrough, local, openai-transform, fallback) to thread Options through
+- [ ] `pkg/yap/hint/claudecode/claudecode_test.go` — parses a fixture `testdata/session.jsonl` with a realistic mix of user/assistant/meta/tool entries, asserts extracted Bundle text
+- [ ] `pkg/yap/hint/tmuxpane/tmuxpane_test.go` — PATH-shim fake `tmux` binary printing canned output, asserts parsing and ANSI stripping
+- [ ] `internal/engine/engine_test.go` — exercises `RunOptions.Bundle` threading with captured Options from mock transcriber + mock transformer; asserts tail-truncation against budgets
+- [ ] `internal/daemon/daemon_test.go` — `fetchHintBundle` against fake providers (match, no-match, error, empty) and fake resolver; asserts ordering and non-fatal error handling
+- [ ] `internal/cli/hint_test.go` — exercises the new debug command against a fake platform
+- [ ] Goroutine-leak guard in the daemon integration test (runtime.NumGoroutine() delta across a full session)
+- [ ] AST no-globals guards on every new package
+
+**Done when:**
+- [ ] Dictating "what is yap?" into a Claude Code session inside the yap repo produces a transcription containing the word "yap", not "jump" / "chap" / "jap" (verified manually on a real host with `whisperlocal` + `base.en` + the claudecode provider enabled)
+- [ ] Dictating inside tmux with a non-Claude program open produces transcription biased by recent pane content (verified manually: dictate a word visible in the pane and confirm it transcribes correctly)
+- [ ] `yap config set hint.enabled false` restores pre-Phase-12 behavior byte-for-byte (no bundle fetch, no Options plumbing at call time beyond a zero-value pass-through)
+- [ ] A stuck provider (simulated 5-second hang) is aborted within `timeout_ms` and does not delay audio capture
+- [ ] `nix develop --command go build ./...` and `nix develop --command go test ./...` both pass
+- [ ] `make build-static` still produces a working binary (no new cgo dependencies introduced by this phase)
+- [ ] Every new package has a `noglobals_test.go` AST guard
+
+### Deferred to later phases (intentional)
+
+- **AT-SPI provider** (GTK/Qt desktop apps via `org.a11y.atspi.*`). Requires a nontrivial DBus protocol implementation on top of `github.com/godbus/dbus/v5`; most useful target apps (Electron, browsers) have poor a11y tree coverage anyway. Revisit after a user asks for it.
+- **Compositor-specific providers** (KWin / GNOME Shell extension hooks). Niche, low leverage.
+- **Vision provider** (screenshot + vision-capable LLM). Expensive, universal fallback-of-last-resort. Separate phase when demand emerges.
+- **macOS AX provider** — rides with Phase 14 (macOS Support).
+- **Windows UIA provider** — rides with Phase 15 (Windows Support).
+- **Static project vocabulary** (README / CLAUDE.md tokenization). Explicitly **rejected**: README is documentation, not state. Using it as a vocabulary proxy duplicates "what matters right now" across two places and guarantees drift. The session file is ground truth; anything else is a shadow.
+
+---
+
+## Phase 13 — Transcription History
 
 **Depends on:** Phase 3, Phase 4
 
@@ -776,7 +881,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 13 — macOS Support
+## Phase 14 — macOS Support
 
 **Depends on:** Phase 1, Phase 4, Phase 9
 
@@ -799,7 +904,7 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 14 — Windows Support
+## Phase 15 — Windows Support
 
 **Depends on:** Phase 1, Phase 4, Phase 9
 
@@ -823,9 +928,9 @@ Merged in commit `770edee` (2026-04). All tests pass.
 
 ---
 
-## Phase 15 — System Tray
+## Phase 16 — System Tray
 
-**Depends on:** Phase 13, Phase 14
+**Depends on:** Phase 14, Phase 15
 
 - [ ] Evaluate tray libraries: `fyne.io/systray`, `getlantern/systray`, `energye/systray`
 - [ ] Pick based on static-linking friendliness across all three platforms
@@ -889,12 +994,18 @@ Phase 1 (Platform) — DONE ──┐                      │
                      │                    │     │
                      ▼                    │     │
               Phase 7 (CLI) ──► Phase 8 (Transform)
-                     │
-                     ▼
-           Phase 10 (Combos) ──► Phase 11 (Toggle+Silence) ──► Phase 12 (History)
+                     │                         │
+                     ▼                         │
+           Phase 10 (Combos) ──► Phase 11 (Toggle+Silence)
+                                        │      │
+                                        ▼      ▼
+                                 Phase 12 (Context-Aware Pipeline)
+                                        │
+                                        ▼
+                                 Phase 13 (History)
 
-       Phase 9 (malgo) ✓ ──► Phase 13 (macOS) ──┐
-                            ──► Phase 14 (Windows) ─┼──► Phase 15 (Tray)
+       Phase 9 (malgo) ✓ ──► Phase 14 (macOS) ──┐
+                            ──► Phase 15 (Windows) ─┼──► Phase 16 (Tray)
                                                    │
            Distribution + CI (continuous) ─────┘
 ```
@@ -912,7 +1023,8 @@ Phase 1 (Platform) — DONE ──┐                      │
 9. **Phase 9** — malgo (parallel with 4–8; only touches `platform/linux/audio.go` + `chime.go`)
 10. **Phase 10** — hotkey combos (small, independent)
 11. **Phase 11** — toggle + silence detection
-12. **Phase 12** — history
-13. **Phase 13 + 14** — macOS and Windows in parallel
-14. **Phase 15** — tray, after both desktop platforms ship
-15. **Continuous** — distribution + CI catches up to every phase
+12. **Phase 12** — context-aware pipeline (Linux) — fixes domain-vocabulary misses at source
+13. **Phase 13** — history
+14. **Phase 14 + 15** — macOS and Windows in parallel
+15. **Phase 16** — tray, after both desktop platforms ship
+16. **Continuous** — distribution + CI catches up to every phase
