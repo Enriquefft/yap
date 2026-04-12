@@ -336,6 +336,75 @@ func TestInjectStreamBuffersUntilClose(t *testing.T) {
 	}
 }
 
+// TestInjectTrimsTrailingWhitespace guards the Enter-press bug: every
+// whisper.cpp / whisper-server response ends with a newline, and
+// keystroke strategies (wayland via wtype, x11 via xdotool) type it
+// as an Enter press — in a terminal that executes the transcribed
+// line, in a form that submits it. The fix trims trailing whitespace
+// once at the dispatch boundary so every strategy sees normalized
+// text. The assertion fires through both the non-streaming Inject
+// path and the InjectStream buffered path because both funnel into
+// the same inject() body.
+//
+// Leading whitespace is intentionally preserved — whisper's leading
+// space is a tokenizer artifact that also doubles as cursor-aware
+// continuation context ("hello" vs " hello" after an existing word).
+// Trimming it here would hide a cursor-position signal that callers
+// may legitimately want.
+func TestInjectTrimsTrailingWhitespace(t *testing.T) {
+	logger, _ := newCaptureHandler()
+	deps := Deps{
+		EnvGet:   envFunc(map[string]string{"WAYLAND_DISPLAY": "wayland-1"}),
+		SleepCtx: func(context.Context, time.Duration) error { return nil },
+		Now:      fixedClock(),
+	}
+
+	cases := []struct {
+		name, in, want string
+	}{
+		{"trailing newline", "hola mundo\n", "hola mundo"},
+		{"trailing CRLF", "hola mundo\r\n", "hola mundo"},
+		{"trailing spaces", "hola mundo   ", "hola mundo"},
+		{"trailing mixed", "hola mundo \t\n", "hola mundo"},
+		{"leading preserved", " hola mundo\n", " hola mundo"},
+		{"internal preserved", "line1\nline2\n", "line1\nline2"},
+		{"no trim needed", "hola mundo", "hola mundo"},
+	}
+	for _, tc := range cases {
+		t.Run("Inject/"+tc.name, func(t *testing.T) {
+			inj, err := New(platform.InjectionOptions{}, deps, logger)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			cs := &captureStrategy{}
+			inj.strategies = []Strategy{cs}
+			if err := inj.Inject(context.Background(), tc.in); err != nil {
+				t.Fatalf("Inject: %v", err)
+			}
+			if cs.last != tc.want {
+				t.Errorf("delivered = %q, want %q", cs.last, tc.want)
+			}
+		})
+		t.Run("InjectStream/"+tc.name, func(t *testing.T) {
+			inj, err := New(platform.InjectionOptions{}, deps, logger)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			cs := &captureStrategy{}
+			inj.strategies = []Strategy{cs}
+			in := make(chan transcribe.TranscriptChunk, 1)
+			in <- transcribe.TranscriptChunk{Text: tc.in, IsFinal: true}
+			close(in)
+			if err := inj.InjectStream(context.Background(), in); err != nil {
+				t.Fatalf("InjectStream: %v", err)
+			}
+			if cs.last != tc.want {
+				t.Errorf("delivered = %q, want %q", cs.last, tc.want)
+			}
+		})
+	}
+}
+
 func TestInjectStreamPropagatesChunkError(t *testing.T) {
 	logger, _ := newCaptureHandler()
 	deps := Deps{

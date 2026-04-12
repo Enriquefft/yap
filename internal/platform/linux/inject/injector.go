@@ -90,7 +90,33 @@ func (i *Injector) Inject(ctx context.Context, text string) error {
 
 // inject is the lock-free body of Inject. InjectStream calls it
 // directly while holding the same mutex.
+//
+// Transcription backends (whisper.cpp, groq, openai) emit the final
+// text with a trailing newline the model uses to mark the end of the
+// segment. For clipboard strategies (osc52, tmux, electron) that is
+// an ugly-but-harmless extra blank at the end of a paste. For
+// keystroke strategies (wayland, x11) it is a correctness bug: wtype
+// and ydotool faithfully type the '\n' as an Enter press, which in a
+// terminal executes the transcribed line and in a web form submits
+// it. Trim trailing whitespace once at the shared entry point so
+// every strategy sees the same normalized payload — the rule is
+// load-bearing for keystroke targets and cosmetic for everything
+// else, and belongs at the dispatch boundary rather than inside each
+// strategy so no future strategy can forget it. Leading whitespace is
+// preserved because whisper's leading-space convention carries
+// context (e.g. continuation after existing cursor text); users who
+// want it stripped can post-process via the transform layer.
+//
+// When the selected app_override carries AppendEnter = true, a single
+// trailing "\n" is re-appended after the trim and after strategy
+// selection runs. This is the opt-in auto-submit channel: users
+// mark terminal or form-submission apps in their config and get
+// Enter at the end of every dictation for those apps only. The order
+// matters — we trim unconditionally (artifact) and then re-append
+// only when the user explicitly asked for it (intent), never because
+// whisper happened to include one.
 func (i *Injector) inject(ctx context.Context, text string) error {
+	text = strings.TrimRight(text, " \t\n\r")
 	start := i.now()
 	target, detectErr := Detect(ctx, i.deps)
 	if detectErr != nil {
@@ -107,6 +133,9 @@ func (i *Injector) inject(ctx context.Context, text string) error {
 	}
 
 	order := buildStrategyOrder(ctx, i.logger, i.strategies, i.opts, target)
+	if order.appendEnter {
+		text += "\n"
+	}
 	if len(order.strategies) == 0 {
 		i.logOutcome(ctx, slog.LevelError, injectOutcomeFields{
 			target:     target,
