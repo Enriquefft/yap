@@ -1,0 +1,91 @@
+# config-hybrid.toml -- Primary cloud with local fallback
+#
+# Uses Groq as the primary transcription backend for speed, with
+# whisper.cpp available as a local fallback when offline or when the
+# API is unreachable.
+#
+# HOW THE FALLBACK CHAIN WORKS:
+# yap does not have an automatic fallback mechanism in config -- you
+# choose one backend at a time. The pattern here is to keep two config
+# files and switch between them:
+#
+#   Primary (this file):  transcription.backend = "groq"
+#   Fallback:             transcription.backend = "whisperlocal"
+#
+# Quick switch via environment variable:
+#   export YAP_CONFIG=~/.config/yap/config-local.toml
+#
+# Or use `yap config set` to toggle on the fly:
+#   yap config set transcription.backend whisperlocal
+#   yap config set transcription.model base.en
+#
+# Set your API key:
+#   export YAP_API_KEY="gsk_..."
+#
+# Copy to ~/.config/yap/config.toml to use.
+
+[general]
+hotkey           = "KEY_RIGHTCTRL"
+mode             = "hold"
+max_duration     = 60
+audio_feedback   = true
+audio_device     = ""
+silence_detection = false
+silence_threshold = 0.02
+silence_duration  = 2.0
+history          = false
+stream_partials  = true
+
+[transcription]
+# PRIMARY: Groq cloud backend (fast, requires network + API key)
+backend  = "groq"
+model    = "whisper-large-v3-turbo"
+language = "en"
+api_url  = ""
+api_key  = ""
+
+# These whisperlocal settings are pre-configured so switching to
+# local requires only changing backend and model:
+#   yap config set transcription.backend whisperlocal
+#   yap config set transcription.model base.en
+model_path          = ""
+whisper_server_path = ""
+# Use half of available CPU cores for local transcription
+whisper_threads     = 0
+whisper_use_gpu     = true
+
+[transform]
+# Enable the transform stage with a local LLM to clean up transcription
+# without sending text to the cloud. Requires Ollama or a local
+# OpenAI-compatible server running at the api_url below.
+enabled       = true
+backend       = "local"
+model         = "llama3.2:3b"
+system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+# Ollama's OpenAI-compatible endpoint
+api_url       = "http://localhost:11434/v1"
+api_key       = ""
+
+[injection]
+prefer_osc52      = true
+bracketed_paste   = true
+electron_strategy = "clipboard"
+default_strategy  = ""
+
+[hint]
+enabled                = true
+vocabulary_files       = ["CLAUDE.md", "AGENTS.md", "README.md"]
+providers              = ["claudecode", "termscroll"]
+vocabulary_max_chars   = 250
+conversation_max_chars = 8000
+timeout_ms             = 300
+
+[audio]
+high_pass_filter = true
+high_pass_cutoff = 80
+trim_silence     = true
+trim_threshold   = 0.01
+trim_margin_ms   = 200
+
+[tray]
+enabled = false

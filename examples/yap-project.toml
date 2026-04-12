@@ -1,0 +1,57 @@
+# yap-project.toml -- Per-project vocabulary hints
+#
+# Place this file as .yap.toml at your project root (next to .git/).
+# yap walks from the current directory up to the git root looking for
+# this file. Only the [hint] section is recognized; all other config
+# sections are ignored (use ~/.config/yap/config.toml for those).
+#
+# Every field is optional. Omitted fields keep their value from the
+# global config. This example shows a Rust web-service project.
+
+[hint]
+# Override which files to scan for vocabulary in this project.
+# yap reads these files (if they exist) walking from cwd to git root
+# and extracts terms to bias Whisper's token probabilities.
+vocabulary_files = ["README.md", "ARCHITECTURE.md", "GLOSSARY.md"]
+
+# Explicit vocabulary terms for this project. These are injected
+# directly into Whisper's initial prompt so it recognizes domain-specific
+# names, acronyms, and jargon that would otherwise be misheard.
+vocabulary_terms = [
+  # Project and team names
+  "Axum",
+  "Tokio",
+  "SeaORM",
+  "sqlx",
+
+  # Domain terms
+  "gRPC",
+  "protobuf",
+  "OpenTelemetry",
+  "OTLP",
+
+  # Internal service names
+  "AuthService",
+  "RateLimiter",
+  "EventBus",
+
+  # Acronyms and abbreviations
+  "UUID",
+  "ULID",
+  "RBAC",
+  "mTLS",
+]
+
+# Use only terminal scrollback for context in this project
+# (disable claudecode provider if you're not using Claude Code here)
+providers = ["termscroll"]
+
+# Increase vocabulary budget for a project with many domain terms
+vocabulary_max_chars = 400
+
+# Lower conversation context -- this project's dictation is mostly
+# short commands and variable names, not long prose
+conversation_max_chars = 4000
+
+# Tight timeout since we're only using termscroll (fast, local)
+timeout_ms = 150

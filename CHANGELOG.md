@@ -10,6 +10,311 @@ roadmap (see `ROADMAP.md`) is the source of truth for what is planned.
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-04-12
+
+### Phase 13 — Audio Preprocessing
+
+#### Added
+- `pkg/yap/audioprep/` — pure Go, zero CGo, cross-platform audio
+  preprocessing package that runs between recording and transcription.
+  Both features are independently toggleable; disabling both causes
+  `New` to return nil so the engine skips the stage entirely.
+- `pkg/yap/audioprep/biquad.go` — 2nd-order Butterworth high-pass
+  biquad filter using Audio EQ Cookbook coefficients (Robert
+  Bristow-Johnson). Direct Form II Transposed structure with Q =
+  1/√2 for maximally flat passband. Default 80 Hz cutoff removes
+  sub-speech rumble (HVAC, traffic, desk vibration) while preserving
+  speech fundamentals (≥ 85 Hz for deep male voice). Zero allocations
+  per sample; four float64 state variables total. Nyquist guard
+  rejects degenerate cutoffs. `math.Round` quantization for correct
+  DSP behavior (±0.5 LSB worst-case, not ±1 LSB from truncation).
+- `pkg/yap/audioprep/trim.go` — leading/trailing silence trimmer via
+  windowed RMS amplitude detection. 20 ms analysis window (320
+  samples at 16 kHz) matches standard speech-processing frame size.
+  Forward and backward scans clamp the final window to available
+  samples so no trailing fragment is silently dropped. All-silence
+  input returns margin's worth of audio (never an empty WAV, which
+  Whisper rejects). Configurable margin in milliseconds preserves
+  natural speech onset/offset.
+- `pkg/yap/audioprep/wav.go` — self-contained WAV parser and builder.
+  Validates 16-bit mono PCM at parse time; rejects non-PCM, stereo,
+  or non-16-bit input. Walks RIFF chunks to handle LIST/JUNK between
+  `fmt ` and `data`. No go-audio dependency.
+- `internal/engine/engine.go` gains the `AudioProcessor` interface
+  (single method `ProcessWAV([]byte) ([]byte, error)`). A nil
+  AudioProcessor in `New` skips preprocessing entirely. Pipeline
+  order: record → encode → **audioprep** → transcribe → transform →
+  inject. Errors are wrapped as `audioprep: ...`.
+- `pkg/yap/config.AudioConfig` — new `[audio]` config section with
+  `high_pass_filter`, `high_pass_cutoff`, `trim_silence`,
+  `trim_threshold`, `trim_margin_ms`. Both features enabled by
+  default in `DefaultConfig`.
+- `internal/daemon/daemon.go` gains `NewAudioPreprocessor` bridge
+  function. Returns explicit untyped nil when both features are
+  disabled — avoids the typed-nil interface trap that would pass the
+  engine's `!= nil` check.
+- NixOS/Home Manager modules regenerated from the updated config
+  schema.
+
+#### Findings
+- **Noise reduction hurts Whisper.** Research (arXiv:2512.17562) shows
+  denoising degrades ASR accuracy by 1.1–46.6% across all noise types
+  and all models tested. Whisper was trained on 680k hours of noisy
+  web audio — spectral distortion from denoising is worse than the
+  original noise. Only sub-speech rumble removal (high-pass) and
+  silence trimming are safe.
+- **Processing order matters.** High-pass filter runs first (modifies
+  samples in-place), then silence trimming (returns a subslice). This
+  ensures the trimmer's RMS calculation is not skewed by sub-speech
+  rumble that would artificially inflate the amplitude of "silent"
+  windows.
+- **Typed-nil interface trap handled.** `NewAudioPreprocessor` returns
+  explicit untyped nil when both features are disabled, not a typed
+  `*Processor(nil)` that would pass the engine's `!= nil` check.
+- **Review-driven fixes.** Three independent review agents caught 7
+  issues: non-aligned trim scan bug, missing format validation,
+  double error prefix, Nyquist guard, odd-chunk padding test gap,
+  int16 truncation→rounding, buildWAV abstraction inconsistency. All
+  fixed before commit.
+
+### Phase 12 — Context-Aware Pipeline (Linux)
+
+#### Added
+- `pkg/yap/hint/` — provider registry and bundle types for
+  context-aware transcription. `Provider` interface (`Name`,
+  `Supports(target)`, `Fetch(ctx, target) (Bundle, error)`),
+  `Bundle{Vocabulary, Conversation, Source}`, `Factory`,
+  `Config{RootPath}`, `Register/Get/Providers` registry. The registry
+  follows the same `Register`/`Get`/`Providers` pattern as
+  `pkg/yap/transcribe` and `pkg/yap/transform`.
+- `pkg/yap/hint/vocab.go` — `ReadVocabularyFiles` walks from a start
+  directory up to the git root, reads each named file (CLAUDE.md,
+  AGENTS.md, README.md), strips markdown formatting, extracts
+  domain-specific terms via stopword filtering, and returns a
+  comma-separated string. `ExtractTerms` caps output at 40 unique
+  terms. `stripMarkdown` removes code blocks, headings, bullets,
+  links, emphasis, and HTML tags so the text reads as natural prose
+  suitable for a Whisper prompt.
+- `pkg/yap/hint/trunc.go` — `HeadBytes` and `TailBytes` budget
+  helpers that truncate on UTF-8 rune boundaries. Vocabulary uses
+  head-truncation (project name/description is at the start of docs;
+  Whisper's prompt window is ~224 tokens). Conversation uses
+  tail-truncation (recent messages are the most useful context).
+  `ResolveTargetCwd` walks `/proc` from the terminal emulator PID
+  down to the deepest descendant shell and reads its cwd — the
+  shell's cwd IS the project directory, not the terminal emulator's
+  own cwd (typically `$HOME`).
+- `pkg/yap/hint/project.go` — `.yap.toml` per-project config
+  overrides. Walks from cwd to git root looking for the file. Pointer
+  types distinguish "not set" from "set to zero". Supports
+  `vocabulary_terms`, `vocabulary_files`, `providers`, and all hint
+  config fields.
+- `pkg/yap/hint/claudecode/` — reads the most recent Claude Code
+  session JSONL from `~/.claude/projects/<cwd-slug>/`. The cwd-slug
+  maps `/home/hybridz/Projects/yap` to `-home-hybridz-Projects-yap`.
+  Parses user + assistant messages, extracts `message.content` strings
+  (and text blocks from assistant arrays), skips meta /
+  command-caveat / tool-use entries. Formats as natural
+  `user: … / assistant: …` prose. Returns only `Bundle.Conversation`
+  — vocabulary is handled by the daemon's base layer. Supports
+  `AppTerminal` and `Tmux` targets. Graceful empty bundle when no
+  session file exists.
+- `pkg/yap/hint/termscroll/` — terminal scrollback provider with an
+  internal strategy pattern (mirrors Phase 4 inject architecture).
+  Each terminal backend is a `Strategy`; the provider walks them in
+  priority order. Ships with a Kitty strategy (`kitty @ get-text
+  --extent=screen`), detecting the socket via `$KITTY_LISTEN_ON` or
+  `/tmp/kitty-{uid}-*` probing. Strips ANSI sequences from all
+  strategy output. Phase 12.5 defers tmux, wezterm, and ghostty
+  strategies.
+- `pkg/yap/transcribe` — new `Options` struct with `Prompt string`.
+  `Transcriber.Transcribe(ctx, audio, opts Options)` passes a
+  per-call prompt to every backend. `transcribe.Config.Prompt` is
+  removed — it was at the wrong granularity (construction-time, but
+  the prompt must differ per recording because the focused window
+  differs per recording).
+- `pkg/yap/transform` — new `Options` struct with `Context string`.
+  `Transformer.Transform(ctx, in, opts Options)` passes per-call
+  context. Non-empty context is prepended to the configured
+  `SystemPrompt` as a reference block at call time.
+- `internal/engine/engine.go` — `RunOptions` gains `TranscribeOpts`
+  and `TransformOpts` fields. The engine passes them through to the
+  transcriber and transformer unchanged — the daemon owns assembly.
+- `pkg/yap/config.HintConfig` — new `[hint]` config section:
+  `enabled`, `vocabulary_files`, `providers`,
+  `vocabulary_max_chars`, `conversation_max_chars`, `timeout_ms`.
+  Enabled by default.
+- `internal/daemon/daemon.go` — `fetchHintBundle` assembles the
+  two-layer hint Bundle before each recording with a bounded timeout.
+  Layer 1 (base vocabulary) reads project docs from the focused
+  window's cwd to git root. Layer 2 (conversation context) resolves
+  the focused window via the injector's `StrategyResolver`, walks
+  hint providers, and takes the first non-empty conversation. The
+  same `inject.Target` drives both the hint provider walk AND the
+  eventual `InjectStream` delivery — single source of truth for
+  target classification.
+- `inject.StrategyResolver` — optional interface on Injector that
+  exposes target detection and strategy selection as a pure query
+  (no Deliver call). Used by the daemon to resolve the focused
+  window for hint bundle assembly and by debug tooling (`yap paste
+  --dry-run`, `yap record --resolve`).
+- `internal/cli/hint.go` — `yap hint` debug command prints the
+  resolved Target, winning provider, and bundle summary.
+- `internal/cli/init.go` — `yap init` generates `.yap.toml` with
+  extracted vocabulary terms from project docs. `--ai` flag uses the
+  configured transform backend for LLM-based term extraction.
+  `--ai --backend claude` uses Claude Code CLI (`claude -p`) for
+  zero-config extraction — no API key or transform backend config
+  needed. Falls back to heuristic extraction without `--ai`.
+- NixOS/Home Manager modules regenerated from the updated schema.
+
+#### Changed
+- `Transcriber.Transcribe` signature gains an `Options` parameter
+  across every backend: groq, openai, whisperlocal, mock. This is a
+  breaking change (pre-1.0).
+- `Transformer.Transform` signature gains an `Options` parameter
+  across every backend: local, openai, passthrough, fallback. This is
+  a breaking change (pre-1.0).
+- Provider walk is skipped when `transform.enabled = false` —
+  conversation context is useless without an LLM to ground, so only
+  vocabulary flows to Whisper.
+
+#### Findings
+- **Per-call Options, not per-backend Config.** The Whisper prompt
+  must differ per recording because the focused window differs per
+  recording. `transcribe.Options{Prompt}` and
+  `transform.Options{Context}` are per-call value types threaded
+  through `engine.RunOptions`. The engine passes them through
+  unchanged — the daemon owns the assembly.
+- **Vocabulary resolves from focused window's cwd, not daemon's
+  cwd.** The daemon walks `/proc` to find the descendant shell's cwd
+  of the focused terminal. Dictating in a terminal cd'd to
+  `/home/user/project-a` reads `project-a/CLAUDE.md`, even if the
+  daemon started from `/home/user`.
+- **`.yap.toml` per-project overrides shipped in Phase 12** (was
+  deferred in original plan). Supports `vocabulary_terms`,
+  `vocabulary_files`, `providers`, and all hint config fields.
+  `yap init` generates this file from project docs.
+- **`yap init --ai --backend claude`** uses Claude Code CLI
+  (`claude -p`) for zero-config LLM term extraction — no API key,
+  no transform backend config needed. Falls back to heuristic
+  extraction without `--ai`.
+
+### Phase 11 — Press-to-Toggle + Silence Detection
+
+#### Added
+- `general.mode` config field (`enum=hold,toggle`). In `"toggle"`
+  mode, the daemon toggles recording state on each hotkey press; in
+  `"hold"` mode (default), existing hold-to-talk behavior is
+  preserved. The `onPress` handler dispatches to
+  `d.toggleRecording()` or `d.startRecording()` based on the mode;
+  `onRelease` is a no-op in toggle mode.
+- Recording state machine: `idle → recording → processing → idle`.
+  `recordState` struct with mutex-protected state transitions,
+  `cancelRecording`, `isActive`, `isRecording`, and `state` query
+  methods. The state is exposed via `yap status` in the `mode` JSON
+  field. An `OnRecordingStop` callback in `RunOptions` fires the
+  `recording → processing` transition so the state accurately
+  reflects the pipeline phase.
+- `pkg/yap/silence/` — amplitude-threshold voice activity detector
+  (VAD) for PCM audio streams. `Detector` monitors a stream of int16
+  PCM frames for sustained silence. Fires two callbacks:
+  `onWarning` after `(silenceDuration - warningBefore)` seconds
+  (giving an audible cue that auto-stop is imminent) and `onSilence`
+  after `silenceDuration` seconds (cancelling the recording). Both
+  callbacks fire at most once per session; `Reset` clears state
+  between sessions. RMS amplitude is computed in O(N) with zero
+  allocations. Silence duration is tracked via sample counts at a
+  fixed 16 kHz rate — no `time.Now` calls on the audio callback
+  thread.
+- `internal/platform/platform.go` — `FrameNotifier` optional
+  interface. `SetOnFrame(fn func([]int16))` is called before Start
+  and cleared after Start returns. The data callback invokes it on
+  the malgo worker thread — callers must not block.
+- Config fields: `general.silence_detection` (bool, default false),
+  `general.silence_threshold` (float64 0..1, default 0.02),
+  `general.silence_duration` (float64 >0, default 2.0 seconds).
+- Daemon wiring: when `silence_detection` is true, `startRecording`
+  type-asserts the recorder against `FrameNotifier`, constructs a
+  `silence.Detector`, and sets its `Process` method as the frame
+  callback. The onWarning callback plays the warning chime; the
+  onSilence callback calls `d.state.cancelRecording()`, which
+  closes the audio feed cleanly and lets the in-flight pipeline
+  finish transcription and injection.
+
+#### Changed
+- `internal/engine/engine.go` — `RunOptions` gains
+  `OnRecordingStop func()` so the daemon can transition from
+  `recording` to `processing` at the exact moment audio capture ends,
+  not when the full pipeline completes.
+- `internal/daemon/daemon.go` — the hotkey listener now dispatches
+  through the mode switch. The shared `startRecording` helper is
+  idempotent on the active state so both `onPress` (hotkey) and
+  `toggleRecording` (IPC) can call it without drift.
+
+### Phase 9 — Audio Backend (malgo)
+
+#### Added
+- `internal/platform/linux/audio.go` — complete rewrite of the audio
+  recorder on `github.com/gen2brain/malgo` (miniaudio). Each recorder
+  owns a `malgo.AllocatedContext` with per-recording device
+  lifecycle. The data callback decodes S16 little-endian byte buffers
+  to int16 PCM and accumulates frames under a mutex. Pre-allocates
+  for up to 60s of audio. `SetOnFrame` hook for the silence detector.
+  `Close` frees the malgo context. Named-device selection via
+  `lookupCaptureDeviceID` with a DeviceInfo probe to confirm the
+  device is selectable before InitDevice.
+- `internal/platform/linux/audio.go` — `initLinuxAudioContext` walks
+  a fixed backend preference list (PulseAudio → ALSA → JACK) and
+  returns the first backend that initializes. Single source of truth
+  for malgo context creation — the recorder, device lister, and
+  chime player all share the same backend. The error aggregates every
+  backend attempt so a total failure lists which backends were tried
+  and how each failed.
+- `internal/platform/linux/chime.go` — chime player rewritten on
+  malgo. Each `Play` call decodes the WAV in a goroutine, initializes
+  a short-lived malgo context, and tears it down when the buffer is
+  fully drained. Uses the shared `initLinuxAudioContext` so the chime
+  lives on the same backend as the recorder.
+- `internal/platform/linux/audio.go` — CGo pointer pinning via
+  `runtime.Pinner` for named-device configs. When a DeviceID Go
+  pointer is embedded inside `deviceConfig`, the pinner holds it
+  stable across the `malgo.InitDevice` cgo boundary. Unpinned
+  immediately after InitDevice returns — miniaudio copies the id
+  by value during init and never retains the config pointer.
+- `internal/platform/linux/audio.go` — `deviceConfig.Alsa.NoMMap = 1`
+  disables ALSA mmap to favour the more compatible read/write path.
+  PipeWire's ALSA shim does not implement mmap reliably for capture.
+
+#### Changed
+- `go.mod` — `github.com/gen2brain/malgo` replaces
+  `github.com/gordonklaus/portaudio`. portaudio is fully removed.
+- `flake.nix` — zero `portaudio` references. malgo bundles
+  `miniaudio.h` directly — no system audio C library needed for the
+  audio backend. Runtime audio libraries (PulseAudio, ALSA) are still
+  needed at runtime and provided by the Nix wrapper.
+
+#### Removed
+- `github.com/gordonklaus/portaudio` is removed from `go.mod` and
+  all import paths.
+- `portaudio` is removed from `flake.nix` buildInputs.
+
+#### Findings
+- **malgo (miniaudio) replaces portaudio.** malgo bundles miniaudio.h
+  directly — no system audio C library linkage needed at build time.
+  This unblocks cross-compilation (Phase 15/16) and eliminates the
+  portaudio system-package dependency that caused build failures on
+  minimal systems.
+- **darwin/windows audio stubs deferred.** The malgo backend is
+  Linux-only for now; Phase 15 and 16 will add platform-specific
+  backends with appropriate build tags.
+- **Static build fixed alongside Phase 9.** Two fixes applied: (1)
+  `xdg.Reload()` added to test helpers that set XDG env vars, so
+  pidfile paths resolve correctly in the Nix sandbox; (2)
+  `devShells.static` added to `flake.nix` with a `musl-gcc` wrapper
+  for static builds. `nix build .#static` produces an 8 MB static
+  ELF binary.
+
 ### Phase 8 — LLM Transform (pluggable)
 
 #### Added
@@ -884,4 +1189,5 @@ behavior change for end users.
   Phase 4 by the app-aware injection module described in
   `ARCHITECTURE.md`.
 
-[Unreleased]: https://github.com/Enriquefft/yap/compare/770edee...HEAD
+[Unreleased]: https://github.com/Enriquefft/yap/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Enriquefft/yap/compare/770edee...v0.1.0

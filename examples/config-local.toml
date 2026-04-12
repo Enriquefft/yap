@@ -1,0 +1,124 @@
+# config-local.toml -- Fully local setup using whisper.cpp
+#
+# Zero network calls. All transcription runs on-device via whisper-server.
+# This is yap's default configuration with every section documented.
+# Copy to ~/.config/yap/config.toml and adjust to taste.
+
+# ──────────────────────────────────────────────────────────────────────
+# General: hotkey, recording behavior, and session-level knobs
+# ──────────────────────────────────────────────────────────────────────
+[general]
+# Evdev key name or plus-delimited combo, e.g. KEY_LEFTSHIFT+KEY_SPACE
+hotkey           = "KEY_RIGHTCTRL"
+# "hold" = hold-to-talk, "toggle" = press-to-toggle
+mode             = "hold"
+# Maximum recording length in seconds (1..300)
+max_duration     = 60
+# Play start/stop chimes so you hear when recording begins and ends
+audio_feedback   = true
+# Capture device name; empty string selects the system default
+audio_device     = ""
+# Auto-stop recording after sustained silence
+silence_detection = false
+# Amplitude threshold for silence detection (0.0..1.0)
+silence_threshold = 0.02
+# Seconds of silence before auto-stop (must be > 0)
+silence_duration  = 2.0
+# Append every transcription to ~/.local/share/yap/history.jsonl
+history          = false
+# Inject partial transcription results while speaking (for supported targets)
+stream_partials  = true
+
+# ──────────────────────────────────────────────────────────────────────
+# Transcription: whisper.cpp local backend
+# ──────────────────────────────────────────────────────────────────────
+[transcription]
+backend             = "whisperlocal"
+# Model name -- auto-downloaded on first run. Options: tiny.en, base.en,
+# small.en, medium.en (English-only) or tiny, base, small, medium, large-v3
+# (multilingual). Larger models are slower but more accurate.
+model               = "base.en"
+# Explicit path to a .ggml model file; empty auto-downloads the named model
+model_path          = ""
+# Path to the whisper-server binary; empty resolves via $YAP_WHISPER_SERVER,
+# then $PATH, then the Nix profile fallback
+whisper_server_path = ""
+# Thread count for whisper.cpp (0 = runtime.NumCPU()/2, at least 1)
+whisper_threads     = 0
+# Use GPU backend when available (CUDA, Vulkan, etc.)
+whisper_use_gpu     = true
+# ISO 639-1 language code; empty auto-detects
+language            = "en"
+# Not needed for local backend
+api_url             = ""
+api_key             = ""
+
+# ──────────────────────────────────────────────────────────────────────
+# Transform: post-transcription LLM cleanup (disabled for local-only)
+# ──────────────────────────────────────────────────────────────────────
+[transform]
+enabled       = false
+backend       = "passthrough"
+model         = ""
+system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+api_url       = ""
+api_key       = ""
+
+# ──────────────────────────────────────────────────────────────────────
+# Injection: how transcribed text reaches the focused application
+# ──────────────────────────────────────────────────────────────────────
+[injection]
+# Use OSC52 escape sequences for terminals that support them
+prefer_osc52       = true
+# Retained for schema compatibility; the injector handles framing
+bracketed_paste    = true
+# How to deliver text to Electron apps: "clipboard" or "keystroke"
+electron_strategy  = "clipboard"
+# Fallback strategy forced when no app_overrides match; empty = auto-detect.
+# Valid: tmux, osc52, electron, wayland, x11
+default_strategy   = ""
+
+# Per-app overrides (first match wins). Examples:
+# [[injection.app_overrides]]
+# match    = "code"       # matches VS Code by WM_CLASS / process name
+# strategy = "electron"
+# append_enter = false
+
+# ──────────────────────────────────────────────────────────────────────
+# Hint: context-aware pipeline for vocabulary and conversation context
+# ──────────────────────────────────────────────────────────────────────
+[hint]
+# Enable project-level vocabulary hints and conversation context
+enabled                = true
+# Files to scan for vocabulary (walks cwd up to git root)
+vocabulary_files       = ["CLAUDE.md", "AGENTS.md", "README.md"]
+# Ordered hint providers for conversation context; first match wins.
+# Valid: "claudecode", "termscroll"
+providers              = ["claudecode", "termscroll"]
+# Max bytes of vocabulary passed as Whisper prompt bias
+vocabulary_max_chars   = 250
+# Max bytes of conversation context for the transform stage
+conversation_max_chars = 8000
+# Wall-time budget in ms for hint provider fetch
+timeout_ms             = 300
+
+# ──────────────────────────────────────────────────────────────────────
+# Audio: preprocessing before transcription
+# ──────────────────────────────────────────────────────────────────────
+[audio]
+# High-pass biquad filter to remove sub-speech rumble (< ~85 Hz)
+high_pass_filter = true
+# Cutoff frequency in Hz (20..500); speech fundamentals start at ~85 Hz
+high_pass_cutoff = 80
+# Trim leading/trailing silence to prevent Whisper hallucinations
+trim_silence     = true
+# RMS amplitude threshold for silence trimming (0.0..1.0)
+trim_threshold   = 0.01
+# Milliseconds of silence to preserve around speech after trimming (0..2000)
+trim_margin_ms   = 200
+
+# ──────────────────────────────────────────────────────────────────────
+# Tray: system tray icon (Phase 17, not yet implemented)
+# ──────────────────────────────────────────────────────────────────────
+[tray]
+enabled = false

@@ -1,0 +1,119 @@
+# golangci-lint v2 configuration for yap.
+#
+# Production-ready defaults. CGO is required (malgo, evdev).
+# Run: golangci-lint run ./...
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: vendor
+
+linters:
+  # Start from the standard defaults (errcheck, govet, ineffassign,
+  # staticcheck, unused) and layer on additional linters.
+  default: standard
+  enable:
+    # Correctness
+    - bodyclose
+    - nilerr
+    - noctx
+
+    # Code quality
+    - gocritic
+    - revive
+    - unconvert
+    - unparam
+    - misspell
+    - prealloc
+
+    # Misc
+    - whitespace
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment is too noisy for a 0.1 release and often
+        # trades readability for marginal memory savings.
+        - fieldalignment
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # hugeParam triggers on audio buffers passed by value which is
+        # intentional in several hot paths.
+        - hugeParam
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: increment-decrement
+        - name: var-naming
+        - name: range
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: empty-block
+        - name: superfluous-else
+        - name: unreachable-code
+    staticcheck:
+      checks:
+        - all
+    misspell:
+      locale: US
+    prealloc:
+      simple: true
+      for-loops: true
+
+  exclusions:
+    presets:
+      - common-false-positives
+    rules:
+      # Test files get more lenient treatment.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - unparam
+          - prealloc
+
+      # Generated NixOS/HM modules are machine-written.
+      - path: nixosModules\.go
+        linters:
+          - revive
+          - gocritic
+          - misspell
+
+      - path: homeManagerModules\.go
+        linters:
+          - revive
+          - gocritic
+          - misspell
+
+      # CGO preambles sometimes trigger false positives.
+      - linters:
+          - gocritic
+        source: "^//.*#cgo"
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Enriquefft/yap

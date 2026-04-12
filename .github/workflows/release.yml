@@ -3,44 +3,93 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v25
+        uses: cachix/install-nix-action@v27
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Run tests
         run: nix develop --command go test ./...
 
-      - name: Build static binary
-        run: nix develop .#static --command make build-static
-
-      - name: Verify static binary is statically linked and under 20MB
-        run: nix develop .#static --command make verify-static size-check
-
-      - name: Extract version tag
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Create release
-        uses: softprops/action-gh-release@v1
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          files: |
-            yap
-            install.sh
-          draft: false
-          prerelease: false
-          generate_release_notes: true
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install musl cross-compilers
+        run: |
+          # amd64: musl-tools provides musl-gcc on Ubuntu.
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+          # Create the x86_64-linux-musl-gcc symlink GoReleaser expects.
+          sudo ln -sf /usr/bin/musl-gcc /usr/local/bin/x86_64-linux-musl-gcc
+
+          # arm64: download pre-built aarch64-linux-musl cross-compiler
+          # from musl.cc (static toolchain, no host libc dependency).
+          curl -fsSL "https://musl.cc/aarch64-linux-musl-cross.tgz" \
+            | sudo tar -xz -C /opt
+          sudo ln -sf /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc \
+            /usr/local/bin/aarch64-linux-musl-gcc
+
+          # Verify both compilers are reachable.
+          x86_64-linux-musl-gcc --version
+          aarch64-linux-musl-gcc --version
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify amd64 binary is statically linked
+        run: |
+          ARCHIVE=$(ls dist/yap_*_linux_amd64.tar.gz)
+          mkdir -p /tmp/verify
+          tar -xzf "$ARCHIVE" -C /tmp/verify
+          if ldd /tmp/verify/yap 2>&1 | grep -q "not a dynamic executable"; then
+            echo "OK: yap is statically linked"
+          else
+            echo "FAIL: yap has dynamic dependencies:"
+            ldd /tmp/verify/yap
+            exit 1
+          fi
+
+      - name: Verify binary size under 20MB
+        run: |
+          SIZE=$(stat --printf="%s" /tmp/verify/yap)
+          MAX=$((20 * 1024 * 1024))
+          SIZE_MB=$((SIZE / 1048576))
+          echo "Binary size: $SIZE bytes (~${SIZE_MB} MB)"
+          if [ "$SIZE" -lt "$MAX" ]; then
+            echo "OK: binary under 20MB limit"
+          else
+            echo "FAIL: binary $SIZE bytes exceeds 20MB limit ($MAX bytes)"
+            exit 1
+          fi

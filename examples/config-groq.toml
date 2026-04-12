@@ -1,0 +1,74 @@
+# config-groq.toml -- Cloud-first setup using Groq
+#
+# Groq provides the fastest cloud transcription via their Whisper endpoint.
+# Requires a free API key from https://console.groq.com/keys.
+#
+# Set your API key via environment variable (never hardcode secrets):
+#   export YAP_API_KEY="gsk_..."
+# or the legacy alias:
+#   export GROQ_API_KEY="gsk_..."
+#
+# Copy to ~/.config/yap/config.toml to use.
+
+[general]
+hotkey           = "KEY_RIGHTCTRL"
+mode             = "hold"
+max_duration     = 60
+audio_feedback   = true
+audio_device     = ""
+silence_detection = false
+silence_threshold = 0.02
+silence_duration  = 2.0
+history          = false
+stream_partials  = true
+
+[transcription]
+backend  = "groq"
+# Groq's fastest Whisper model. Check https://console.groq.com/docs/speech-text
+# for the latest available models.
+model    = "whisper-large-v3-turbo"
+language = "en"
+# Groq's transcription endpoint -- auto-resolved when api_url is empty
+api_url  = ""
+# IMPORTANT: Do not put your API key here. Use the YAP_API_KEY or
+# GROQ_API_KEY environment variable instead. yap reads it automatically.
+api_key  = ""
+
+# whisperlocal-only fields (unused with groq backend, included for clarity)
+model_path          = ""
+whisper_server_path = ""
+whisper_threads     = 0
+whisper_use_gpu     = true
+
+[transform]
+# Groq is fast enough that the transform stage adds negligible latency
+enabled       = false
+backend       = "passthrough"
+model         = ""
+system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+api_url       = ""
+api_key       = ""
+
+[injection]
+prefer_osc52      = true
+bracketed_paste   = true
+electron_strategy = "clipboard"
+default_strategy  = ""
+
+[hint]
+enabled                = true
+vocabulary_files       = ["CLAUDE.md", "AGENTS.md", "README.md"]
+providers              = ["claudecode", "termscroll"]
+vocabulary_max_chars   = 250
+conversation_max_chars = 8000
+timeout_ms             = 300
+
+[audio]
+high_pass_filter = true
+high_pass_cutoff = 80
+trim_silence     = true
+trim_threshold   = 0.01
+trim_margin_ms   = 200
+
+[tray]
+enabled = false

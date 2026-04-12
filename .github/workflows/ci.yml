@@ -8,8 +8,15 @@ on:
 permissions:
   contents: read
 
+# Cancel in-flight runs for the same branch/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # ── Lint ────────────────────────────────────────────────────────────
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,8 +27,70 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
 
-      - name: Run tests
-        run: nix develop --command go test ./...
+      - name: go vet
+        run: nix develop --command go vet ./...
+
+      - name: golangci-lint
+        run: nix develop --command golangci-lint run ./...
+
+  # ── Test ────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Run tests with coverage
+        run: >
+          nix develop --command
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 14
+
+  # ── Race detector ───────────────────────────────────────────────────
+  # Race detection requires glibc (incompatible with musl), so this
+  # runs in the default dev shell, not the static shell.
+  race:
+    name: Race detection
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Run tests with race detector
+        run: nix develop --command go test -race -count=1 ./...
+
+  # ── Build ───────────────────────────────────────────────────────────
+  build:
+    name: Static build
+    runs-on: ubuntu-latest
+    needs: [test, race]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Build static binary (musl)
         run: nix develop .#static --command make build-static

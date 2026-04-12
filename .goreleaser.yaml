@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# GoReleaser configuration for yap — voice-to-text daemon.
+#
+# Static musl-linked builds for Linux amd64/arm64. CGO is required
+# (malgo wraps miniaudio, evdev needs cgo). Cross-compilation uses
+# musl cross-compiler toolchains installed in the release workflow:
+#   amd64: musl-tools (Ubuntu), arm64: musl.cc pre-built toolchain.
+#
+# Run locally (amd64 only, snapshot):
+#   goreleaser release --snapshot --clean
+#
+# CI trigger: push tag matching v*
+
+version: 2
+
+project_name: yap
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: yap-linux-amd64
+    main: ./cmd/yap
+    binary: yap
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=1
+      - CC=x86_64-linux-musl-gcc
+    tags:
+      - netgo
+      - osusergo
+    ldflags:
+      - -s -w
+      - -linkmode external
+      - -extldflags '-static'
+      - -X github.com/Enriquefft/yap/internal/config.Version={{.Version}}
+
+  - id: yap-linux-arm64
+    main: ./cmd/yap
+    binary: yap
+    goos:
+      - linux
+    goarch:
+      - arm64
+    env:
+      - CGO_ENABLED=1
+      - CC=aarch64-linux-musl-gcc
+    tags:
+      - netgo
+      - osusergo
+    ldflags:
+      - -s -w
+      - -linkmode external
+      - -extldflags '-static'
+      - -X github.com/Enriquefft/yap/internal/config.Version={{.Version}}
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - install.sh
+
+checksum:
+  name_template: "SHA256SUMS"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - "^style:"
+  groups:
+    - title: Features
+      regexp: "^.*feat.*$"
+      order: 0
+    - title: Bug Fixes
+      regexp: "^.*fix.*$"
+      order: 1
+    - title: Performance
+      regexp: "^.*perf.*$"
+      order: 2
+    - title: Refactoring
+      regexp: "^.*refactor.*$"
+      order: 3
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: Enriquefft
+    name: yap
+  draft: false
+  prerelease: auto
+  mode: replace
+  extra_files:
+    - glob: install.sh
+  header: |
+    ## yap {{ .Tag }}
+
+    Voice-to-text daemon for Linux. Hold a hotkey to record, release to transcribe.
+  footer: |
+    **Full Changelog**: https://github.com/Enriquefft/yap/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+    ---
+    Install: `curl -fsSL https://raw.githubusercontent.com/Enriquefft/yap/main/install.sh | bash`
+
+# Future: Homebrew tap (Phase 15+)
+# brews:
+#   - repository:
+#       owner: Enriquefft
+#       name: homebrew-tap
+#     homepage: https://github.com/Enriquefft/yap
+#     description: Voice-to-text daemon
+
+# Future: AUR package (Phase 14+)
+# aurs: []
+
+# Future: Docker image
+# dockers: []
+
+# Future: Snap package
+# snaps: []

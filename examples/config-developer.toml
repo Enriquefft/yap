@@ -1,0 +1,126 @@
+# config-developer.toml -- Developer-focused setup for code dictation
+#
+# Optimized for dictating code, commit messages, and technical prose.
+# Uses an LLM transform stage to convert natural-language dictation into
+# properly formatted code/text. Project hints are enabled to bias
+# transcription toward domain-specific vocabulary.
+#
+# Requirements:
+#   - Groq API key:  export YAP_API_KEY="gsk_..."
+#   - Local LLM for transform: Ollama with a capable model
+#     (or set transform.backend = "openai" and export YAP_TRANSFORM_API_KEY)
+#
+# Copy to ~/.config/yap/config.toml to use.
+
+[general]
+hotkey           = "KEY_RIGHTCTRL"
+mode             = "hold"
+# Longer max for dictating multi-line code blocks
+max_duration     = 120
+audio_feedback   = true
+audio_device     = ""
+# Auto-stop when you pause to think -- useful during code dictation
+silence_detection = true
+silence_threshold = 0.03
+# 3 seconds of silence before auto-stop (longer than default to allow
+# thinking pauses)
+silence_duration  = 3.0
+# Keep a history of all transcriptions for review
+history          = true
+# Disable streaming partials -- code dictation benefits from the full
+# transcription being available before the LLM transform shapes it
+stream_partials  = false
+
+[transcription]
+# Groq for speed; switch to whisperlocal for offline work
+backend  = "groq"
+model    = "whisper-large-v3-turbo"
+language = "en"
+api_url  = ""
+api_key  = ""
+
+model_path          = ""
+whisper_server_path = ""
+whisper_threads     = 0
+whisper_use_gpu     = true
+
+[transform]
+# The transform stage is where code dictation magic happens. The LLM
+# converts natural language into the format you need.
+enabled       = true
+backend       = "local"
+# A capable model for code understanding. Adjust to your hardware:
+#   - llama3.2:3b   -- fast, good for simple formatting
+#   - qwen2.5:7b    -- better code understanding
+#   - deepseek-coder-v2:16b -- best code quality, needs more VRAM
+model         = "qwen2.5:7b"
+# This system prompt handles code dictation. Customize to your workflow.
+system_prompt = """You are a code dictation assistant. The user is dictating while \
+programming. Convert their speech into the appropriate format:
+
+- If they say code constructs (e.g., "define a function called foo that takes a \
+string argument"), output the code directly.
+- If they dictate prose (comments, commit messages, documentation), output clean \
+formatted text.
+- Fix transcription errors for technical terms (e.g., "jason" -> "JSON", \
+"pie test" -> "pytest").
+- Preserve the user's intent exactly. Do not add explanations.
+- Output ONLY the converted text, nothing else."""
+# Ollama's OpenAI-compatible endpoint
+api_url       = "http://localhost:11434/v1"
+# Not needed for local Ollama; set YAP_TRANSFORM_API_KEY for remote backends
+api_key       = ""
+
+[injection]
+prefer_osc52      = true
+bracketed_paste   = true
+electron_strategy = "clipboard"
+default_strategy  = ""
+
+# Per-app injection overrides for common developer tools
+[[injection.app_overrides]]
+match    = "kitty"
+strategy = "osc52"
+
+[[injection.app_overrides]]
+match    = "Alacritty"
+strategy = "osc52"
+
+[[injection.app_overrides]]
+match    = "foot"
+strategy = "osc52"
+
+[[injection.app_overrides]]
+match    = "code"
+strategy = "electron"
+
+[[injection.app_overrides]]
+match    = "Slack"
+strategy = "electron"
+
+[hint]
+# Context-aware pipeline is essential for code dictation -- it teaches
+# Whisper your project's vocabulary so "yap" isn't transcribed as "yep"
+enabled                = true
+# Scan these files for domain vocabulary. Add your own project docs.
+vocabulary_files       = ["CLAUDE.md", "AGENTS.md", "README.md"]
+# Pull conversation context from the active coding environment
+providers              = ["claudecode", "termscroll"]
+# Higher vocabulary budget for projects with many domain terms
+vocabulary_max_chars   = 500
+# More conversation context helps the transform stage understand intent
+conversation_max_chars = 16000
+# Generous timeout -- the vocabulary quality is worth a small delay
+timeout_ms             = 500
+
+[audio]
+high_pass_filter = true
+high_pass_cutoff = 80
+trim_silence     = true
+# Slightly higher threshold to aggressively trim silence before
+# sending to Whisper -- reduces hallucinations during think-pauses
+trim_threshold   = 0.015
+trim_margin_ms   = 200
+
+[tray]
+enabled = false

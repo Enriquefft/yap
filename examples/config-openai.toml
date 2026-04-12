@@ -1,0 +1,77 @@
+# config-openai.toml -- OpenAI-compatible backend
+#
+# Works with any service that implements the OpenAI audio transcription API:
+#   - OpenAI (api.openai.com)
+#   - Azure OpenAI
+#   - Self-hosted alternatives (faster-whisper-server, LocalAI, etc.)
+#
+# Set your API key via environment variable:
+#   export YAP_API_KEY="sk-..."
+#
+# Copy to ~/.config/yap/config.toml to use.
+
+[general]
+hotkey           = "KEY_RIGHTCTRL"
+mode             = "hold"
+max_duration     = 60
+audio_feedback   = true
+audio_device     = ""
+silence_detection = false
+silence_threshold = 0.02
+silence_duration  = 2.0
+history          = false
+stream_partials  = true
+
+[transcription]
+backend  = "openai"
+model    = "whisper-1"
+language = "en"
+
+# Point this at any OpenAI-compatible transcription endpoint.
+# Examples:
+#   OpenAI:             https://api.openai.com/v1/audio/transcriptions
+#   Self-hosted:        http://localhost:8080/v1/audio/transcriptions
+#   Azure OpenAI:       https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/audio/transcriptions?api-version=2024-06-01
+api_url  = "https://api.openai.com/v1/audio/transcriptions"
+
+# IMPORTANT: Do not put your API key here. Use the YAP_API_KEY
+# environment variable instead. yap reads it automatically.
+api_key  = ""
+
+# whisperlocal-only fields (unused with openai backend)
+model_path          = ""
+whisper_server_path = ""
+whisper_threads     = 0
+whisper_use_gpu     = true
+
+[transform]
+enabled       = false
+backend       = "passthrough"
+model         = ""
+system_prompt = "Fix transcription errors and punctuation. Do not rephrase. Preserve original language. Output only corrected text."
+api_url       = ""
+api_key       = ""
+
+[injection]
+prefer_osc52      = true
+bracketed_paste   = true
+electron_strategy = "clipboard"
+default_strategy  = ""
+
+[hint]
+enabled                = true
+vocabulary_files       = ["CLAUDE.md", "AGENTS.md", "README.md"]
+providers              = ["claudecode", "termscroll"]
+vocabulary_max_chars   = 250
+conversation_max_chars = 8000
+timeout_ms             = 300
+
+[audio]
+high_pass_filter = true
+high_pass_cutoff = 80
+trim_silence     = true
+trim_threshold   = 0.01
+trim_margin_ms   = 200
+
+[tray]
+enabled = false

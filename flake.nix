@@ -82,6 +82,7 @@
           buildInputs = with pkgs; [
             go
             pkg-config
+            golangci-lint
             # malgo bundles miniaudio.h directly — no system audio
             # development library is needed in the dev shell.
             # musl intentionally omitted: only used by pkgsStatic for static builds.
