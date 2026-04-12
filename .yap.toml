@@ -1,3 +1,3 @@
 [hint]
   vocabulary_files = ["README.md"]
-  vocabulary_terms = ["yap", "Context-Aware", "Voice", "Dictation", "Desktop", "Build", "Status", "License", "Version", "Release", "key", "Speak", "Text", "typing", "project's", "vocabulary", "lightweight", "voice-to-text", "daemon", "project", "docs", "conversation", "history", "domain", "terms", "transcribe", "correctly", "Local", "whisper.cpp", "default", "terminal-native", "near-zero", "idle", "footprint", "pre-1.0", "Linux", "current", "platform", "macOS", "Windows"]
+  vocabulary_terms = ["yap", "whisperlocal", "Groq", "whisper.cpp", "OSC52", "wtype", "ydotool", "claudecode", "termscroll", "malgo", "evdev"]
