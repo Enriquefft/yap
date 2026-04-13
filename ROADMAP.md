@@ -27,6 +27,7 @@
 | 15 | macOS Support | pending |
 | 16 | Windows Support | pending |
 | 17 | System Tray | pending |
+| 18 | Exec Output Mode | done |
 | — | Distribution + CI | continuous |
 
 ---
@@ -966,6 +967,50 @@ Merged in commit `770edee` (2026-04). All tests pass.
 - [ ] Native `go build` produces `yap.exe`
 - [ ] Hold-to-talk works in Notepad, Windows Terminal, VS Code, Claude Code, and a browser
 - [ ] `yap stop` closes the daemon cleanly
+
+---
+
+## Phase 18 — Exec Output Mode — DONE
+
+**Depends on:** Phase 5 (Streaming Pipeline)
+
+Adds a second output path: `--exec <command>` pipes the transcript to
+an external command via stdin instead of injecting into the focused
+application. The engine's output handler is selected per-recording via
+`RunOptions.OutputOverride`, threading from CLI → IPC → daemon → engine
+with zero changes to the injection pipeline.
+
+### Checklist
+
+- [x] `internal/output/exec/handler.go` — implements `inject.Injector`
+- [x] `internal/output/exec/handler_test.go` — happy path, command-not-found, context cancellation
+- [x] `internal/ipc/protocol.go` — `Request.Exec` field (omitempty, backwards-compatible)
+- [x] `internal/ipc/client.go` — `SendRequest()` for arbitrary Request payloads
+- [x] `internal/ipc/server.go` — `toggleFn` signature `func(execCmd string) string`
+- [x] `internal/cli/toggle.go` — `--exec` flag, threaded through IPC
+- [x] `internal/daemon/daemon.go` — constructs exec handler per-session, passes as `OutputOverride`
+- [x] `internal/engine/engine.go` — `RunOptions.OutputOverride` (3-line diff)
+
+### Done when
+
+- [x] `yap toggle --exec cat` records → transcribes → prints transcript to stdout
+- [x] `yap toggle` (no --exec) injects into focused app unchanged
+- [x] All existing tests pass (`go test ./...`)
+- [x] `go vet ./...` clean
+
+### Findings
+
+- **No new interfaces.** The exec handler implements the existing `inject.Injector` contract.
+  `InjectStream` collects all chunks, then pipes the concatenated text to the command's stdin
+  via direct `os/exec` (no shell). This keeps the engine completely unchanged apart from the
+  3-line `OutputOverride` check in `runPipeline`.
+
+- **IPC is backwards-compatible.** The `Exec` field is `omitempty` — old clients sending
+  `{"cmd":"toggle"}` get normal injection. The `Send()` convenience function still works
+  unchanged; `SendRequest()` is additive.
+
+- **Server toggleFn signature changed** from `func() string` to `func(execCmd string) string`.
+  This is internal (not in `pkg/`), so the break is contained to daemon + tests.
 
 ---
 

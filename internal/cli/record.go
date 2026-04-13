@@ -16,6 +16,7 @@ import (
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/daemon"
 	"github.com/Enriquefft/yap/internal/engine"
+	execoutput "github.com/Enriquefft/yap/internal/output/exec"
 	"github.com/Enriquefft/yap/internal/platform"
 	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
 	"github.com/Enriquefft/yap/pkg/yap/hint"
@@ -34,6 +35,7 @@ type recordOptions struct {
 	device         string
 	maxDur         int
 	resolve        bool
+	execCmd        string
 }
 
 // newRecordCmd builds the `yap record` cobra command. The command
@@ -78,6 +80,8 @@ the transcription is discarded.`,
 		"maximum recording length in seconds (overrides general.max_duration)")
 	cmd.Flags().BoolVar(&opts.resolve, "resolve", false,
 		"run the full pipeline but report the StrategyDecision instead of injecting")
+	cmd.Flags().StringVar(&opts.execCmd, "exec", "",
+		"pipe transcript to external command via stdin instead of injecting")
 	return cmd
 }
 
@@ -156,6 +160,11 @@ func runRecord(parent context.Context, cfg *config.Config, p platform.Platform, 
 			return fmt.Errorf("record: --resolve not supported by the current injector (platform does not implement StrategyResolver)")
 		}
 		injector = newResolveInjector(resolver, stdout)
+	case opts.execCmd != "":
+		injector, err = execoutput.New(opts.execCmd, slog.Default())
+		if err != nil {
+			return fmt.Errorf("record: build exec handler: %w", err)
+		}
 	case opts.out == "text":
 		injector = newStdoutInjector(stdout)
 	default:

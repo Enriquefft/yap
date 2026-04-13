@@ -12,7 +12,7 @@ import (
 type Server struct {
 	ln         net.Listener
 	sockPath   string
-	toggleFn   func() string
+	toggleFn   func(execCmd string) string
 	statusFn   func() Response
 	shutdownFn func()
 }
@@ -40,7 +40,9 @@ func NewServer(sockPath string) (*Server, error) {
 
 // SetToggleFn sets the toggle function for recording state.
 // Called by daemon to provide callback for toggle command.
-func (s *Server) SetToggleFn(fn func() string) {
+// The execCmd argument carries the optional exec output override
+// from the IPC request; empty means use normal injection.
+func (s *Server) SetToggleFn(fn func(execCmd string) string) {
 	s.toggleFn = fn
 }
 
@@ -132,9 +134,10 @@ func (s *Server) dispatch(ctx context.Context, req Request) Response {
 		return Response{Ok: true, State: "idle"}
 
 	case CmdToggle:
-		// Toggle recording state.
+		// Toggle recording state. Pass the exec override from the
+		// request so the daemon can route output accordingly.
 		if s.toggleFn != nil {
-			return Response{Ok: true, State: s.toggleFn()}
+			return Response{Ok: true, State: s.toggleFn(req.Exec)}
 		}
 		return Response{Ok: false, Error: "toggle function not set"}
 

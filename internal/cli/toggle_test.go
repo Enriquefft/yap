@@ -29,7 +29,7 @@ func TestToggle_DaemonPath(t *testing.T) {
 	}
 	defer srv.Close()
 	called := make(chan struct{}, 1)
-	srv.SetToggleFn(func() string {
+	srv.SetToggleFn(func(_ string) string {
 		select {
 		case called <- struct{}{}:
 		default:

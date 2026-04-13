@@ -9,6 +9,11 @@ const (
 // Request is a client → daemon command.
 type Request struct {
 	Cmd string `json:"cmd"`
+	// Exec is an optional command name for the exec output mode.
+	// When non-empty on a CmdToggle request, the daemon pipes the
+	// transcript to this command via stdin instead of injecting into
+	// the focused application. Ignored for non-toggle commands.
+	Exec string `json:"exec,omitempty"`
 }
 
 // Response is a daemon → client response.

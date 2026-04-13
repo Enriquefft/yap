@@ -18,7 +18,8 @@ import (
 )
 
 func newToggleCmd(cfg *config.Config) *cobra.Command {
-	return &cobra.Command{
+	var execCmd string
+	cmd := &cobra.Command{
 		Use:   "toggle",
 		Short: "toggle yap recording (daemon IPC or `yap record` signal)",
 		Long: `toggle starts or stops a recording cycle.
@@ -31,11 +32,17 @@ so the captured audio still flows through transcribe and inject.
 If neither the daemon nor a record process is running, toggle
 starts 'yap record' in the background. The next toggle invocation
 stops it via SIGUSR1. This lets users bind 'yap toggle' to a
-keybinding in their window manager without running the daemon.`,
+keybinding in their window manager without running the daemon.
+
+Use --exec to pipe the transcript to an external command instead of
+injecting it into the focused application. The command receives the
+full transcript on stdin.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runToggle(cmd.OutOrStdout())
+			return runToggle(cmd.OutOrStdout(), execCmd)
 		},
 	}
+	cmd.Flags().StringVar(&execCmd, "exec", "", "pipe transcript to external command via stdin instead of injecting")
+	return cmd
 }
 
 // runToggle prefers the daemon IPC path. If no daemon socket exists,
@@ -45,14 +52,15 @@ keybinding in their window manager without running the daemon.`,
 //
 // Status messages are written to out so tests can capture them via
 // the cobra command's writer; runToggle never touches os.Stdout.
-func runToggle(out io.Writer) error {
+func runToggle(out io.Writer, execCmd string) error {
 	sockPath, err := pidfile.SocketPath()
 	if err != nil {
 		return fmt.Errorf("toggle: %w", err)
 	}
 	if _, err := os.Stat(sockPath); err == nil {
 		// Daemon socket exists — use IPC.
-		resp, err := ipc.Send(sockPath, ipc.CmdToggle, 5*time.Second)
+		req := ipc.Request{Cmd: ipc.CmdToggle, Exec: execCmd}
+		resp, err := ipc.SendRequest(sockPath, req, 5*time.Second)
 		if err != nil {
 			return fmt.Errorf("toggle: ipc: %w", err)
 		}
@@ -89,7 +97,7 @@ func runToggle(out io.Writer) error {
 	}
 
 	// No daemon and no live record process — start one.
-	return startRecordProcess(out)
+	return startRecordProcess(out, execCmd)
 }
 
 // startRecordProcess spawns `yap record` as a detached background
@@ -124,7 +132,7 @@ func runToggle(out io.Writer) error {
 // The handshake failure paths read the tail of the same file so the
 // operator still sees the child's diagnostic on "exited before
 // registering" and "did not register within 500ms" errors.
-func startRecordProcess(out io.Writer) error {
+func startRecordProcess(out io.Writer, execCmd string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("toggle: resolve executable: %w", err)
@@ -151,7 +159,11 @@ func startRecordProcess(out io.Writer) error {
 	// re-open the file for reading.
 	defer logFile.Close()
 
-	cmd := exec.Command(exe, "record")
+	args := []string{"record"}
+	if execCmd != "" {
+		args = append(args, "--exec", execCmd)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = logFile

@@ -153,6 +153,14 @@ type RunOptions struct {
 	// engine passes them through unchanged. The zero value is a
 	// legal null case (no extra context).
 	TransformOpts transform.Options
+
+	// OutputOverride, when non-nil, replaces the engine's default
+	// Injector for this Run call. The exec output handler uses this
+	// to pipe transcript to an external command instead of injecting
+	// into the focused application. The override must satisfy
+	// [inject.Injector]; a nil value falls back to the engine's
+	// constructor-injected Injector.
+	OutputOverride inject.Injector
 }
 
 // Run executes one recording → transcribe → transform → inject pipeline
@@ -242,7 +250,12 @@ func (e *Engine) runPipeline(ctx context.Context, wav []byte, opts RunOptions, s
 		return fmt.Errorf("transform: %w", err)
 	}
 
-	if err := e.injector.InjectStream(pipeCtx, transformChan); err != nil {
+	output := e.injector
+	if opts.OutputOverride != nil {
+		output = opts.OutputOverride
+	}
+
+	if err := output.InjectStream(pipeCtx, transformChan); err != nil {
 		// Cancellation is the normal way the daemon stops the
 		// pipeline — return it as-is (still wrapped) so the caller
 		// can errors.Is it without the inject prefix being load-bearing.

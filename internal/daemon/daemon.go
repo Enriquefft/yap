@@ -19,6 +19,7 @@ import (
 	"github.com/Enriquefft/yap/internal/config"
 	"github.com/Enriquefft/yap/internal/engine"
 	"github.com/Enriquefft/yap/internal/ipc"
+	execoutput "github.com/Enriquefft/yap/internal/output/exec"
 	"github.com/Enriquefft/yap/internal/pidfile"
 	"github.com/Enriquefft/yap/internal/platform"
 	pcfg "github.com/Enriquefft/yap/pkg/yap/config"
@@ -532,7 +533,9 @@ func Run(cfg *config.Config, deps Deps) error {
 
 	// Wire IPC handlers.
 	srv.SetShutdownFn(stop)
-	srv.SetToggleFn(d.toggleRecording)
+	srv.SetToggleFn(func(execCmd string) string {
+		return d.toggleRecording(execCmd)
+	})
 	srv.SetStatusFn(func() ipc.Response {
 		return ipc.Response{
 			Ok:         true,
@@ -559,9 +562,9 @@ func Run(cfg *config.Config, deps Deps) error {
 
 	onPress := func() {
 		if cfg.General.Mode == "toggle" {
-			d.toggleRecording()
+			d.toggleRecording("")
 		} else {
-			d.startRecording(timeoutSec)
+			d.startRecording(timeoutSec, "")
 		}
 	}
 
@@ -610,7 +613,7 @@ func Run(cfg *config.Config, deps Deps) error {
 // one was already in flight. Pipeline errors are routed to the
 // notifier so the user gets an OS toast on real failures; cancellation
 // (the normal stop path) is silently ignored.
-func (d *Daemon) startRecording(timeoutSec int) bool {
+func (d *Daemon) startRecording(timeoutSec int, execCmd string) bool {
 	if d.state.isActive() {
 		return false
 	}
@@ -677,6 +680,19 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 		}
 	}
 
+	// Build the exec output handler when an exec override is active.
+	var outputOverride inject.Injector
+	if execCmd != "" {
+		handler, err := execoutput.New(execCmd, slog.Default())
+		if err != nil {
+			slog.Default().Error("exec output handler", "error", err)
+			d.state.setState(stateIdle)
+			return false
+		}
+		outputOverride = handler
+		slog.Default().Info("exec output mode", "command", execCmd)
+	}
+
 	go func() {
 		defer func() {
 			// Clear the frame notifier callback so the detector is inert.
@@ -698,8 +714,9 @@ func (d *Daemon) startRecording(timeoutSec int) bool {
 				slog.Default().Info("state", "from", stateRecording, "to", stateProcessing)
 				d.state.setState(stateProcessing)
 			},
-			TranscribeOpts: transcribeOpts,
-			TransformOpts:  transformOpts,
+			TranscribeOpts:  transcribeOpts,
+			TransformOpts:   transformOpts,
+			OutputOverride:  outputOverride,
 		})
 		if err != nil &&
 			!errors.Is(err, context.Canceled) &&
@@ -837,9 +854,11 @@ func (d *Daemon) fetchHintBundle() hint.Bundle {
 }
 
 // toggleRecording toggles recording state for the IPC toggle command
-// and the toggle hotkey mode. Returns the intended new state:
-// "recording" if starting, "idle" if stopping.
-func (d *Daemon) toggleRecording() string {
+// and the toggle hotkey mode. execCmd is the optional exec output
+// override — when non-empty, the transcript is piped to this command
+// instead of being injected into the focused application. Returns the
+// intended new state: "recording" if starting, "idle" if stopping.
+func (d *Daemon) toggleRecording(execCmd string) string {
 	if d.state.isActive() {
 		d.state.cancelRecording()
 		return stateIdle
@@ -848,6 +867,6 @@ func (d *Daemon) toggleRecording() string {
 	if timeoutSec == 0 {
 		timeoutSec = 60
 	}
-	d.startRecording(timeoutSec)
+	d.startRecording(timeoutSec, execCmd)
 	return stateRecording
 }

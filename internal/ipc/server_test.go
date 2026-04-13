@@ -114,14 +114,14 @@ func TestSetToggleFn(t *testing.T) {
 	defer os.Remove("/tmp/test-ipc-toggle.sock")
 
 	called := false
-	srv.SetToggleFn(func() string {
+	srv.SetToggleFn(func(_ string) string {
 		called = true
 		return "recording"
 	})
 
 	require.NotNil(t, srv.toggleFn)
 
-	result := srv.toggleFn()
+	result := srv.toggleFn("")
 	require.Equal(t, "recording", result)
 	require.True(t, called)
 }
@@ -156,7 +156,7 @@ func TestDispatchToggleWithFn(t *testing.T) {
 	defer srv.Close()
 
 	toggleCalled := false
-	srv.SetToggleFn(func() string {
+	srv.SetToggleFn(func(_ string) string {
 		toggleCalled = true
 		return "recording"
 	})

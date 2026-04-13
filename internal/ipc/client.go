@@ -14,6 +14,13 @@ import (
 // Callers (CLI commands) are responsible for retry logic (e.g., yap stop with 3 retries).
 // IPC-03: CLI exits with status 0 on success, 1 on error.
 func Send(sockPath string, cmd string, timeout time.Duration) (Response, error) {
+	return SendRequest(sockPath, Request{Cmd: cmd}, timeout)
+}
+
+// SendRequest sends an arbitrary [Request] to the daemon and returns the response.
+// Use this when the request carries optional fields beyond Cmd (e.g., Exec for
+// toggle with exec output mode).
+func SendRequest(sockPath string, req Request, timeout time.Duration) (Response, error) {
 	// Dial with timeout (includes both TCP dial and Unix socket connect).
 	conn, err := net.DialTimeout("unix", sockPath, timeout)
 	if err != nil {
@@ -26,7 +33,7 @@ func Send(sockPath string, cmd string, timeout time.Duration) (Response, error) 
 
 	// Send request.
 	enc := json.NewEncoder(conn)
-	if err := enc.Encode(Request{Cmd: cmd}); err != nil {
+	if err := enc.Encode(req); err != nil {
 		return Response{}, fmt.Errorf("send command: %w", err)
 	}
 
