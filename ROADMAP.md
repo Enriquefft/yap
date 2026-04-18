@@ -28,6 +28,11 @@
 | 16 | Windows Support | pending |
 | 17 | System Tray | pending |
 | 18 | Exec Output Mode | done |
+| 19 | Evaluation Framework | pending |
+| 19.5 | Privacy & Redaction | pending |
+| 20 | Accuracy — Objective Wins (20a/20b/20c) | pending |
+| 21 | Accuracy — Testable Levers | pending |
+| 22 | Locale + Domain Packs | pending |
 | — | Distribution + CI | continuous |
 
 ---
@@ -1034,6 +1039,492 @@ with zero changes to the injection pipeline.
 
 ---
 
+## Phase 19 — Evaluation Framework
+
+**Depends on:** Phase 3, Phase 5, Phase 6, Phase 8, Phase 12
+
+**Goal:** Make accuracy measurable. Every downstream accuracy claim ("model X beats Y", "vocab bias reduces WER by Z%", "ensemble improves domain terms") must be defensible with numbers from a reproducible harness. Without this phase, Phases 20-22 are educated guesses; with it, they are engineered decisions.
+
+**Scoping rule (identity boundary):** yap is software + UX, never a model. The eval framework measures how well yap *uses* models, not the models themselves. Fine-tuning / training is explicitly out of scope.
+
+### Corpus
+
+- [ ] `testdata/corpus/` layout: `<locale>/<domain>/<utterance_id>/{audio.wav, reference.txt, meta.toml}`
+- [ ] `meta.toml` per utterance: speaker, accent, domain, recording_device, ambient_noise_level, expected_vocabulary_terms
+- [ ] Seed corpus (minimum viable):
+  - `en/general/` — 20 utterances (baseline regression)
+  - `en/programming/` — 20 utterances with yap repo jargon
+  - `es/general/` — 20 utterances (neutral Spanish)
+  - `es-MX/general/`, `es-AR/general/`, `es-ES/general/` — 10 utterances each
+  - `es/programming/` — 10 utterances (Spanglish + technical terms)
+- [ ] `yap eval record <locale> <domain>` — guided recording tool: prompts user with reference text, captures audio, writes corpus entry
+- [ ] `yap eval import <dir>` — import external datasets (Common Voice subsets, LibriSpeech-ES, etc.) with reference transcripts
+- [ ] Corpus stored in git LFS (audio is binary, large); reference text + meta in regular git
+- [ ] `testdata/corpus/README.md` documents licensing per source
+
+### Metrics
+
+- [ ] `pkg/yap/eval/` — pure Go package, no CGo
+- [ ] `eval.WER(reference, hypothesis string) float64` — Levenshtein over words, normalized
+- [ ] `eval.CER(reference, hypothesis string) float64` — Levenshtein over characters
+- [ ] `eval.VocabRecall(reference, hypothesis string, expected []string) float64` — fraction of `expected` terms that appear in hypothesis (case-insensitive, substring match with word boundaries). Directly measures the Phase 12 motivating case ("yap"→"jump").
+- [ ] `eval.NormalizeText(locale string, s string) string` — locale-aware normalization (lowercase, strip punctuation, Unicode NFD→NFC, ES-specific: handle ¿¡, ñ, accents). Applied before WER/CER so punctuation differences don't inflate the score.
+- [ ] Latency metrics: `eval.Latency{Total, Record, Audioprep, Transcribe, Transform, Inject time.Duration}` per utterance
+- [ ] Confidence correlation: if backend returns logprobs, compute Pearson correlation between mean logprob and WER — validates whether confidence is calibrated enough to trigger re-transcription (Phase 21)
+
+### Statistical rigor
+
+- [ ] **Backend nondeterminism handling.** Remote backends (Groq, OpenAI) return different outputs across identical requests. Harness runs each utterance N times (default N=3, configurable) and reports `{mean, stddev, min, max}` per metric, not just the point estimate.
+- [ ] **Bootstrap confidence intervals.** `eval.BootstrapCI(samples []float64, confidence float64) (low, high float64)` — 1000 resamples for 95% CI on corpus-level WER/CER. A/B comparisons report CI overlap, not just mean delta. Prevents noise-driven conclusions on small corpora.
+- [ ] **Significance threshold for regression alerts.** CI gate fires only when CI lower bound on delta exceeds the threshold (default 0.5% absolute WER). No more "mean regressed 0.3%, fail the build" false positives.
+- [ ] **Variance budget per utterance.** If a single utterance's N-run stddev exceeds backend-expected variance, flag the utterance as unstable and exclude from summary (noisy input).
+
+### Streaming harness mode
+
+- [ ] **Rationale:** production P95 is dominated by streaming behavior (first-chunk latency, time-to-first-token in transform), not full-WAV batch. Full-WAV eval measures accuracy well but misreports latency.
+- [ ] `yap eval run --mode=streaming` — drives backends in streaming mode, measures `time_to_first_char` in addition to `total_time`
+- [ ] Latency metrics gain: `eval.Latency{TimeToFirstChar, TimeToFirstWord, TotalTime}`
+- [ ] P95 budget applies to `TimeToFirstChar` in streaming mode (the value users feel), to `TotalTime` in batch mode
+- [ ] Default mode for CI = streaming; batch mode available for accuracy-only sweeps
+
+### Shadow mode (opt-in real-world eval)
+
+- [ ] **Rationale:** curated corpus ≠ real usage. A pack audit that says "no regression on corpus" may still regress on a user's actual recordings.
+- [ ] `general.eval_shadow_mode = true` (opt-in, default off) — daemon writes every recording + final transcription to `~/.local/share/yap/shadow/` (respecting history redaction; see Phase 19.5)
+- [ ] `yap eval run --shadow` — runs the harness against the user's shadow corpus with per-user baseline
+- [ ] Shadow corpus never leaves the machine; not uploaded to CI, not shared
+- [ ] `yap eval shadow clear` — delete shadow corpus
+- [ ] Shadow eval signals pack-audit absorption decisions on real data, not just curated
+
+### Latency budget tracker (cross-cutting, consumed by harness + daemon)
+
+- [ ] `pkg/yap/budget/` — pure budget/deadline tracker shared between daemon runtime and eval harness
+- [ ] `budget.Tracker` tracks per-stage deadlines and actual durations; emits structured events
+- [ ] Pipeline stages receive `context.Context` with deadline = `RunStart + HardCeiling`
+- [ ] Daemon: `yap status --latency` prints rolling P50/P95/P99 per stage across last 100 recordings
+- [ ] Harness: `eval.LatencyBudget{P95 time.Duration; HardCeiling time.Duration}` defaults P95=2000ms, HardCeiling=3000ms
+- [ ] Per-stage SLAs: record=50ms, audioprep=50ms, transcribe=1100ms, transform_first_token=400ms, inject=50ms, margin=350ms (sums to 2000ms P95)
+- [ ] `yap eval run` fails if P95 > budget.P95 regardless of WER improvement
+
+### Backend capability manifest
+
+- [ ] **Rationale:** Phases 20/21/22 reference "backends that support keyterms / decoding params / streaming." Today this is implicit. Make it explicit.
+- [ ] `transcribe.Capabilities` struct returned by each backend: `{Streaming, KeyTerms, LanguageLock, BeamSize, Temperature, ConfidenceScore, ...}`
+- [ ] Pack loader and options threading consult capabilities and degrade silently for unsupported features (no runtime panics, no silent drops — logged at debug level)
+- [ ] `yap eval backends` prints capability matrix for all registered backends
+
+### Harness
+
+- [ ] `yap eval run [--locale=es-MX] [--domain=programming] [--backend=groq] [--config=alt.toml] [--mode=streaming|batch] [--runs=3] [--shadow]` — runs full corpus or subset through a real yap pipeline. Each utterance: load WAV → audioprep → transcribe → transform → collect output + latencies.
+- [ ] Output: JSONL per utterance + summary table (mean/stddev/p50/p95 WER, CER, vocab recall, latency per stage)
+- [ ] `yap eval diff <run_a.jsonl> <run_b.jsonl>` — per-utterance WER delta with bootstrap CI, sorted by regression magnitude
+- [ ] `yap eval sweep <param=vals>` — grid sweep, e.g. `yap eval sweep transcription.model=base.en,small.en,medium.en,large-v3` runs each value, outputs comparison table with CIs
+- [ ] `yap eval pack-audit <pack_name> [entry_id]` — for decay protocol: runs eval with a specific pack entry disabled, compares vs baseline with CI. Per-entry audit, not per-file.
+- [ ] Deterministic mode: hint providers return fixtures, not live system state. `eval.FakeHintProvider` for reproducibility.
+- [ ] Isolation: eval harness never touches user's config or daemon state (`YAP_CONFIG_PATH=testdata/eval.toml`)
+
+### CI integration
+
+- [ ] `.github/workflows/eval.yml` — runs on every PR against `en/general/` baseline only (small corpus to keep CI under 3 min). Fails when bootstrap CI lower bound on WER delta exceeds 0.5% absolute vs main branch baseline (significance-gated, not mean-gated).
+- [ ] Full corpus eval runs nightly on main; results posted to a GitHub Issue ("nightly eval report") with trend chart and per-metric CIs
+- [ ] Baseline numbers committed to `testdata/baselines.json` (versioned per corpus version); updated intentionally via `yap eval update-baseline`
+- [ ] Versioned defaults file: `config/defaults/<version>.toml` — when Phase 21 eval updates a default (model, decoding param, etc.), the old defaults remain addressable so users on old corpora don't silently regress
+
+### CLI
+
+- [ ] `yap eval record` — corpus capture
+- [ ] `yap eval import` — external dataset import
+- [ ] `yap eval run` — run harness (supports `--mode`, `--runs`, `--shadow`)
+- [ ] `yap eval diff` — compare two runs with CIs
+- [ ] `yap eval sweep` — grid search
+- [ ] `yap eval pack-audit` — decay protocol entry-point (Phase 22)
+- [ ] `yap eval shadow clear` — wipe shadow corpus
+- [ ] `yap eval backends` — capability matrix
+- [ ] `yap eval update-baseline` — commit current numbers as new baseline (requires `--confirm`)
+
+### Tests
+
+- [ ] `pkg/yap/eval/wer_test.go` — table tests covering insertion/deletion/substitution combinations, Unicode edge cases, empty strings
+- [ ] `pkg/yap/eval/normalize_test.go` — locale-specific normalization fixtures
+- [ ] `pkg/yap/eval/harness_test.go` — end-to-end with mock backends, asserts WER/latency shape
+- [ ] `pkg/yap/eval/noglobals_test.go` — AST guard
+
+### Non-goals (explicit scope closure)
+
+- **No multi-speaker / diarization.** Dictation is single-speaker by definition. If the use case emerges, it is a separate phase, not a metric addition.
+- **No model fine-tuning / training eval.** yap measures model *use*, not model *quality*. Benchmarking whisper-vs-whisper belongs upstream.
+- **No cloud-hosted eval.** All corpus and eval runs stay local. Shadow mode is explicitly machine-local.
+
+### Done when
+
+- [ ] `yap eval run --locale=en` produces WER/CER/latency numbers with bootstrap CIs for the seed `en/general/` corpus
+- [ ] `yap eval run --mode=streaming` reports `time_to_first_char` P95 (the latency number users feel)
+- [ ] `yap eval diff` shows per-utterance regressions with CIs between two runs
+- [ ] PR CI fails only when bootstrap CI lower bound on WER delta exceeds 0.5% (no noise-driven failures)
+- [ ] Nightly full-corpus eval runs unattended and posts a report
+- [ ] Latency P95 > 2000ms fails the harness even if WER improved
+- [ ] `yap eval pack-audit` disables one pack entry at a time and reports per-entry WER delta with CI
+- [ ] `yap eval backends` prints the capability matrix consumed by Phases 20-22
+
+---
+
+## Phase 19.5 — Privacy & Redaction
+
+**Depends on:** Phase 3, Phase 19
+
+**Goal:** Make yap safe to ship the features in Phases 20-22 that touch user content. Corrections history, conversation context, keyterms, shadow corpus, and pack-audit data can all contain PII, secrets, credentials, or confidential content. This phase is a hard gate for 20.6 (learn-from-corrections), 22 (community packs), and 19's shadow mode.
+
+**Scoping rule:** privacy is infrastructure, not a feature. Every data sink in the pipeline declares its retention policy, redaction policy, and egress policy in a type the compiler can check.
+
+### Redaction pipeline
+
+- [ ] `pkg/yap/redact/` — pure Go, rule-based redaction
+- [ ] `redact.Redactor` interface: `Redact(text string, policy Policy) string`
+- [ ] Built-in patterns: email addresses, phone numbers, credit-card-shaped digits, AWS/GCP/GitHub token prefixes, bearer tokens, URLs containing credentials
+- [ ] `redact.Policy` struct with per-sink settings: `{Emails, Phones, Tokens, URLs, CustomRegex []string}`
+- [ ] User-extensible via `~/.config/yap/redact.toml` — custom regex rules (e.g. company-internal ticket IDs, proprietary codes)
+- [ ] Applied at write boundaries: history (Phase 14), shadow corpus (Phase 19), corrections store (Phase 20.6), remote backend prompts (transcribe + transform)
+
+### Egress classification
+
+- [ ] Every text-carrying channel tagged with an egress class: `EgressLocal` (never leaves machine), `EgressRemoteBackend` (sent to configured transcribe/transform backend), `EgressPackContribution` (shipped if user contributes a pack)
+- [ ] Redaction policy per class — `EgressRemoteBackend` applies aggressive defaults; `EgressLocal` applies user-configured only
+- [ ] `yap privacy show` prints the classification table: what goes where, what's redacted, retention TTL
+
+### Corrections privacy (gates Phase 20.6)
+
+- [ ] Personal vocabulary never sent to remote backends as raw strings without redaction pass
+- [ ] Corrections store is user-readable, user-deletable: `yap corrections export`, `yap corrections forget <term>`, `yap corrections clear`
+- [ ] Opt-out: `general.corrections_learning = false` disables entirely
+
+### Shadow corpus privacy (gates Phase 19 shadow mode)
+
+- [ ] Shadow recordings encrypted at rest using a per-user key stored in the OS keyring (libsecret/Keychain/Credential Manager)
+- [ ] Retention TTL configurable: `general.shadow_retention_days = 30` default, auto-prune past TTL
+- [ ] Shadow corpus is never an input to remote eval or telemetry — strictly local
+- [ ] Explicit consent prompt on first `--shadow` invocation; user must type `yes` to enable
+
+### Pack contribution privacy (gates Phase 22 community packs)
+
+- [ ] `yap pack new --from-corrections` scaffolds a pack from user corrections but runs redaction pass first and shows a diff for user review before writing
+- [ ] Pack PRs include a declaration: which corpus entries were user-generated vs synthetic — reviewers know what to scan
+- [ ] PII scanner runs on pack PRs in CI; blocks merge on detected patterns unless maintainer override
+
+### Tests
+
+- [ ] `pkg/yap/redact/redact_test.go` — each built-in pattern against a fixture
+- [ ] `pkg/yap/redact/policy_test.go` — policy merge + custom regex
+- [ ] `pkg/yap/redact/egress_test.go` — egress class routing
+- [ ] `pkg/yap/redact/noglobals_test.go` — AST guard
+- [ ] Integration: history writer, shadow writer, corrections writer all go through redaction (asserted via fixture-based round-trip tests)
+
+### Done when
+
+- [ ] `yap privacy show` prints the full egress + redaction table
+- [ ] History, shadow, corrections, and prompt assembly all route writes through `redact.Redactor`
+- [ ] Shadow corpus is encrypted on disk; key rotates on user request
+- [ ] Pack contribution tool strips PII before showing the diff
+- [ ] CI PII scanner blocks accidental leaks in pack PRs
+- [ ] No item in Phases 20.6 or 22 can land without its corresponding privacy test passing
+
+---
+
+## Phase 20 — Accuracy: Objective Wins
+
+**Depends on:** Phase 12, Phase 19 (for verification, not for implementation), Phase 14 (for 20c only)
+
+**Goal:** Ship the accuracy improvements that are objectively better with no tunable trade-off. These are wins that research or vendor documentation already validates — we don't need to run A/B experiments to justify them. Phase 19's harness verifies they land cleanly but is not a gate for shipping.
+
+**Scoping rule:** every item here must be (a) known-correct (research-validated or trivially better), (b) latency-neutral or latency-positive, (c) a pure *use-the-model-better* change — never a model replacement or fine-tune.
+
+**Structure:** split into three sub-phases by cost and dependencies. 20a is pure config/API plumbing (can ship in parallel with Phase 19). 20b adds pipeline stages (gated on capability manifest). 20c depends on Phase 14 and Phase 19.5.
+
+---
+
+### Phase 20a — Config & API
+
+Zero new pipeline stages. Pure plumbing, eval-independent.
+
+#### 20a.1 — Language lock + multilingual default
+
+- [ ] `transcription.language` config field (ISO-639-1, e.g. `en`, `es`) — defaults to empty (auto-detect)
+- [ ] When set, passed to backend as `language` param (Groq, OpenAI, whisper.cpp all support per capability manifest)
+- [ ] Default `transcription.model` auto-selects multilingual variant when `language != "en"` (drops `.en` suffix); `.en` variants remain available for English-only speakers who want the marginal accuracy + speed bump
+- [ ] Validator rejects unknown ISO codes; warns on `.en` model + non-`en` language combo
+- [ ] `yap config wizard` asks for primary language at setup
+- [ ] **Eliminates** the "Spanish utterance transcribed as Italian" failure class
+
+#### 20a.2 — Dedicated vocabulary API (capability-gated)
+
+- [ ] Research basis: Groq exposes `keyterms` (strong lexical bias, distinct from `prompt`). Deepgram exposes `keywords`. These are purpose-built for vocabulary injection and outperform free-form prompts.
+- [ ] Extend `transcribe.Options` with `KeyTerms []string` (orthogonal to `Prompt string`)
+- [ ] Routing via Phase 19 backend capability manifest: backends advertising `Capabilities.KeyTerms=true` receive the dedicated param; others fall through to prompt bias (no regression, no panic)
+- [ ] Groq backend: maps to `keyterms` API param
+- [ ] Deepgram backend (when added): maps to `keywords`
+- [ ] Daemon builds `KeyTerms` from hint bundle's vocabulary file section, chunked to API limits
+
+#### 20a.3 — Locale puntuación enforcement
+
+- [ ] Post-transform validator: for `language=es`, enforce `¿...?` and `¡...!` pairs (opening marks are required in Spanish; LLMs often skip them)
+- [ ] Locale-specific number format: ES uses `1.000,50`; EN uses `1,000.50`. Transform prompt addon per locale.
+- [ ] Date format per locale: DD/MM/YYYY for most non-US locales
+- [ ] Runs post-transform, pre-inject; costs <5ms
+
+---
+
+### Phase 20b — Pipeline additions
+
+New pipeline stages. Latency cost measured before default-enabled.
+
+#### 20b.1 — VAD pre-segmentation (silero-vad)
+
+- [ ] Research basis: Whisper hallucinates on non-speech audio (dead air, background noise bursts). VAD gating is standard practice in production ASR pipelines.
+- [ ] `pkg/yap/audioprep/vad/` — silero-vad via pure-Go ONNX runtime (or CGo-free alternative). Model is ~2MB, embedded.
+- [ ] Integrates into Phase 13 pipeline: `record → hpf → trim → vad → transcribe`
+- [ ] VAD outputs speech/non-speech spans; concatenates speech-only audio for Whisper
+- [ ] **Default OFF** pending Phase 19 latency measurement. Flip to default-on in Phase 21 only if sweep confirms latency cost <100ms P95 and hallucination-rate reduction is measurable.
+- [ ] Complements existing `silence.*` config — VAD is framing pre-Whisper; silence detection is recording termination
+
+#### 20b.2 — Phonetic post-replace
+
+- [ ] Research basis: deterministic, cheap, and fixes the exact "yap→jump" failure class. Runs post-transcription, pre-transform.
+- [ ] `pkg/yap/postprocess/phonetic/` — Double Metaphone (English) + Metaphone-ES (Spanish) implementations
+- [ ] Algorithm: for each word in transcription, compute phonetic key. For each vocabulary term, compute phonetic key. Replace word with vocab term when (a) phonetic keys match, (b) Levenshtein distance on the original words is below a threshold proportional to length, (c) vocab term has higher prior (appears in project docs — this is deterministic rule prior, not a learned model).
+- [ ] **Identity boundary:** this is explicitly rule-based, not a statistical LM. No weights, no learned priors. Input: vocabulary list + hypothesis. Output: substituted hypothesis.
+- [ ] Implemented as a new pipeline stage (not a transform backend — this is deterministic rule-based, not generative)
+- [ ] `postprocess.phonetic.enabled = true` default; per-locale enable
+- [ ] Zero-cost when vocabulary is empty
+
+---
+
+### Phase 20c — Durable-value (user-learning loop)
+
+**Hard prerequisites:** Phase 14 (history infrastructure), Phase 19.5 (redaction + corrections-store privacy).
+
+#### 20c.1 — Learn-from-corrections
+
+- [ ] When user undoes-and-retypes within N seconds of injection, capture the diff: `{original: "jump", corrected: "yap", context: "what is ___"}`
+- [ ] Store in `~/.local/share/yap/corrections.jsonl` (append-only, user-private, redacted per Phase 19.5 policy before write)
+- [ ] After threshold (e.g. 3 occurrences of same correction), auto-add the corrected term to a personal vocabulary file
+- [ ] **Identity boundary:** corrections produce a vocabulary hint (text file consumed by `hint.Provider`), never a trained weight or personalized model artifact. Writes are to hint-layer files only; no model state modified.
+- [ ] Personal vocab exposed via a new `hint/personal/` provider that composes alongside Phase 12 providers — single source of truth for all vocabulary routing
+- [ ] `yap corrections list` / `yap corrections forget <term>` / `yap corrections clear` for management
+- [ ] Privacy: personal corrections never leave the machine as raw text. When sent to remote backends, they flow through Phase 19.5 redaction + the Phase 20a.2 `KeyTerms` path.
+- [ ] Opt-out: `general.corrections_learning = false` disables entirely (Phase 19.5 requirement)
+- [ ] This is yap's durable moat — no model will ever know your coworker's name
+
+---
+
+### Done when
+
+- [ ] **20a:** Language lock eliminates Spanish-as-Italian misclassification; Groq uses `keyterms` when vocabulary non-empty (verified via request inspection); Spanish transcriptions end with proper `¿¡` marks
+- [ ] **20b:** Phonetic replace fixes "yap/jump" on the Phase 12 motivating fixture; VAD ships as opt-in with measured latency/hallucination numbers in the eval harness
+- [ ] **20c:** After 3 undo-retype cycles, "Enriquefft" appears in personal vocab without manual intervention; corrections store honors redaction policy per Phase 19.5
+- [ ] `yap eval run` (from Phase 19) shows WER improvement on the Spanish corpus vs. pre-phase baseline, with zero latency regression at the 2000ms P95 budget
+- [ ] No new vocabulary plumbing: all vocab (project docs, personal corrections, pack seeds) flows through the Phase 12 `hint.Bundle` — one canonical path
+
+---
+
+## Phase 21 — Accuracy: Testable Levers
+
+**Depends on:** Phase 19 (hard gate — these items ship only when measurable)
+
+**Goal:** Accuracy levers whose optimal setting depends on user, workload, or backend. They are not objectively better at every setting — they are trade-offs. Phase 19's harness is required to pick defaults and to let users tune per-locale / per-domain.
+
+**Scoping rule:** nothing here ships without an eval number. Each item must produce a WER/latency table across its tunable range before the default is chosen.
+
+### 21.1 — Model selection sweep
+
+- [ ] Run `yap eval sweep transcription.model=tiny,base,small,medium,large-v3,turbo` per locale
+- [ ] Publish WER × latency frontier as markdown table in `docs/model-selection.md`
+- [ ] Default model per locale chosen from Pareto frontier at the 2000ms P95 constraint
+- [ ] Wizard recommends model based on user's hardware (CPU-only → small, GPU → large-v3)
+- [ ] Auto-detect GPU presence (NVIDIA: `nvidia-smi`; Apple: M-series check) at first run
+
+### 21.2 — Decoding parameter tuning
+
+- [ ] Whisper exposes `beam_size`, `best_of`, `temperature`, `temperature_increment_on_fallback`, `compression_ratio_threshold`, `logprob_threshold`, `no_speech_threshold`. Most are hidden today.
+- [ ] Expose under `transcription.decoding.*` in config (whisper.cpp + faster-whisper support all; Groq/OpenAI API expose a subset)
+- [ ] Eval sweep: `beam_size ∈ {1, 3, 5, 10}`, `best_of ∈ {1, 5}`, `temperature_fallback ∈ {true, false}`
+- [ ] Find default that maximizes WER reduction at <10% latency cost
+- [ ] Document per-backend support matrix
+
+### 21.3 — Multi-backend ensemble (LLM arbiter only)
+
+- [ ] `pkg/yap/transcribe/ensemble/` — runs N backends in parallel, collects all hypotheses
+- [ ] **Single arbiter strategy: LLM arbiter.** Reuses the existing transform backend (already wired in Phase 8). Prompt: "given this context `{hint}`, pick the most plausible transcription from these candidates: ...". No runtime strategy switching, no plugin system for arbiters.
+- [ ] Other arbiter strategies (edit-distance consensus, confidence-weighted voting) are explicitly deferred to a later phase — shipping three at once is scope creep. If the LLM arbiter underperforms, the phase that adds a second strategy ships with its own eval.
+- [ ] Eval sweep: solo vs 2-backend vs 3-backend ensemble; measure WER gain vs latency cost with bootstrap CI
+- [ ] Gated by latency budget — ensemble skipped when budget projection exceeds P95 ceiling
+- [ ] Expected result: ensemble wins on domain-heavy utterances, loses on simple ones. Default disabled, enabled per-domain via pack.
+
+### 21.4 — Confidence-gated re-transcription
+
+- [ ] Whisper backends return per-segment logprob. When `mean_logprob < threshold`, re-run just that segment with (a) larger model, (b) different temperature, (c) extended context
+- [ ] Only viable if Phase 19 confirms logprob-WER correlation is high enough to be a useful signal
+- [ ] Latency cost: 1.5-2x transcribe time on gated segments (hit rate is the key metric)
+- [ ] Eval sweep: threshold ∈ {-1.0, -0.5, -0.3, -0.1}; measure hit rate, WER on gated segments, total latency
+- [ ] If latency violates budget, this phase ships as opt-in only
+
+### 21.5 — Graceful degradation strategy
+
+- [ ] Ordered fallback list when projected latency > hard ceiling:
+  1. Skip ensemble → primary only
+  2. Skip confidence re-transcription → single pass
+  3. Skip LLM transform → raw inject + notification
+  4. Downgrade model one tier (large-v3 → medium) for remainder of session
+- [ ] Each step logged; `yap status` shows "degraded: reason=..."
+- [ ] Eval harness verifies degradation triggers fire when expected (not just on paper)
+- [ ] Automatic recovery: when rolling P95 returns below P95 target for 20 recordings, restore full config
+
+### 21.6 — Context budget sweep
+
+- [ ] Phase 12 shipped `vocabulary_max_chars` and `conversation_max_chars`. Defaults were educated guesses.
+- [ ] Eval sweep: vocab ∈ {0, 500, 1000, 2000, 4000 bytes}, conversation ∈ {0, 500, 1000, 2000, 4000 bytes}
+- [ ] Expect diminishing returns past Whisper's 224-token prompt window for vocabulary; conversation may benefit from more (feeds LLM transform, not Whisper)
+- [ ] Update defaults based on eval
+
+### 21.7 — Post-process hook infrastructure (first-class extension surface)
+
+- [ ] **Positioning:** this is infrastructure, not an escape hatch. Agents are users of yap (Philosophy #7). A typed, permissioned post-process hook is the agent-callable command surface that lets external tools shape transcripts without forking yap. It stays in the roadmap regardless of how well 21.1-21.6 perform.
+- [ ] `pkg/yap/postprocess/hook/` — reads stdin (transcription + metadata JSON header), writes stdout (replacement), 1s timeout default
+- [ ] `postprocess.hooks = ["/path/to/script.sh", ...]` in config; runs in order, pipes transcript through each
+- [ ] Hook input envelope: `{transcript, locale, domains, hint_bundle_summary, backend, confidence}` — rich enough that hooks can make informed transformations, not just string substitution
+- [ ] Hook output envelope: `{transcript, abort?: "reason"}` — hooks can abort the pipeline with a user-visible reason
+- [ ] Security: hooks are user-owned scripts — no sandbox, treated as trusted code (same trust model as Claude Code hooks and shell rc files)
+- [ ] Hook discovery: `yap hooks list` enumerates configured hooks; `yap hooks run <script> --dry-run "test transcript"` exercises a hook without recording
+- [ ] Eval harness supports `--hook` flag to measure per-hook WER/latency impact
+- [ ] Documented as a stable extension point in `docs/hooks.md` — this is infrastructure yap commits to supporting long-term
+
+### 21.8 — Audio preprocessing sweep
+
+- [ ] Extends Phase 13. Eval-gated additions only.
+- [ ] Candidates: loudness normalization (EBU R128), dynamic range compression (light ratio), pre-emphasis filter
+- [ ] Each ships only if eval shows WER win with no latency regression
+- [ ] Research (arXiv:2512.17562) ruled out denoising; that finding stands unless a new paper overturns it
+
+### Done when
+
+- [ ] Every item in this phase has an entry in `docs/accuracy-tuning.md` with its eval table
+- [ ] Default config values per-locale are chosen from eval results, not intuition
+- [ ] `yap eval run` shows monotonic WER improvement as each lever lands (or the lever is rejected)
+- [ ] Graceful degradation demonstrably fires in simulated budget-overrun tests
+- [ ] No lever ships if it violates the 2000ms P95 / 3000ms hard ceiling without an opt-in flag
+
+---
+
+## Phase 22 — Locale + Domain Packs
+
+**Depends on:** Phase 12, Phase 19, Phase 19.5, Phase 20a
+
+**Goal:** Ship per-locale and per-domain configuration bundles that compose orthogonally. A user declares `locale=es-MX` and `domain=programming` independently; yap merges both at load. No per-combination pack proliferation.
+
+**Scoping rule (critical):** packs are **thin declarative TOML**, not code. Anything a future model will likely absorb (general slang lists, common domain jargon, mainstream accent handling) ships as decay-expected content. Anything durable (backend preferences, format rules, prompt addons) ships as structural config. Fine-tuning or custom models are out of scope forever — yap uses models, never produces them.
+
+**Single source of truth for vocabulary:** packs **must not** ship a parallel vocabulary path. All vocabulary — project docs (Phase 12), personal corrections (Phase 20c), pack contributions (this phase) — funnels through the Phase 12 `hint.Bundle` via dedicated hint providers. This phase adds one new provider (`pack`); it does not add a second vocabulary pipe.
+
+### Architecture
+
+- [ ] `pkg/yap/pack/` — pack loader + merge logic (schema, not vocabulary pipeline)
+- [ ] `pkg/yap/hint/pack/` — a hint provider that reads active pack vocabulary and emits it as `hint.Bundle.Vocabulary` + `hint.Bundle.KeyTerms`. This is the single path pack vocabulary takes into the pipeline.
+- [ ] Pack directories shipped in binary: `locales/<code>.toml` and `domains/<name>.toml` (embedded via `//go:embed`)
+- [ ] User override: `~/.config/yap/packs/{locales,domains}/*.toml` shadows shipped packs
+- [ ] Config: `general.locale = "es-MX"`, `general.domains = ["programming", "devops"]` (multiple domains stack)
+- [ ] Merge order: defaults → locale → domain[0] → domain[1] → ... → user config → `.yap.toml` project override
+- [ ] Registry-free at the pack level: packs are data, not pluggable code. Adding a new pack is a TOML PR, not a Go change. (The `pack` hint provider is the single Go piece; it does not grow per pack.)
+
+### Pack schema (TOML)
+
+**Locale pack fields** (structural, durable):
+- `language` — ISO-639-1 (e.g. `es`)
+- `backend_preference` — ordered list of backend@model combos (e.g. `["groq@whisper-large-v3", "deepgram@nova-3-es-mx"]`). Resolution consults Phase 19 capability manifest — first entry a registered backend supports wins; others fall through silently.
+- `number_format`, `date_format` — format strings
+- `punctuation_rules` — regex-based enforcement pairs (e.g. `¿...?`)
+- `transform_prompt_addon` — appended to the base transform system prompt
+
+**Locale pack fields** (decay-expected, per-entry audited):
+- `vocabulary_terms` — list of `{term: "...", audit_date: "2026-06-01", audit_corpus: "testdata/corpus/es-MX/voseo/"}` entries. Each entry must reference a corpus subset that exercises the term. Loaded via the `pack` hint provider into `hint.Bundle.Vocabulary`.
+
+**Domain pack fields** (structural):
+- `transform_prompt_addon` — e.g. "no traducir términos técnicos del inglés"
+- `decoding_override` — optional decoding param tweaks (e.g. programming may want higher `beam_size`)
+
+**Domain pack fields** (decay-expected, per-entry audited):
+- `vocabulary_terms` — same schema as locale pack; flows into `hint.Bundle.Vocabulary`
+- `phonetic_rules` — explicit corrections for cases current models fail on (`{rule: "...", audit_date: "...", audit_corpus: "..."}`). Consumed by Phase 20b.2 phonetic replacer via the hint bundle.
+- `keyterms` — same schema; flows into `hint.Bundle.KeyTerms` (Phase 20a.2)
+
+### Shipped packs — locales (v0)
+
+- [ ] `locales/en.toml` — default, minimal
+- [ ] `locales/es.toml` — neutral Spanish (¿¡ enforcement, 1.000,50 format)
+- [ ] `locales/es-MX.toml`
+- [ ] `locales/es-AR.toml` — voseo preservation prompt addon
+- [ ] `locales/es-CL.toml`
+- [ ] `locales/es-ES.toml`
+
+### Shipped packs — domains (v0)
+
+- [ ] `domains/programming.toml` — generic: English technical terms preserved, common tool names (git, docker, kubernetes — only the ones empirically still failing per Phase 19 eval)
+- [ ] `domains/medicine.toml`
+- [ ] `domains/finance.toml`
+- [ ] `domains/academic.toml`
+- [ ] `domains/legal.toml`
+
+### Decay protocol
+
+**Per-entry, significance-gated, corpus-backed:**
+
+- [ ] Every decay-expected entry (vocabulary term, phonetic rule, keyterm) carries three required fields: `audit_date` (next audit), `audit_corpus` (path to a corpus subset that exercises the entry), and `added_date` (for age tracking)
+- [ ] `yap eval pack-audit <pack> [entry_id]` runs Phase 19 eval with exactly that entry disabled. Disabling any entry whose `audit_corpus` has no utterances is a hard error (prevents false "no regression" readings).
+- [ ] Absorption verdict requires: (a) bootstrap CI lower bound on WER delta ≥ -0.5% absolute (not just mean ≥ 0), (b) N ≥ 30 utterances in `audit_corpus`, (c) verdict stable across three runs (handles backend nondeterminism). Anything below those gates = inconclusive, entry stays.
+- [ ] Per-entry audit, never per-file. A pack with 50 vocab terms produces 50 audit verdicts, not one.
+- [ ] Quarterly: `yap eval pack-audit --all` runs in CI; files an issue listing entries with absorption verdict = true. Maintainer confirms before removal (no auto-delete — human review on community-facing content).
+- [ ] Shadow mode (Phase 19 shadow) provides a second audit surface: `yap eval pack-audit --shadow` runs the same protocol against the user's real recordings, not curated corpus. Curated + shadow verdicts must agree for removal.
+- [ ] This guarantees packs shrink over time as models improve — yap becomes *thinner* as the ecosystem matures, without noise-driven deletions.
+
+### Backend preference swap-ready
+
+- [ ] `backend_preference` is the durable piece of a locale pack
+- [ ] Registry backends advertise supported model IDs; pack loader picks the first supported entry
+- [ ] When a specialized model drops (e.g. hypothetical `deepgram:nova-3-es-mx`), updating the pack TOML is a 1-line change — zero code changes in yap core
+- [ ] Fallback chain: if preferred model unavailable (no API key, not installed), fall through to next entry silently
+
+### Community contribution
+
+- [ ] `docs/PACKS.md` — contribution guide: TOML schema, required fields, eval + audit requirements
+- [ ] Pack PRs gate on Phase 19 eval passing against the pack's own corpus AND each decay-expected entry including an `audit_corpus` that exercises it (no more "ship a term with no test")
+- [ ] Phase 19.5 PII scanner runs on pack PRs; blocks merge on detected patterns unless maintainer override
+- [ ] No pack merges without (a) corpus, (b) baseline numbers with bootstrap CIs, (c) per-entry audit corpus references, (d) decay markers on time-bound entries, (e) PII scan clean
+
+### CLI
+
+- [ ] `yap pack list` — shipped + user packs, active merge chain
+- [ ] `yap pack show <name>` — resolved content after merge
+- [ ] `yap pack audit [<name>]` — run decay eval
+- [ ] `yap pack new <type> <name>` — scaffold a user pack with schema template
+- [ ] `yap config set general.locale es-MX` / `yap config set general.domains programming,devops`
+
+### Tests
+
+- [ ] `pkg/yap/pack/merge_test.go` — locale × domain × user merge precedence
+- [ ] `pkg/yap/pack/schema_test.go` — TOML validation, required fields, unknown fields
+- [ ] `pkg/yap/pack/audit_test.go` — decay protocol with fixture packs and fake eval harness
+- [ ] `pkg/yap/pack/noglobals_test.go` — AST guard
+- [ ] Golden eval: `es-MX` pack demonstrably reduces WER on `testdata/corpus/es-MX/` vs `es` alone
+
+### Done when
+
+- [ ] `yap config set general.locale es-MX` + `yap config set general.domains programming` applies both packs, verifiable via `yap pack show active`
+- [ ] Shipped locale packs cover `en`, `es`, `es-MX`, `es-AR`, `es-CL`, `es-ES`
+- [ ] Shipped domain packs cover `programming`, `medicine`, `finance`, `academic`, `legal`
+- [ ] Every pack entry with `decay_expected = true` has an `audit_date`
+- [ ] Quarterly audit runs unattended in CI and files a removal-candidate issue
+- [ ] Phase 19 eval confirms measurable WER improvement for each pack on its target corpus
+- [ ] Zero Go code changes required to add a new locale or domain (TOML-only contribution path)
+
+---
+
 ## Continuous — Distribution + CI
 
 **Not a phase. A baseline. Every commit must satisfy these.**
@@ -1096,6 +1587,22 @@ Phase 1 (Platform) — DONE ──┐                      │
                             ──► Phase 16 (Windows) ─┼──► Phase 17 (Tray)
                                                    │
            Distribution + CI (continuous) ─────┘
+
+Accuracy track (parallel to platform track):
+
+   Phase 12 + 13 ──► Phase 19 (Eval Framework) ──┬─► Phase 20a (Config/API)
+                              │                  │
+                              ▼                  ▼
+                      Phase 19.5 (Privacy) ──► Phase 20b (Pipeline)
+                              │                  │
+                              ▼                  ▼
+                   Phase 14 ──┴──► Phase 20c (Learn-from-corrections)
+                                           │
+                                           ▼
+                              Phase 21 (Testable Levers)
+                                           │
+                                           ▼
+                              Phase 22 (Locale + Domain Packs)
 ```
 
 ## Recommended Execution Order
@@ -1116,4 +1623,12 @@ Phase 1 (Platform) — DONE ──┐                      │
 14. **Phase 14** — history
 15. **Phase 15 + 16** — macOS and Windows in parallel
 16. **Phase 17** — tray, after both desktop platforms ship
-17. **Continuous** — distribution + CI catches up to every phase
+17. **Phase 19** — evaluation framework (gates all accuracy work; can start immediately after Phase 12)
+18. **Phase 19.5** — privacy & redaction (hard gate for 20c and 22)
+19. **Phase 20a** — config/API accuracy wins (language lock, keyterms, puntuación) — can ship alongside Phase 19
+20. **Phase 20b** — pipeline accuracy wins (VAD opt-in, phonetic replace) — gated on capability manifest
+21. **Phase 14** — history (unblocks 20c)
+22. **Phase 20c** — learn-from-corrections (strictly requires Phase 14 + Phase 19.5)
+23. **Phase 21** — testable accuracy levers (strict: requires Phase 19 eval numbers)
+24. **Phase 22** — locale + domain packs (thin, declarative, decay-aware, vocab via hint provider)
+25. **Continuous** — distribution + CI catches up to every phase
